@@ -154,20 +154,29 @@ ghcr-login:
 	@echo "Use: echo \$$GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin"
 
 ghcr-build:
-	@echo "Building Docker image for ghcr.io..."
-	docker build \
+	@echo "Building Docker image for ghcr.io (linux/amd64)..."
+	docker buildx build \
+		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg BUILD_TIME=$(BUILD_TIME) \
 		-t $(GHCR_REPO):$(GHCR_TAG) \
 		-t $(GHCR_REPO):latest \
-		-f docker/Dockerfile .
+		-f docker/Dockerfile \
+		--load .
 	@echo "Built: $(GHCR_REPO):$(GHCR_TAG)"
 
-ghcr-push: ghcr-build
-	@echo "Pushing to GitHub Container Registry..."
-	docker push $(GHCR_REPO):$(GHCR_TAG)
-	docker push $(GHCR_REPO):latest
+ghcr-push:
+	@echo "Building and pushing to GitHub Container Registry (linux/amd64)..."
+	docker buildx build \
+		--platform linux/amd64 \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		-t $(GHCR_REPO):$(GHCR_TAG) \
+		-t $(GHCR_REPO):latest \
+		-f docker/Dockerfile \
+		--push .
 	@echo "Pushed: $(GHCR_REPO):$(GHCR_TAG) and :latest"
 
 # Service management targets (require sudo on Linux/macOS)
