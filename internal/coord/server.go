@@ -340,7 +340,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.HeartbeatResponse{OK: true}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
@@ -362,13 +362,13 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.DNSUpdateNotification{Records: records}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(proto.ErrorResponse{
+	_ = json.NewEncoder(w).Encode(proto.ErrorResponse{
 		Error:   http.StatusText(code),
 		Code:    code,
 		Message: message,
