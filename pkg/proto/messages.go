@@ -31,7 +31,8 @@ type RegisterRequest struct {
 type RegisterResponse struct {
 	MeshIP   string `json:"mesh_ip"`   // Assigned mesh IP address
 	MeshCIDR string `json:"mesh_cidr"` // Full mesh CIDR for routing
-	Domain   string `json:"domain"`    // Domain suffix (e.g., ".mesh")
+	Domain   string `json:"domain"`    // Domain suffix (e.g., ".tunnelmesh")
+	Token    string `json:"token"`     // JWT token for relay authentication
 }
 
 // PeerStats contains traffic statistics reported by peers.

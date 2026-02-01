@@ -16,6 +16,15 @@ const (
 	ChannelType = "tunnelmesh-data"
 )
 
+// TunnelConnection represents a bidirectional tunnel connection.
+// Both SSH tunnels and relay tunnels implement this interface.
+type TunnelConnection interface {
+	Read(p []byte) (int, error)
+	Write(p []byte) (int, error)
+	Close() error
+	PeerName() string
+}
+
 // SSHServer handles incoming SSH connections.
 type SSHServer struct {
 	config         *ssh.ServerConfig
@@ -201,19 +210,19 @@ func (t *Tunnel) PeerName() string {
 
 // TunnelManager manages multiple tunnels to peers.
 type TunnelManager struct {
-	tunnels map[string]*Tunnel
+	tunnels map[string]TunnelConnection
 	mu      sync.RWMutex
 }
 
 // NewTunnelManager creates a new tunnel manager.
 func NewTunnelManager() *TunnelManager {
 	return &TunnelManager{
-		tunnels: make(map[string]*Tunnel),
+		tunnels: make(map[string]TunnelConnection),
 	}
 }
 
 // Add adds a tunnel to the manager.
-func (m *TunnelManager) Add(name string, tunnel *Tunnel) {
+func (m *TunnelManager) Add(name string, tunnel TunnelConnection) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -227,7 +236,7 @@ func (m *TunnelManager) Add(name string, tunnel *Tunnel) {
 }
 
 // Get returns the tunnel for a peer.
-func (m *TunnelManager) Get(name string) (*Tunnel, bool) {
+func (m *TunnelManager) Get(name string) (TunnelConnection, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

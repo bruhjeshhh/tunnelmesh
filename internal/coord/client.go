@@ -19,6 +19,7 @@ var ErrPeerNotFound = errors.New("peer not found")
 type Client struct {
 	baseURL   string
 	authToken string
+	jwtToken  string // JWT token for relay authentication
 	client    *http.Client
 }
 
@@ -62,6 +63,9 @@ func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
+	// Store JWT token for relay authentication
+	c.jwtToken = result.Token
 
 	return &result, nil
 }
@@ -183,4 +187,15 @@ func (c *Client) parseError(resp *http.Response) error {
 	}
 
 	return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+}
+
+// JWTToken returns the JWT token received during registration.
+// This token is used for relay authentication.
+func (c *Client) JWTToken() string {
+	return c.jwtToken
+}
+
+// BaseURL returns the base URL of the coordination server.
+func (c *Client) BaseURL() string {
+	return c.baseURL
 }

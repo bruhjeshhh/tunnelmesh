@@ -18,7 +18,7 @@ const (
 	StrategyDirect Strategy = iota
 	// StrategyReverse means the peer should connect to us.
 	StrategyReverse
-	// StrategyRelay means using a relay server (not implemented).
+	// StrategyRelay means using the coordination server as a relay.
 	StrategyRelay
 )
 
@@ -38,31 +38,37 @@ func (s Strategy) String() string {
 
 // PeerInfo contains information about a peer needed for negotiation.
 type PeerInfo struct {
-	ID         string
-	PublicIP   string
-	PrivateIPs []string
-	SSHPort    int
+	ID          string
+	PublicIP    string
+	PrivateIPs  []string
+	SSHPort     int
+	Connectable bool // Whether this peer can accept incoming connections
 }
 
 // BestAddress returns the best address to try for this peer.
+// Prefers private IPs (LAN) over public IPs.
 func (p *PeerInfo) BestAddress() string {
-	if p.PublicIP != "" {
-		return fmt.Sprintf("%s:%d", p.PublicIP, p.SSHPort)
-	}
+	// Prefer private IP (same LAN = lowest latency)
 	if len(p.PrivateIPs) > 0 {
 		return fmt.Sprintf("%s:%d", p.PrivateIPs[0], p.SSHPort)
+	}
+	if p.PublicIP != "" {
+		return fmt.Sprintf("%s:%d", p.PublicIP, p.SSHPort)
 	}
 	return ""
 }
 
 // AllAddresses returns all possible addresses for this peer.
+// Private IPs are listed first (LAN connectivity preferred), then public IPs.
 func (p *PeerInfo) AllAddresses() []string {
 	var addrs []string
-	if p.PublicIP != "" {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", p.PublicIP, p.SSHPort))
-	}
+	// Private IPs first (same LAN = lowest latency)
 	for _, ip := range p.PrivateIPs {
 		addrs = append(addrs, fmt.Sprintf("%s:%d", ip, p.SSHPort))
+	}
+	// Public IP second
+	if p.PublicIP != "" {
+		addrs = append(addrs, fmt.Sprintf("%s:%d", p.PublicIP, p.SSHPort))
 	}
 	return addrs
 }
@@ -89,6 +95,7 @@ type Config struct {
 	MaxRetries     int
 	RetryDelay     time.Duration
 	AllowReverse   bool
+	AllowRelay     bool // Allow relay through coordination server
 	PreferredOrder []Strategy
 }
 
@@ -192,14 +199,16 @@ func (n *Negotiator) SelectStrategy(probes []ProbeResult) (ProbeResult, bool) {
 }
 
 // Negotiate determines the best way to connect to a peer.
+// Priority order: private IPs (LAN) -> public IPs -> reverse -> relay
 func (n *Negotiator) Negotiate(ctx context.Context, peer *PeerInfo) (*NegotiationResult, error) {
 	log.Info().
 		Str("peer", peer.ID).
 		Str("public_ip", peer.PublicIP).
 		Strs("private_ips", peer.PrivateIPs).
+		Bool("connectable", peer.Connectable).
 		Msg("negotiating connection")
 
-	// Try direct connection first
+	// Try direct connection first (private IPs, then public)
 	probes := n.ProbeAll(ctx, peer)
 
 	if best, ok := n.SelectStrategy(probes); ok {
@@ -217,14 +226,25 @@ func (n *Negotiator) Negotiate(ctx context.Context, peer *PeerInfo) (*Negotiatio
 		}, nil
 	}
 
-	// If direct fails and reverse is allowed, recommend reverse
-	if n.config.AllowReverse {
+	// If direct fails and reverse is allowed AND peer is connectable, recommend reverse
+	if n.config.AllowReverse && peer.Connectable {
 		log.Info().
 			Str("peer", peer.ID).
-			Msg("direct connection failed, recommending reverse tunnel")
+			Msg("direct connection failed, peer is connectable, recommending reverse tunnel")
 
 		return &NegotiationResult{
 			Strategy: StrategyReverse,
+		}, nil
+	}
+
+	// If both direct and reverse fail, use relay as last resort
+	if n.config.AllowRelay {
+		log.Info().
+			Str("peer", peer.ID).
+			Msg("direct and reverse failed, using relay")
+
+		return &NegotiationResult{
+			Strategy: StrategyRelay,
 		}, nil
 	}
 

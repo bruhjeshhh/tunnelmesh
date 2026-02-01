@@ -66,6 +66,13 @@ func TestServer_Register_Success(t *testing.T) {
 	assert.NotEmpty(t, resp.MeshIP)
 	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", resp.Domain)
+	assert.NotEmpty(t, resp.Token, "should return JWT token for relay auth")
+
+	// Verify token is valid
+	claims, err := srv.ValidateToken(resp.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "testnode", claims.PeerName)
+	assert.Equal(t, resp.MeshIP, claims.MeshIP)
 }
 
 func TestServer_Register_Unauthorized(t *testing.T) {
