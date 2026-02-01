@@ -313,11 +313,16 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
    cp terraform.tfvars.example terraform.tfvars
    ```
 
+   Generate a secure auth token:
+   ```bash
+   openssl rand -hex 32
+   ```
+
    Edit `terraform.tfvars`:
    ```hcl
    do_token   = "dop_v1_xxx"          # DO API token
    domain     = "example.com"         # Your domain
-   auth_token = "your-secure-token"   # Mesh auth token
+   auth_token = "your-generated-token"
    ```
 
 3. **Deploy:**

@@ -9,8 +9,8 @@ domain = "example.com"
 # subdomain = "coord"
 
 # Authentication token for mesh peers
-# Generate a secure token: openssl rand -hex 32
-auth_token = "your-secure-token-here"
+# Generate with: openssl rand -hex 32
+auth_token = ""
 
 # GitHub repository for container image (default: "zombar/tunnelmesh")
 # github_repo = "zombar/tunnelmesh"
