@@ -16,6 +16,12 @@ type AdminConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// RelayConfig holds configuration for the relay server.
+type RelayConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	PairTimeout string `yaml:"pair_timeout"` // Duration string, e.g. "30s"
+}
+
 // ServerConfig holds configuration for the coordination server.
 type ServerConfig struct {
 	Listen       string      `yaml:"listen"`
@@ -23,6 +29,7 @@ type ServerConfig struct {
 	MeshCIDR     string      `yaml:"mesh_cidr"`
 	DomainSuffix string      `yaml:"domain_suffix"`
 	Admin        AdminConfig `yaml:"admin"`
+	Relay        RelayConfig `yaml:"relay"`
 	JoinMesh     *PeerConfig `yaml:"join_mesh,omitempty"`
 }
 
@@ -71,6 +78,13 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	// Admin enabled by default
 	cfg.Admin.Enabled = true
+	// Relay enabled by default
+	if !cfg.Relay.Enabled {
+		cfg.Relay.Enabled = true
+	}
+	if cfg.Relay.PairTimeout == "" {
+		cfg.Relay.PairTimeout = "30s"
+	}
 
 	// Apply defaults to JoinMesh if configured
 	if cfg.JoinMesh != nil {

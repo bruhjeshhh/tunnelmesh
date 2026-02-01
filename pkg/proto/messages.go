@@ -2,7 +2,10 @@
 package proto
 
 import (
+	"io"
 	"net"
+	"net/http"
+	"strings"
 	"time"
 )
 
@@ -16,6 +19,7 @@ type Peer struct {
 	MeshIP      string    `json:"mesh_ip"`     // Assigned mesh network IP (10.99.x.x)
 	LastSeen    time.Time `json:"last_seen"`   // Last heartbeat time
 	Connectable bool      `json:"connectable"` // Can accept incoming connections
+	BehindNAT   bool      `json:"behind_nat"`  // Public IP was fetched externally (behind NAT)
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
@@ -25,13 +29,15 @@ type RegisterRequest struct {
 	PublicIPs  []string `json:"public_ips"`
 	PrivateIPs []string `json:"private_ips"`
 	SSHPort    int      `json:"ssh_port"`
+	BehindNAT  bool     `json:"behind_nat"` // True if public IP was fetched from external service
 }
 
 // RegisterResponse is returned after successful registration.
 type RegisterResponse struct {
 	MeshIP   string `json:"mesh_ip"`   // Assigned mesh IP address
 	MeshCIDR string `json:"mesh_cidr"` // Full mesh CIDR for routing
-	Domain   string `json:"domain"`    // Domain suffix (e.g., ".mesh")
+	Domain   string `json:"domain"`    // Domain suffix (e.g., ".tunnelmesh")
+	Token    string `json:"token"`     // JWT token for relay authentication
 }
 
 // PeerStats contains traffic statistics reported by peers.
@@ -90,13 +96,15 @@ type ErrorResponse struct {
 }
 
 // GetLocalIPs returns the local IP addresses of the machine.
-func GetLocalIPs() (public []string, private []string) {
+// The behindNAT return value is true if the public IP was fetched from an external service.
+func GetLocalIPs() (public []string, private []string, behindNAT bool) {
 	return GetLocalIPsExcluding("")
 }
 
 // GetLocalIPsExcluding returns the local IP addresses, excluding IPs in the given CIDR.
 // This is useful for excluding mesh network IPs from the advertised addresses.
-func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string) {
+// The behindNAT return value is true if the public IP was fetched from an external service.
+func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string, behindNAT bool) {
 	var excludeNet *net.IPNet
 	if excludeCIDR != "" {
 		_, excludeNet, _ = net.ParseCIDR(excludeCIDR)
@@ -104,7 +112,7 @@ func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string
 
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return nil, nil
+		return nil, nil, false
 	}
 
 	for _, iface := range interfaces {
@@ -151,7 +159,15 @@ func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string
 		}
 	}
 
-	return public, private
+	// If no public IPs found locally (behind NAT), try to get external IP
+	if len(public) == 0 {
+		if externalIP := GetExternalIP(); externalIP != "" {
+			public = append(public, externalIP)
+			behindNAT = true
+		}
+	}
+
+	return public, private, behindNAT
 }
 
 // isPrivateIP checks if an IP is in a private range.
@@ -188,4 +204,46 @@ func bytesGreaterOrEqual(a, b net.IP) bool {
 		}
 	}
 	return true
+}
+
+// publicIPServices is a list of services that return the public IP as plain text.
+var publicIPServices = []string{
+	"https://ifconfig.me/ip",
+	"https://ipinfo.io/ip",
+	"https://api.ipify.org",
+	"https://icanhazip.com",
+}
+
+// GetExternalIP fetches the public IP address from an external service.
+// This is useful when behind NAT where local interfaces don't show the public IP.
+// Returns empty string if the public IP cannot be determined.
+func GetExternalIP() string {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	for _, service := range publicIPServices {
+		resp, err := client.Get(service)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+		if err != nil {
+			continue
+		}
+
+		ip := strings.TrimSpace(string(body))
+		// Validate it's a valid IPv4 address
+		if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
+			return ip
+		}
+	}
+
+	return ""
 }

@@ -463,16 +463,17 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	log.Info().Str("fingerprint", pubKeyFP).Msg("using SSH key")
 
 	// Get local IPs
-	publicIPs, privateIPs := proto.GetLocalIPs()
+	publicIPs, privateIPs, behindNAT := proto.GetLocalIPs()
 	log.Debug().
 		Strs("public", publicIPs).
 		Strs("private", privateIPs).
+		Bool("behind_nat", behindNAT).
 		Msg("detected local IPs")
 
 	// Connect to coordination server
 	client := coord.NewClient(cfg.Server, cfg.AuthToken)
 
-	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort)
+	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -537,6 +538,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		MaxRetries:   3,
 		RetryDelay:   1 * time.Second,
 		AllowReverse: true,
+		AllowRelay:   true, // Enable relay through coordination server
 	})
 
 	// Create SSH client for outbound connections
@@ -855,7 +857,7 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 		}
 
 		// Try to establish tunnel
-		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder)
+		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client)
 	}
 }
 
@@ -879,14 +881,15 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 				Msg("network change detected")
 
 			// Get new IP addresses, excluding mesh network IPs
-			publicIPs, privateIPs := proto.GetLocalIPsExcluding(meshCIDR)
+			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
 			log.Debug().
 				Strs("public", publicIPs).
 				Strs("private", privateIPs).
+				Bool("behind_nat", behindNAT).
 				Msg("updated local IPs")
 
 			// Re-register with coordination server
-			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort)
+			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to re-register after network change")
 				continue
@@ -911,13 +914,15 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 }
 
 func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshClient *tunnel.SSHClient,
-	negotiator *negotiate.Negotiator, tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
+	negotiator *negotiate.Negotiator, tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder,
+	client *coord.Client) {
 
 	peerInfo := &negotiate.PeerInfo{
-		ID:         peer.Name,
-		PublicIP:   "",
-		PrivateIPs: peer.PrivateIPs,
-		SSHPort:    peer.SSHPort,
+		ID:          peer.Name,
+		PublicIP:    "",
+		PrivateIPs:  peer.PrivateIPs,
+		SSHPort:     peer.SSHPort,
+		Connectable: peer.Connectable,
 	}
 	if len(peer.PublicIPs) > 0 {
 		peerInfo.PublicIP = peer.PublicIPs[0]
@@ -930,39 +935,64 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		return
 	}
 
-	if result.Strategy == negotiate.StrategyReverse {
+	switch result.Strategy {
+	case negotiate.StrategyReverse:
 		log.Info().Str("peer", peer.Name).Msg("peer requires reverse connection, waiting for incoming")
 		return
-	}
 
-	// Connect via SSH
-	log.Info().
-		Str("peer", peer.Name).
-		Str("addr", result.Address).
-		Msg("connecting to peer")
+	case negotiate.StrategyRelay:
+		// Use relay through coordination server
+		log.Info().Str("peer", peer.Name).Msg("using relay connection through coordination server")
 
-	sshConn, err := sshClient.Connect(result.Address)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("SSH connection failed")
+		jwtToken := client.JWTToken()
+		if jwtToken == "" {
+			log.Warn().Str("peer", peer.Name).Msg("no JWT token available for relay")
+			return
+		}
+
+		relayTunnel, err := tunnel.NewRelayTunnel(ctx, client.BaseURL(), peer.Name, jwtToken)
+		if err != nil {
+			log.Warn().Err(err).Str("peer", peer.Name).Msg("relay connection failed")
+			return
+		}
+
+		tunnelMgr.Add(peer.Name, relayTunnel)
+		log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
+
+		// Handle incoming packets from this tunnel
+		go forwarder.HandleTunnel(ctx, peer.Name, relayTunnel)
 		return
+
+	case negotiate.StrategyDirect:
+		// Direct SSH connection
+		log.Info().
+			Str("peer", peer.Name).
+			Str("addr", result.Address).
+			Msg("connecting to peer via direct SSH")
+
+		sshConn, err := sshClient.Connect(result.Address)
+		if err != nil {
+			log.Warn().Err(err).Str("peer", peer.Name).Msg("SSH connection failed")
+			return
+		}
+
+		// Open data channel with our name as extra data so the peer knows who we are
+		channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, []byte(myName))
+		if err != nil {
+			log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to open channel")
+			sshConn.Close()
+			return
+		}
+
+		// Create tunnel and add to manager
+		tun := tunnel.NewTunnel(channel, peer.Name)
+		tunnelMgr.Add(peer.Name, tun)
+
+		log.Info().Str("peer", peer.Name).Msg("tunnel established")
+
+		// Handle incoming packets from this tunnel
+		go forwarder.HandleTunnel(ctx, peer.Name, tun)
 	}
-
-	// Open data channel with our name as extra data so the peer knows who we are
-	channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, []byte(myName))
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to open channel")
-		sshConn.Close()
-		return
-	}
-
-	// Create tunnel and add to manager
-	tun := tunnel.NewTunnel(channel, peer.Name)
-	tunnelMgr.Add(peer.Name, tun)
-
-	log.Info().Str("peer", peer.Name).Msg("tunnel established")
-
-	// Handle incoming packets from this tunnel
-	go forwarder.HandleTunnel(ctx, peer.Name, tun)
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -1219,8 +1249,8 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 				if errors.Is(err, coord.ErrPeerNotFound) {
 					// Server restarted or peer was removed - re-register
 					log.Info().Msg("peer not found on server, re-registering...")
-					publicIPs, privateIPs := proto.GetLocalIPsExcluding(meshCIDR)
-					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort); regErr != nil {
+					publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
+					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
 						log.Error().Err(regErr).Msg("failed to re-register")
 					} else {
 						log.Info().Msg("re-registered with coordination server")

@@ -183,7 +183,8 @@ function formatAdvertisedIPs(peer) {
     const port = peer.ssh_port || 2222;
 
     if (peer.public_ips && peer.public_ips.length > 0) {
-        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);
+        const natBadge = peer.behind_nat ? ' <span class="nat-badge">NAT</span>' : '';
+        parts.push(`<span class="ip-label">Public${natBadge}:</span> ${peer.public_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);
     }
     if (peer.private_ips && peer.private_ips.length > 0) {
         parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);

@@ -34,15 +34,15 @@ func TestPeerInfo_BestAddress(t *testing.T) {
 		SSHPort:    2222,
 	}
 
-	// Best address should be public IP with port
-	assert.Equal(t, "1.2.3.4:2222", info.BestAddress())
-
-	// Without public IP, should use first private
-	info.PublicIP = ""
+	// Best address should be first private IP (LAN preferred over public)
 	assert.Equal(t, "192.168.1.10:2222", info.BestAddress())
 
-	// No addresses available
+	// Without private IPs, should use public
 	info.PrivateIPs = nil
+	assert.Equal(t, "1.2.3.4:2222", info.BestAddress())
+
+	// No addresses available
+	info.PublicIP = ""
 	assert.Equal(t, "", info.BestAddress())
 }
 
@@ -153,27 +153,78 @@ func TestNegotiator_SelectStrategy(t *testing.T) {
 	}
 }
 
-func TestNegotiator_NegotiateFallback(t *testing.T) {
+func TestNegotiator_NegotiateFallbackReverse(t *testing.T) {
 	neg := NewNegotiator(Config{
 		ProbeTimeout:   200 * time.Millisecond,
 		MaxRetries:     1,
 		RetryDelay:     50 * time.Millisecond,
 		AllowReverse:   true,
+		AllowRelay:     false,
 		PreferredOrder: []Strategy{StrategyDirect, StrategyReverse},
 	})
 
 	ctx := context.Background()
 	peer := &PeerInfo{
-		ID:         "peer1",
-		PublicIP:   "192.0.2.1", // TEST-NET address, not routable
-		PrivateIPs: []string{"10.0.0.99"},
-		SSHPort:    2222,
+		ID:          "peer1",
+		PublicIP:    "192.0.2.1", // TEST-NET address, not routable
+		PrivateIPs:  []string{"10.0.0.99"},
+		SSHPort:     2222,
+		Connectable: true, // Peer can accept incoming connections
 	}
 
-	// When no direct connection works, should recommend reverse
+	// When no direct connection works and peer is connectable, should recommend reverse
 	result, err := neg.Negotiate(ctx, peer)
 	require.NoError(t, err)
 	assert.Equal(t, StrategyReverse, result.Strategy)
+}
+
+func TestNegotiator_NegotiateFallbackRelay(t *testing.T) {
+	neg := NewNegotiator(Config{
+		ProbeTimeout:   200 * time.Millisecond,
+		MaxRetries:     1,
+		RetryDelay:     50 * time.Millisecond,
+		AllowReverse:   true,
+		AllowRelay:     true,
+		PreferredOrder: []Strategy{StrategyDirect, StrategyReverse},
+	})
+
+	ctx := context.Background()
+	peer := &PeerInfo{
+		ID:          "peer1",
+		PublicIP:    "192.0.2.1", // TEST-NET address, not routable
+		PrivateIPs:  []string{"10.0.0.99"},
+		SSHPort:     2222,
+		Connectable: false, // Peer cannot accept incoming connections (behind NAT)
+	}
+
+	// When no direct connection works AND peer is not connectable, should use relay
+	result, err := neg.Negotiate(ctx, peer)
+	require.NoError(t, err)
+	assert.Equal(t, StrategyRelay, result.Strategy)
+}
+
+func TestNegotiator_NegotiateBothBehindNAT(t *testing.T) {
+	neg := NewNegotiator(Config{
+		ProbeTimeout:   200 * time.Millisecond,
+		MaxRetries:     1,
+		RetryDelay:     50 * time.Millisecond,
+		AllowReverse:   true,
+		AllowRelay:     true,
+	})
+
+	ctx := context.Background()
+	peer := &PeerInfo{
+		ID:          "peer1",
+		PublicIP:    "", // No public IP
+		PrivateIPs:  []string{"10.0.0.99"},
+		SSHPort:     2222,
+		Connectable: false, // Both sides behind NAT
+	}
+
+	// Both behind NAT - should fall back to relay
+	result, err := neg.Negotiate(ctx, peer)
+	require.NoError(t, err)
+	assert.Equal(t, StrategyRelay, result.Strategy)
 }
 
 func TestConfig_Validate(t *testing.T) {

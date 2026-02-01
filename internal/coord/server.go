@@ -40,6 +40,7 @@ type Server struct {
 	ipAlloc     *ipAllocator
 	dnsCache    map[string]string // hostname -> mesh IP
 	serverStats serverStats
+	relay       *relayManager
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -139,6 +140,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/v1/heartbeat", s.withAuth(s.handleHeartbeat))
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
 
+	// Setup relay routes (JWT auth handled internally)
+	if s.cfg.Relay.Enabled {
+		s.setupRelayRoutes()
+	}
+
 	// Setup admin routes if enabled
 	if s.cfg.Admin.Enabled {
 		s.setupAdminRoutes()
@@ -218,7 +224,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		SSHPort:     req.SSHPort,
 		MeshIP:      meshIP,
 		LastSeen:    time.Now(),
-		Connectable: len(req.PublicIPs) > 0,
+		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,
+		BehindNAT:   req.BehindNAT,
 	}
 
 	s.peers[req.Name] = &peerInfo{
@@ -226,6 +233,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		registeredAt: time.Now(),
 	}
 	s.dnsCache[req.Name] = meshIP
+
+	// Generate JWT token for relay authentication
+	token, err := s.GenerateToken(req.Name, meshIP)
+	if err != nil {
+		s.jsonError(w, "failed to generate token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	log.Info().
 		Str("name", req.Name).
@@ -236,6 +250,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		MeshIP:   meshIP,
 		MeshCIDR: s.cfg.MeshCIDR,
 		Domain:   s.cfg.DomainSuffix,
+		Token:    token,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
