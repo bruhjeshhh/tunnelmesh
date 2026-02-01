@@ -105,7 +105,7 @@ func TestResolver_DNSServer(t *testing.T) {
 
 	// Wait for server to start
 	time.Sleep(100 * time.Millisecond)
-	defer r.Shutdown()
+	defer func() { _ = r.Shutdown() }()
 
 	// Query the DNS server
 	c := new(dns.Client)
@@ -129,11 +129,11 @@ func TestResolver_DNSServer_NXDOMAIN(t *testing.T) {
 	r := NewResolver(".mesh", 60)
 
 	go func() {
-		r.ListenAndServe(addr)
+		_ = r.ListenAndServe(addr)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	defer r.Shutdown()
+	defer func() { _ = r.Shutdown() }()
 
 	c := new(dns.Client)
 	m := new(dns.Msg)

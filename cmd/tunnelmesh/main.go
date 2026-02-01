@@ -74,8 +74,8 @@ Use 'tunnelmesh service' to manage system service installation.`,
 	// Hidden service mode flags (used when running as a service)
 	rootCmd.PersistentFlags().BoolVar(&serviceRun, "service-run", false, "Run as a service (internal use)")
 	rootCmd.PersistentFlags().StringVar(&serviceRunMode, "service-mode", "", "Service mode: serve or join (internal use)")
-	rootCmd.PersistentFlags().MarkHidden("service-run")
-	rootCmd.PersistentFlags().MarkHidden("service-mode")
+	_ = rootCmd.PersistentFlags().MarkHidden("service-run")
+	_ = rootCmd.PersistentFlags().MarkHidden("service-mode")
 
 	// Serve command - run coordination server
 	serveCmd := &cobra.Command{
@@ -619,7 +619,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	if resolver != nil {
-		resolver.Shutdown()
+		_ = resolver.Shutdown()
 	}
 
 	return nil
@@ -721,7 +721,7 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 	// Handle channels
 	for newChannel := range sshConn.Channels {
 		if newChannel.ChannelType() != tunnel.ChannelType {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
@@ -1445,7 +1445,7 @@ Domains=~%s
 	// Restart systemd-resolved
 	cmd = exec.Command("sudo", "systemctl", "restart", "systemd-resolved")
 	cmd.Stderr = os.Stderr
-	cmd.Run() // Ignore error, might not need restart
+	_ = cmd.Run() // Ignore error, might not need restart
 
 	log.Info().Str("file", confFile).Msg("systemd-resolved configured")
 	return nil
@@ -1457,7 +1457,7 @@ func removeLinuxResolver(domain string) error {
 		cmd := exec.Command("sudo", "resolvectl", "revert", "lo")
 		cmd.Stdin = os.Stdin
 		cmd.Stderr = os.Stderr
-		cmd.Run() // Ignore errors
+		_ = cmd.Run() // Ignore errors
 	}
 
 	// Remove config file if it exists
@@ -1473,7 +1473,7 @@ func removeLinuxResolver(domain string) error {
 		// Restart systemd-resolved
 		cmd = exec.Command("sudo", "systemctl", "restart", "systemd-resolved")
 		cmd.Stderr = os.Stderr
-		cmd.Run()
+		_ = cmd.Run()
 
 		log.Info().Msg("systemd-resolved configuration removed")
 	}
