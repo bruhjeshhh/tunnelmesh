@@ -1,6 +1,50 @@
-server.yaml
-peer.yaml
+# Binaries
 bin/
 tunnelmesh
+tunnelmesh-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
 coverage.out
 coverage.html
+*.coverprofile
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Config files (contain secrets)
+server.yaml
+peer.yaml
+*.pem
+*.key
+
+# SSH keys (should not be committed)
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
+.tmp/

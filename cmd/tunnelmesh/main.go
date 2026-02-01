@@ -285,9 +285,15 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Address: resp.MeshIP + "/" + strings.Split(resp.MeshCIDR, "/")[1],
 	}
 
+	log.Info().
+		Str("name", tunCfg.Name).
+		Int("mtu", tunCfg.MTU).
+		Str("address", tunCfg.Address).
+		Msg("creating TUN device")
+
 	tunDev, err := tun.Create(tunCfg)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to create TUN device (requires root)")
+		log.Error().Err(err).Msg("failed to create TUN device (requires root)")
 		// Continue without TUN for now
 	} else {
 		defer tunDev.Close()

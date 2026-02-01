@@ -89,6 +89,15 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 		return fmt.Errorf("parse packet: %w", err)
 	}
 
+	// Handle packets destined for our own IP (local traffic)
+	f.localIPMu.RLock()
+	localIP := f.localIP
+	f.localIPMu.RUnlock()
+	if localIP != nil && info.DstIP.Equal(localIP) {
+		// Write back to TUN so kernel delivers it locally
+		return f.ReceivePacket(packet)
+	}
+
 	// Look up the route
 	peerName, ok := f.router.Lookup(info.DstIP)
 	if !ok {
