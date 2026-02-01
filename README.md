@@ -20,33 +20,41 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 
 For a complete step-by-step setup guide including downloading releases, configuring servers and peers, and installing as a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 
-## CLI Reference
+## Architecture
 
-| Command | Description |
-|---------|-------------|
-| `tunnelmesh serve` | Run the coordination server |
-| `tunnelmesh join` | Connect a peer to the mesh |
-| `tunnelmesh status` | Show node status and connectivity |
-| `tunnelmesh peers` | List all connected peers |
-| `tunnelmesh resolve <hostname>` | Resolve mesh hostname to IP |
-| `tunnelmesh leave` | Deregister from the mesh |
-| `tunnelmesh init` | Generate SSH keys |
-| `tunnelmesh version` | Show version information |
-| `tunnelmesh service install` | Install as system service |
-| `tunnelmesh service uninstall` | Remove system service |
-| `tunnelmesh service start/stop` | Control the service |
-| `tunnelmesh service status` | Show service status |
-| `tunnelmesh service logs` | View service logs |
+```
+┌─────────────────┐                      ┌─────────────────┐
+│   Peer Node A   │                      │   Peer Node B   │
+│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│                 │    SSH Tunnel        │                 │
+│  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
+│  │ TUN Device│  │     (Encrypted)      │  │ TUN Device│  │
+│  │  Router   │  │                      │  │  Router   │  │
+│  │ Forwarder │  │                      │  │ Forwarder │  │
+│  └───────────┘  │                      │  └───────────┘  │
+└────────┬────────┘                      └────────┬────────┘
+         │                                        │
+         │  Register/Heartbeat/Discovery          │
+         │                                        │
+         └──────────────┬─────────────────────────┘
+                        │
+                        ▼
+              ┌─────────────────┐
+              │  Coordination   │
+              │     Server      │
+              │                 │
+              │ • Peer Registry │
+              │ • IP Allocation │
+              │ • DNS Records   │
+              │ • Admin UI      │
+              └─────────────────┘
+```
 
-### Global Flags
-
-| Flag | Description |
-|------|-------------|
-| `-c, --config` | Config file path |
-| `-l, --log-level` | Logging level (debug, info, warn, error) |
-| `-s, --server` | Coordination server URL |
-| `-t, --token` | Authentication token |
-| `-n, --name` | Node name |
+**Key points:**
+- Traffic flows directly between peers via SSH tunnels
+- The coordination server only handles discovery and registration
+- Each peer runs a TUN interface for transparent IP routing
+- Peers establish connections using negotiated strategies (direct or reverse)
 
 ## Configuration
 
@@ -120,41 +128,33 @@ The tool searches for config files in the following order:
 
 **Peer:** `~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
 
-## Architecture
+## CLI Reference
 
-```
-┌─────────────────┐                      ┌─────────────────┐
-│   Peer Node A   │                      │   Peer Node B   │
-│   (10.99.0.1)   │                      │   (10.99.0.2)   │
-│                 │    SSH Tunnel        │                 │
-│  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
-│  │ TUN Device│  │     (Encrypted)      │  │ TUN Device│  │
-│  │  Router   │  │                      │  │  Router   │  │
-│  │ Forwarder │  │                      │  │ Forwarder │  │
-│  └───────────┘  │                      │  └───────────┘  │
-└────────┬────────┘                      └────────┬────────┘
-         │                                        │
-         │  Register/Heartbeat/Discovery          │
-         │                                        │
-         └──────────────┬─────────────────────────┘
-                        │
-                        ▼
-              ┌─────────────────┐
-              │  Coordination   │
-              │     Server      │
-              │                 │
-              │ • Peer Registry │
-              │ • IP Allocation │
-              │ • DNS Records   │
-              │ • Admin UI      │
-              └─────────────────┘
-```
+| Command | Description |
+|---------|-------------|
+| `tunnelmesh serve` | Run the coordination server |
+| `tunnelmesh join` | Connect a peer to the mesh |
+| `tunnelmesh status` | Show node status and connectivity |
+| `tunnelmesh peers` | List all connected peers |
+| `tunnelmesh resolve <hostname>` | Resolve mesh hostname to IP |
+| `tunnelmesh leave` | Deregister from the mesh |
+| `tunnelmesh init` | Generate SSH keys |
+| `tunnelmesh version` | Show version information |
+| `tunnelmesh service install` | Install as system service |
+| `tunnelmesh service uninstall` | Remove system service |
+| `tunnelmesh service start/stop` | Control the service |
+| `tunnelmesh service status` | Show service status |
+| `tunnelmesh service logs` | View service logs |
 
-**Key points:**
-- Traffic flows directly between peers via SSH tunnels
-- The coordination server only handles discovery and registration
-- Each peer runs a TUN interface for transparent IP routing
-- Peers establish connections using negotiated strategies (direct or reverse)
+### Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c, --config` | Config file path |
+| `-l, --log-level` | Logging level (debug, info, warn, error) |
+| `-s, --server` | Coordination server URL |
+| `-t, --token` | Authentication token |
+| `-n, --name` | Node name |
 
 ## Running as a System Service
 
