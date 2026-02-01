@@ -36,6 +36,7 @@ variable "domain_suffix" {
 variable "github_repo" {
   description = "GitHub repository for container image (e.g., username/tunnelmesh)"
   type        = string
+  default     = "zombar/tunnelmesh"
 }
 
 variable "image_tag" {

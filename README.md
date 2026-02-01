@@ -315,10 +315,9 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 
    Edit `terraform.tfvars`:
    ```hcl
-   do_token    = "dop_v1_xxx"              # DO API token
-   domain      = "example.com"             # Your domain
-   auth_token  = "your-secure-token"       # Mesh auth token
-   github_repo = "yourusername/tunnelmesh" # Your GitHub repo
+   do_token   = "dop_v1_xxx"          # DO API token
+   domain     = "example.com"         # Your domain
+   auth_token = "your-secure-token"   # Mesh auth token
    ```
 
 3. **Deploy:**
@@ -336,7 +335,7 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 | `domain` | Base domain name | (required) |
 | `subdomain` | Subdomain for coord server | `coord` |
 | `auth_token` | Mesh authentication token | (required) |
-| `github_repo` | GitHub repo for container image | (required) |
+| `github_repo` | GitHub repo for container image | `zombar/tunnelmesh` |
 | `image_tag` | Docker image tag | `latest` |
 | `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
 | `region` | DO region | `ams` |
