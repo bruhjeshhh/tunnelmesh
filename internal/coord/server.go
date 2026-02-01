@@ -15,14 +15,31 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
+// peerInfo wraps a peer with stats and metadata for admin UI.
+type peerInfo struct {
+	peer           *proto.Peer
+	stats          *proto.PeerStats
+	prevStats      *proto.PeerStats
+	heartbeatCount uint64
+	registeredAt   time.Time
+	lastStatsTime  time.Time
+}
+
+// serverStats tracks server-level statistics.
+type serverStats struct {
+	startTime       time.Time
+	totalHeartbeats uint64
+}
+
 // Server is the coordination server that manages peer registration and discovery.
 type Server struct {
-	cfg      *config.ServerConfig
-	mux      *http.ServeMux
-	peers    map[string]*proto.Peer
-	peersMu  sync.RWMutex
-	ipAlloc  *ipAllocator
-	dnsCache map[string]string // hostname -> mesh IP
+	cfg         *config.ServerConfig
+	mux         *http.ServeMux
+	peers       map[string]*peerInfo
+	peersMu     sync.RWMutex
+	ipAlloc     *ipAllocator
+	dnsCache    map[string]string // hostname -> mesh IP
+	serverStats serverStats
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -102,9 +119,12 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	srv := &Server{
 		cfg:      cfg,
 		mux:      http.NewServeMux(),
-		peers:    make(map[string]*proto.Peer),
+		peers:    make(map[string]*peerInfo),
 		ipAlloc:  ipAlloc,
 		dnsCache: make(map[string]string),
+		serverStats: serverStats{
+			startTime: time.Now(),
+		},
 	}
 
 	srv.setupRoutes()
@@ -118,6 +138,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))
 	s.mux.HandleFunc("/api/v1/heartbeat", s.withAuth(s.handleHeartbeat))
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
+
+	// Setup admin routes if enabled
+	if s.cfg.Admin.Enabled {
+		s.setupAdminRoutes()
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +199,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	if exists {
 		// Re-use existing IP
-		meshIP = existing.MeshIP
+		meshIP = existing.peer.MeshIP
 	} else {
 		// Allocate new IP
 		var err error
@@ -196,7 +221,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Connectable: len(req.PublicIPs) > 0,
 	}
 
-	s.peers[req.Name] = peer
+	s.peers[req.Name] = &peerInfo{
+		peer:         peer,
+		registeredAt: time.Now(),
+	}
 	s.dnsCache[req.Name] = meshIP
 
 	log.Info().
@@ -224,8 +252,8 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	defer s.peersMu.RUnlock()
 
 	peers := make([]proto.Peer, 0, len(s.peers))
-	for _, p := range s.peers {
-		peers = append(peers, *p)
+	for _, info := range s.peers {
+		peers = append(peers, *info.peer)
 	}
 
 	resp := proto.PeerListResponse{Peers: peers}
@@ -244,7 +272,7 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.peersMu.RLock()
-		peer, exists := s.peers[name]
+		info, exists := s.peers[name]
 		s.peersMu.RUnlock()
 
 		if !exists {
@@ -253,13 +281,13 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(peer)
+		json.NewEncoder(w).Encode(info.peer)
 
 	case http.MethodDelete:
 		s.peersMu.Lock()
-		peer, exists := s.peers[name]
+		info, exists := s.peers[name]
 		if exists {
-			s.ipAlloc.release(peer.MeshIP)
+			s.ipAlloc.release(info.peer.MeshIP)
 			delete(s.peers, name)
 			delete(s.dnsCache, name)
 		}
@@ -292,10 +320,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.peersMu.Lock()
-	peer, exists := s.peers[req.Name]
+	info, exists := s.peers[req.Name]
 	if exists {
-		peer.LastSeen = time.Now()
+		info.peer.LastSeen = time.Now()
+		info.heartbeatCount++
+		if req.Stats != nil {
+			info.prevStats = info.stats
+			info.stats = req.Stats
+			info.lastStatsTime = time.Now()
+		}
 	}
+	s.serverStats.totalHeartbeats++
 	s.peersMu.Unlock()
 
 	if !exists {

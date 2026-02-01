@@ -34,10 +34,23 @@ type RegisterResponse struct {
 	Domain   string `json:"domain"`      // Domain suffix (e.g., ".mesh")
 }
 
+// PeerStats contains traffic statistics reported by peers.
+type PeerStats struct {
+	PacketsSent     uint64 `json:"packets_sent"`
+	PacketsReceived uint64 `json:"packets_received"`
+	BytesSent       uint64 `json:"bytes_sent"`
+	BytesReceived   uint64 `json:"bytes_received"`
+	DroppedNoRoute  uint64 `json:"dropped_no_route"`
+	DroppedNoTunnel uint64 `json:"dropped_no_tunnel"`
+	Errors          uint64 `json:"errors"`
+	ActiveTunnels   int    `json:"active_tunnels"`
+}
+
 // HeartbeatRequest is sent periodically to maintain presence.
 type HeartbeatRequest struct {
-	Name      string `json:"name"`
-	PublicKey string `json:"public_key"`
+	Name      string     `json:"name"`
+	PublicKey string     `json:"public_key"`
+	Stats     *PeerStats `json:"stats,omitempty"`
 }
 
 // HeartbeatResponse is returned after successful heartbeat.

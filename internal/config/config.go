@@ -11,12 +11,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// AdminConfig holds configuration for the admin web interface.
+type AdminConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 // ServerConfig holds configuration for the coordination server.
 type ServerConfig struct {
-	Listen       string `yaml:"listen"`
-	AuthToken    string `yaml:"auth_token"`
-	MeshCIDR     string `yaml:"mesh_cidr"`
-	DomainSuffix string `yaml:"domain_suffix"`
+	Listen       string       `yaml:"listen"`
+	AuthToken    string       `yaml:"auth_token"`
+	MeshCIDR     string       `yaml:"mesh_cidr"`
+	DomainSuffix string       `yaml:"domain_suffix"`
+	Admin        AdminConfig  `yaml:"admin"`
+	JoinMesh     *PeerConfig  `yaml:"join_mesh,omitempty"`
 }
 
 // PeerConfig holds configuration for a peer node.
@@ -61,6 +68,34 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	if cfg.DomainSuffix == "" {
 		cfg.DomainSuffix = ".mesh"
+	}
+	// Admin enabled by default
+	cfg.Admin.Enabled = true
+
+	// Apply defaults to JoinMesh if configured
+	if cfg.JoinMesh != nil {
+		if cfg.JoinMesh.SSHPort == 0 {
+			cfg.JoinMesh.SSHPort = 2222
+		}
+		if cfg.JoinMesh.TUN.Name == "" {
+			cfg.JoinMesh.TUN.Name = "tun-mesh0"
+		}
+		if cfg.JoinMesh.TUN.MTU == 0 {
+			cfg.JoinMesh.TUN.MTU = 1400
+		}
+		if cfg.JoinMesh.DNS.Listen == "" {
+			cfg.JoinMesh.DNS.Listen = "127.0.0.53:5353"
+		}
+		if cfg.JoinMesh.DNS.CacheTTL == 0 {
+			cfg.JoinMesh.DNS.CacheTTL = 300
+		}
+		// Expand home directory in private key path
+		if strings.HasPrefix(cfg.JoinMesh.PrivateKey, "~/") {
+			homeDir, err := os.UserHomeDir()
+			if err == nil {
+				cfg.JoinMesh.PrivateKey = filepath.Join(homeDir, cfg.JoinMesh.PrivateKey[2:])
+			}
+		}
 	}
 
 	return cfg, nil
@@ -122,6 +157,15 @@ func (c *ServerConfig) Validate() error {
 		_, _, err := net.ParseCIDR(c.MeshCIDR)
 		if err != nil {
 			return fmt.Errorf("invalid mesh_cidr: %w", err)
+		}
+	}
+	// Validate JoinMesh if configured
+	if c.JoinMesh != nil {
+		if c.JoinMesh.Name == "" {
+			return fmt.Errorf("join_mesh.name is required")
+		}
+		if c.JoinMesh.SSHPort <= 0 || c.JoinMesh.SSHPort > 65535 {
+			return fmt.Errorf("join_mesh.ssh_port must be between 1 and 65535")
 		}
 	}
 	return nil
