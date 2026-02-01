@@ -463,16 +463,17 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	log.Info().Str("fingerprint", pubKeyFP).Msg("using SSH key")
 
 	// Get local IPs
-	publicIPs, privateIPs := proto.GetLocalIPs()
+	publicIPs, privateIPs, behindNAT := proto.GetLocalIPs()
 	log.Debug().
 		Strs("public", publicIPs).
 		Strs("private", privateIPs).
+		Bool("behind_nat", behindNAT).
 		Msg("detected local IPs")
 
 	// Connect to coordination server
 	client := coord.NewClient(cfg.Server, cfg.AuthToken)
 
-	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort)
+	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -880,14 +881,15 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 				Msg("network change detected")
 
 			// Get new IP addresses, excluding mesh network IPs
-			publicIPs, privateIPs := proto.GetLocalIPsExcluding(meshCIDR)
+			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
 			log.Debug().
 				Strs("public", publicIPs).
 				Strs("private", privateIPs).
+				Bool("behind_nat", behindNAT).
 				Msg("updated local IPs")
 
 			// Re-register with coordination server
-			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort)
+			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to re-register after network change")
 				continue
@@ -1247,8 +1249,8 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 				if errors.Is(err, coord.ErrPeerNotFound) {
 					// Server restarted or peer was removed - re-register
 					log.Info().Msg("peer not found on server, re-registering...")
-					publicIPs, privateIPs := proto.GetLocalIPsExcluding(meshCIDR)
-					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort); regErr != nil {
+					publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
+					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
 						log.Error().Err(regErr).Msg("failed to re-register")
 					} else {
 						log.Info().Msg("re-registered with coordination server")

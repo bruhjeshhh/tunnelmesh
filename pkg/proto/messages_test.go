@@ -33,12 +33,13 @@ func TestIsPrivateIP(t *testing.T) {
 }
 
 func TestGetLocalIPs(t *testing.T) {
-	public, private := GetLocalIPs()
+	public, private, behindNAT := GetLocalIPs()
 
 	// At least we should have some IPs (likely private ones)
 	// This test just verifies the function doesn't panic
 	t.Logf("Public IPs: %v", public)
 	t.Logf("Private IPs: %v", private)
+	t.Logf("Behind NAT: %v", behindNAT)
 
 	// Verify all returned IPs are valid
 	for _, ip := range public {

@@ -34,6 +34,7 @@ type AdminPeerInfo struct {
 	LastSeen            time.Time        `json:"last_seen"`
 	Online              bool             `json:"online"`
 	Connectable         bool             `json:"connectable"`
+	BehindNAT           bool             `json:"behind_nat"`
 	RegisteredAt        time.Time        `json:"registered_at"`
 	HeartbeatCount      uint64           `json:"heartbeat_count"`
 	Stats               *proto.PeerStats `json:"stats,omitempty"`
@@ -80,6 +81,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			LastSeen:       info.peer.LastSeen,
 			Online:         online,
 			Connectable:    info.peer.Connectable,
+			BehindNAT:      info.peer.BehindNAT,
 			RegisteredAt:   info.registeredAt,
 			HeartbeatCount: info.heartbeatCount,
 			Stats:          info.stats,

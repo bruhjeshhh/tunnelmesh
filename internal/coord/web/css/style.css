@@ -176,6 +176,19 @@ td {
     border-color: rgba(248, 81, 73, 0.4);
 }
 
+.nat-badge {
+    display: inline-block;
+    padding: 0 0.35rem;
+    border-radius: 2rem;
+    font-size: 0.6rem;
+    font-weight: 500;
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    border: 1px solid rgba(210, 153, 34, 0.4);
+    vertical-align: middle;
+    margin-left: 0.25rem;
+}
+
 .empty-state {
     text-align: center;
     padding: 3rem;

@@ -19,6 +19,7 @@ type Peer struct {
 	MeshIP      string    `json:"mesh_ip"`     // Assigned mesh network IP (10.99.x.x)
 	LastSeen    time.Time `json:"last_seen"`   // Last heartbeat time
 	Connectable bool      `json:"connectable"` // Can accept incoming connections
+	BehindNAT   bool      `json:"behind_nat"`  // Public IP was fetched externally (behind NAT)
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
@@ -28,6 +29,7 @@ type RegisterRequest struct {
 	PublicIPs  []string `json:"public_ips"`
 	PrivateIPs []string `json:"private_ips"`
 	SSHPort    int      `json:"ssh_port"`
+	BehindNAT  bool     `json:"behind_nat"` // True if public IP was fetched from external service
 }
 
 // RegisterResponse is returned after successful registration.
@@ -94,13 +96,15 @@ type ErrorResponse struct {
 }
 
 // GetLocalIPs returns the local IP addresses of the machine.
-func GetLocalIPs() (public []string, private []string) {
+// The behindNAT return value is true if the public IP was fetched from an external service.
+func GetLocalIPs() (public []string, private []string, behindNAT bool) {
 	return GetLocalIPsExcluding("")
 }
 
 // GetLocalIPsExcluding returns the local IP addresses, excluding IPs in the given CIDR.
 // This is useful for excluding mesh network IPs from the advertised addresses.
-func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string) {
+// The behindNAT return value is true if the public IP was fetched from an external service.
+func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string, behindNAT bool) {
 	var excludeNet *net.IPNet
 	if excludeCIDR != "" {
 		_, excludeNet, _ = net.ParseCIDR(excludeCIDR)
@@ -108,7 +112,7 @@ func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string
 
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return nil, nil
+		return nil, nil, false
 	}
 
 	for _, iface := range interfaces {
@@ -159,10 +163,11 @@ func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string
 	if len(public) == 0 {
 		if externalIP := GetExternalIP(); externalIP != "" {
 			public = append(public, externalIP)
+			behindNAT = true
 		}
 	}
 
-	return public, private
+	return public, private, behindNAT
 }
 
 // isPrivateIP checks if an IP is in a private range.

@@ -224,7 +224,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		SSHPort:     req.SSHPort,
 		MeshIP:      meshIP,
 		LastSeen:    time.Now(),
-		Connectable: len(req.PublicIPs) > 0,
+		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,
+		BehindNAT:   req.BehindNAT,
 	}
 
 	s.peers[req.Name] = &peerInfo{
