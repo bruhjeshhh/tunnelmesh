@@ -1,0 +1,28 @@
+# TunnelMesh Peer Configuration
+# Copy to ~/.tunnelmesh/config.yaml and modify as needed
+
+# Your node's name in the mesh network
+name: "mynode"
+
+# Coordination server URL
+server: "http://coord.example.com:8080"
+
+# Authentication token (must match server config)
+auth_token: "your-secure-token-here"
+
+# SSH server port for incoming peer connections
+ssh_port: 2222
+
+# Path to SSH private key (will be generated if missing)
+private_key: "~/.tunnelmesh/id_ed25519"
+
+# TUN interface configuration
+tun:
+  name: "tun-mesh0"   # Interface name (distinct from tailscale0)
+  mtu: 1400           # MTU for mesh traffic
+
+# Local DNS resolver configuration
+dns:
+  enabled: true
+  listen: "127.0.0.53:5353"  # Local DNS server address
+  cache_ttl: 300              # DNS record cache TTL in seconds
