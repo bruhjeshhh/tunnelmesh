@@ -21,9 +21,10 @@ output "mesh_cidr" {
 
 output "peer_config_example" {
   description = "Example peer configuration"
+  sensitive   = true
   value       = <<-EOF
     # Add this to your peer.yaml:
     server: "https://${var.subdomain}.${var.domain}"
-    auth_token: "<your-auth-token>"
+    auth_token: "${var.auth_token}"
   EOF
 }
