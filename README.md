@@ -14,6 +14,8 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **Admin Dashboard** - Web interface showing mesh status, peers, and traffic statistics
 - **Server-as-Client** - Coordination server can also participate as a mesh node
 
+![Admin Dashboard](docs/images/admin-dashboard.png)
+
 ## Installation
 
 ### From Source
