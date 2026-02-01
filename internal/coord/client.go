@@ -84,9 +84,15 @@ func (c *Client) ListPeers() ([]proto.Peer, error) {
 
 // Heartbeat sends a heartbeat to maintain presence.
 func (c *Client) Heartbeat(name, publicKey string) error {
+	return c.HeartbeatWithStats(name, publicKey, nil)
+}
+
+// HeartbeatWithStats sends a heartbeat with optional stats to maintain presence.
+func (c *Client) HeartbeatWithStats(name, publicKey string, stats *proto.PeerStats) error {
 	req := proto.HeartbeatRequest{
 		Name:      name,
 		PublicKey: publicKey,
+		Stats:     stats,
 	}
 
 	body, err := json.Marshal(req)

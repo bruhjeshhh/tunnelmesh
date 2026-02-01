@@ -177,6 +177,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create server: %w", err)
 	}
 
+	// Create context for shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -184,7 +188,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	go func() {
 		<-sigChan
 		log.Info().Msg("shutting down...")
-		os.Exit(0)
+		cancel()
 	}()
 
 	log.Info().
@@ -193,7 +197,36 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Str("domain", cfg.DomainSuffix).
 		Msg("starting coordination server")
 
-	return srv.ListenAndServe()
+	// Start HTTP server in goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatal().Err(err).Msg("server error")
+		}
+	}()
+
+	// If JoinMesh is configured, join the mesh as a client
+	if cfg.JoinMesh != nil {
+		// Set server URL to localhost and copy auth token
+		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
+		cfg.JoinMesh.AuthToken = cfg.AuthToken
+
+		log.Info().
+			Str("name", cfg.JoinMesh.Name).
+			Msg("joining mesh as client")
+
+		// Run join in a goroutine so we can handle shutdown
+		go func() {
+			// Small delay to ensure server is ready
+			time.Sleep(500 * time.Millisecond)
+			if err := runJoinWithConfig(ctx, cfg.JoinMesh); err != nil {
+				log.Error().Err(err).Msg("failed to join mesh as client")
+			}
+		}()
+	}
+
+	// Wait for shutdown
+	<-ctx.Done()
+	return nil
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -245,6 +278,27 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("server, token, and name are required")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Info().Msg("shutting down...")
+		cancel()
+	}()
+
+	return runJoinWithConfig(ctx, cfg)
+}
+
+func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
+	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
+		return fmt.Errorf("server, token, and name are required")
+	}
+
 	// Ensure keys exist
 	signer, err := config.EnsureKeyPairExists(cfg.PrivateKey)
 	if err != nil {
@@ -275,10 +329,6 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Str("mesh_cidr", resp.MeshCIDR).
 		Str("domain", resp.Domain).
 		Msg("joined mesh network")
-
-	// Create context for shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Create TUN device
 	tunCfg := tun.Config{
@@ -378,16 +428,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
 
 	// Start heartbeat loop
-	go heartbeatLoop(ctx, client, cfg.Name, pubKeyFP, resolver)
+	go heartbeatLoop(ctx, client, cfg.Name, pubKeyFP, resolver, forwarder, tunnelMgr)
 
-	// Wait for shutdown signal
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	<-sigChan
-	log.Info().Msg("shutting down...")
-
-	cancel() // Signal all goroutines to stop
+	// Wait for context cancellation (shutdown signal)
+	<-ctx.Done()
 
 	// Clean up system resolver
 	if dnsConfigured {
@@ -919,7 +963,8 @@ func loadConfig() (*config.PeerConfig, error) {
 	}, nil
 }
 
-func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKey string, resolver *meshdns.Resolver) {
+func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKey string,
+	resolver *meshdns.Resolver, forwarder *routing.Forwarder, tunnelMgr *TunnelAdapter) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -928,7 +973,23 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKey strin
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := client.Heartbeat(name, pubKey); err != nil {
+			// Collect stats from forwarder
+			var stats *proto.PeerStats
+			if forwarder != nil {
+				fwdStats := forwarder.Stats()
+				stats = &proto.PeerStats{
+					PacketsSent:     fwdStats.PacketsSent,
+					PacketsReceived: fwdStats.PacketsReceived,
+					BytesSent:       fwdStats.BytesSent,
+					BytesReceived:   fwdStats.BytesReceived,
+					DroppedNoRoute:  fwdStats.DroppedNoRoute,
+					DroppedNoTunnel: fwdStats.DroppedNoTunnel,
+					Errors:          fwdStats.Errors,
+					ActiveTunnels:   len(tunnelMgr.List()),
+				}
+			}
+
+			if err := client.HeartbeatWithStats(name, pubKey, stats); err != nil {
 				log.Warn().Err(err).Msg("heartbeat failed")
 				continue
 			}

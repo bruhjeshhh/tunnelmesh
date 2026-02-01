@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TunnelMesh Admin</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header>
+        <h1>TunnelMesh Admin</h1>
+        <div id="server-info">
+            <span class="stat">
+                <span class="label">Uptime:</span>
+                <span id="uptime">--</span>
+            </span>
+            <span class="stat">
+                <span class="label">Peers:</span>
+                <span id="peer-count">--/--</span>
+            </span>
+            <span class="stat">
+                <span class="label">Heartbeats:</span>
+                <span id="heartbeats">--</span>
+            </span>
+        </div>
+    </header>
+
+    <main>
+        <section id="peers-section">
+            <h2>Connected Peers</h2>
+            <table id="peers">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Mesh IP</th>
+                        <th>Status</th>
+                        <th>Tunnels</th>
+                        <th>Throughput</th>
+                        <th>Packets/s</th>
+                        <th>Errors</th>
+                    </tr>
+                </thead>
+                <tbody id="peers-body"></tbody>
+            </table>
+            <div id="no-peers" class="empty-state" style="display: none;">
+                No peers connected yet.
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p><a href="https://github.com/zombar/tunnelmesh" target="_blank">TunnelMesh - P2P SSH Tunnel Mesh Network</a></p>
+    </footer>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

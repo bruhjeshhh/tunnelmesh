@@ -1,0 +1,115 @@
+package coord
+
+import (
+	"encoding/json"
+	"io/fs"
+	"net/http"
+	"sort"
+	"time"
+
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
+)
+
+// AdminOverview is the response for the admin overview endpoint.
+type AdminOverview struct {
+	ServerUptime    string          `json:"server_uptime"`
+	TotalPeers      int             `json:"total_peers"`
+	OnlinePeers     int             `json:"online_peers"`
+	TotalHeartbeats uint64          `json:"total_heartbeats"`
+	MeshCIDR        string          `json:"mesh_cidr"`
+	Peers           []AdminPeerInfo `json:"peers"`
+}
+
+// AdminPeerInfo contains peer information for the admin UI.
+type AdminPeerInfo struct {
+	Name                string           `json:"name"`
+	MeshIP              string           `json:"mesh_ip"`
+	PublicIPs           []string         `json:"public_ips"`
+	LastSeen            time.Time        `json:"last_seen"`
+	Online              bool             `json:"online"`
+	Connectable         bool             `json:"connectable"`
+	RegisteredAt        time.Time        `json:"registered_at"`
+	HeartbeatCount      uint64           `json:"heartbeat_count"`
+	Stats               *proto.PeerStats `json:"stats,omitempty"`
+	BytesSentRate       float64          `json:"bytes_sent_rate"`
+	BytesReceivedRate   float64          `json:"bytes_received_rate"`
+	PacketsSentRate     float64          `json:"packets_sent_rate"`
+	PacketsReceivedRate float64          `json:"packets_received_rate"`
+}
+
+// handleAdminOverview returns the admin overview data.
+func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	now := time.Now()
+	onlineThreshold := 2 * time.Minute
+
+	overview := AdminOverview{
+		ServerUptime:    time.Since(s.serverStats.startTime).Round(time.Second).String(),
+		TotalPeers:      len(s.peers),
+		TotalHeartbeats: s.serverStats.totalHeartbeats,
+		MeshCIDR:        s.cfg.MeshCIDR,
+		Peers:           make([]AdminPeerInfo, 0, len(s.peers)),
+	}
+
+	for _, info := range s.peers {
+		online := now.Sub(info.peer.LastSeen) < onlineThreshold
+		if online {
+			overview.OnlinePeers++
+		}
+
+		peerInfo := AdminPeerInfo{
+			Name:           info.peer.Name,
+			MeshIP:         info.peer.MeshIP,
+			PublicIPs:      info.peer.PublicIPs,
+			LastSeen:       info.peer.LastSeen,
+			Online:         online,
+			Connectable:    info.peer.Connectable,
+			RegisteredAt:   info.registeredAt,
+			HeartbeatCount: info.heartbeatCount,
+			Stats:          info.stats,
+		}
+
+		// Calculate rates if we have previous stats
+		if info.prevStats != nil && info.stats != nil && !info.lastStatsTime.IsZero() {
+			// Rate is calculated as delta over 30 seconds (heartbeat interval)
+			peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / 30.0
+			peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / 30.0
+			peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / 30.0
+			peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / 30.0
+		}
+
+		overview.Peers = append(overview.Peers, peerInfo)
+	}
+
+	// Sort peers by name for consistent ordering
+	sort.Slice(overview.Peers, func(i, j int) bool {
+		return overview.Peers[i].Name < overview.Peers[j].Name
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(overview)
+}
+
+// setupAdminRoutes registers the admin API routes and static file server.
+func (s *Server) setupAdminRoutes() {
+	// API endpoints
+	s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
+
+	// Serve embedded static files
+	staticFS, _ := fs.Sub(web.Assets, ".")
+	fileServer := http.FileServer(http.FS(staticFS))
+
+	// Serve index.html at /admin/ and /admin
+	s.mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+	})
+	s.mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
+}
