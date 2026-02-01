@@ -26,6 +26,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -44,20 +45,37 @@ var (
 	serverURL string
 	authToken string
 	nodeName  string
+
+	// Service mode flags (hidden, used when running as a service)
+	serviceRun     bool
+	serviceRunMode string
 )
 
 func main() {
+	// Check if running as a service (invoked by service manager)
+	if svc.IsServiceMode(os.Args) {
+		runAsService()
+		return
+	}
+
 	rootCmd := &cobra.Command{
 		Use:   "tunnelmesh",
 		Short: "TunnelMesh - P2P SSH tunnel mesh network",
 		Long: `TunnelMesh creates encrypted P2P tunnels between peers using SSH.
 
 Use 'tunnelmesh serve' to run a coordination server.
-Use 'tunnelmesh join' to connect as a peer.`,
+Use 'tunnelmesh join' to connect as a peer.
+Use 'tunnelmesh service' to manage system service installation.`,
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info", "log level")
+
+	// Hidden service mode flags (used when running as a service)
+	rootCmd.PersistentFlags().BoolVar(&serviceRun, "service-run", false, "Run as a service (internal use)")
+	rootCmd.PersistentFlags().StringVar(&serviceRunMode, "service-mode", "", "Service mode: serve or join (internal use)")
+	rootCmd.PersistentFlags().MarkHidden("service-run")
+	rootCmd.PersistentFlags().MarkHidden("service-mode")
 
 	// Serve command - run coordination server
 	serveCmd := &cobra.Command{
@@ -136,9 +154,142 @@ It does not route traffic - peers connect directly to each other.`,
 	}
 	rootCmd.AddCommand(initCmd)
 
+	// Service command - manage system service
+	rootCmd.AddCommand(newServiceCmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// runAsService runs the application as a system service.
+// This is called when the service manager starts the application with --service-run flag.
+func runAsService() {
+	setupLogging()
+
+	// Parse the service-specific flags manually
+	var mode, configPath string
+	for i, arg := range os.Args {
+		if arg == "--service-mode" && i+1 < len(os.Args) {
+			mode = os.Args[i+1]
+		}
+		if (arg == "--config" || arg == "-c") && i+1 < len(os.Args) {
+			configPath = os.Args[i+1]
+		}
+	}
+
+	if mode == "" {
+		log.Fatal().Msg("service mode not specified")
+	}
+	if configPath == "" {
+		configPath = svc.DefaultConfigPath(mode)
+	}
+
+	log.Info().
+		Str("mode", mode).
+		Str("config", configPath).
+		Msg("starting as service")
+
+	// Create service configuration
+	cfg := &svc.ServiceConfig{
+		Name:        svc.DefaultServiceName(mode),
+		DisplayName: svc.DefaultDisplayName(mode),
+		Description: svc.DefaultDescription(mode),
+		Mode:        mode,
+		ConfigPath:  configPath,
+	}
+
+	// Create program with runner functions
+	prg := &svc.Program{
+		Mode:       mode,
+		ConfigPath: configPath,
+		RunServe:   runServeFromService,
+		RunJoin:    runJoinFromService,
+	}
+
+	// Run as service
+	if err := svc.Run(prg, cfg); err != nil {
+		log.Fatal().Err(err).Msg("service error")
+	}
+}
+
+// runServeFromService runs the server mode from within a service.
+func runServeFromService(ctx context.Context, configPath string) error {
+	var cfg *config.ServerConfig
+	var err error
+
+	if configPath != "" {
+		cfg, err = config.LoadServerConfig(configPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+	} else {
+		return fmt.Errorf("config file required")
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	srv, err := coord.NewServer(cfg)
+	if err != nil {
+		return fmt.Errorf("create server: %w", err)
+	}
+
+	log.Info().
+		Str("listen", cfg.Listen).
+		Str("mesh_cidr", cfg.MeshCIDR).
+		Str("domain", cfg.DomainSuffix).
+		Msg("starting coordination server")
+
+	// Start HTTP server in goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Error().Err(err).Msg("server error")
+		}
+	}()
+
+	// If JoinMesh is configured, join the mesh as a client
+	if cfg.JoinMesh != nil {
+		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
+		cfg.JoinMesh.AuthToken = cfg.AuthToken
+
+		log.Info().
+			Str("name", cfg.JoinMesh.Name).
+			Msg("joining mesh as client")
+
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			if err := runJoinWithConfig(ctx, cfg.JoinMesh); err != nil {
+				log.Error().Err(err).Msg("failed to join mesh as client")
+			}
+		}()
+	}
+
+	// Wait for context cancellation (service stop)
+	<-ctx.Done()
+	return nil
+}
+
+// runJoinFromService runs the peer mode from within a service.
+func runJoinFromService(ctx context.Context, configPath string) error {
+	var cfg *config.PeerConfig
+	var err error
+
+	if configPath != "" {
+		cfg, err = config.LoadPeerConfig(configPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+	} else {
+		return fmt.Errorf("config file required")
+	}
+
+	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
+		return fmt.Errorf("server, token, and name are required in config")
+	}
+
+	return runJoinWithConfig(ctx, cfg)
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
