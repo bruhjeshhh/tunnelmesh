@@ -1,0 +1,26 @@
+# DigitalOcean API Token
+# Get yours at: https://cloud.digitalocean.com/account/api/tokens
+do_token = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Your domain name (must be managed in DigitalOcean DNS)
+domain = "example.com"
+
+# Subdomain for the coordination server (default: "coord")
+# subdomain = "coord"
+
+# Authentication token for mesh peers
+# Generate a secure token: openssl rand -hex 32
+auth_token = "your-secure-token-here"
+
+# GitHub repository for container image (username/repo format)
+github_repo = "yourusername/tunnelmesh"
+
+# Docker image tag (default: "latest")
+# image_tag = "latest"
+
+# Mesh network CIDR (default: "10.99.0.0/16")
+# mesh_cidr = "10.99.0.0/16"
+
+# DigitalOcean region (default: "ams")
+# Options: nyc, sfo, ams, sgp, lon, fra, tor, blr, syd
+# region = "ams"
