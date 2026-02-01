@@ -1,6 +1,7 @@
 .PHONY: all build build-force test test-verbose test-coverage clean install lint fmt \
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
+        ghcr-login ghcr-build ghcr-push \
         service-install service-uninstall service-start service-stop service-status
 
 # Build variables
@@ -144,6 +145,40 @@ docker-test: docker-build
 	@echo "\n=== Running containers ==="
 	$(DOCKER_COMPOSE) ps
 
+# GitHub Container Registry targets
+GHCR_REPO ?= ghcr.io/zombar/tunnelmesh
+GHCR_TAG ?= $(COMMIT)
+
+ghcr-login:
+	@echo "Logging in to GitHub Container Registry..."
+	@echo "Use: echo \$$GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin"
+
+ghcr-build:
+	@echo "Building Docker image for ghcr.io (linux/amd64)..."
+	docker buildx build \
+		--platform linux/amd64 \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		-t $(GHCR_REPO):$(GHCR_TAG) \
+		-t $(GHCR_REPO):latest \
+		-f docker/Dockerfile \
+		--load .
+	@echo "Built: $(GHCR_REPO):$(GHCR_TAG)"
+
+ghcr-push:
+	@echo "Building and pushing to GitHub Container Registry (linux/amd64)..."
+	docker buildx build \
+		--platform linux/amd64 \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		-t $(GHCR_REPO):$(GHCR_TAG) \
+		-t $(GHCR_REPO):latest \
+		-f docker/Dockerfile \
+		--push .
+	@echo "Pushed: $(GHCR_REPO):$(GHCR_TAG) and :latest"
+
 # Service management targets (require sudo on Linux/macOS)
 SERVICE_MODE ?= join
 SERVICE_CONFIG ?= $(if $(filter serve,$(SERVICE_MODE)),/etc/tunnelmesh/server.yaml,/etc/tunnelmesh/peer.yaml)
@@ -206,3 +241,8 @@ help:
 	@echo "  docker-logs    - Follow container logs"
 	@echo "  docker-clean   - Remove containers and images"
 	@echo "  docker-test    - Build, start, and show mesh status"
+	@echo ""
+	@echo "GitHub Container Registry targets:"
+	@echo "  ghcr-login     - Show login instructions for ghcr.io"
+	@echo "  ghcr-build     - Build image for ghcr.io (GHCR_TAG=version)"
+	@echo "  ghcr-push      - Build and push to ghcr.io"
