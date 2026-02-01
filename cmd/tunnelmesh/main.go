@@ -642,8 +642,113 @@ func establishTunnel(ctx context.Context, peer proto.Peer, sshClient *tunnel.SSH
 
 func runStatus(cmd *cobra.Command, args []string) error {
 	setupLogging()
-	fmt.Println("Status: Not implemented yet")
-	fmt.Println("Use 'tunnelmesh peers' to list connected peers")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Println("Status: Not connected")
+		fmt.Println("  Config: not found or invalid")
+		fmt.Printf("  Error:  %v\n", err)
+		return nil
+	}
+
+	// Display configuration
+	fmt.Println("TunnelMesh Status")
+	fmt.Println("=================")
+	fmt.Println()
+
+	// Node info
+	fmt.Println("Node:")
+	if cfg.Name != "" {
+		fmt.Printf("  Name:        %s\n", cfg.Name)
+	} else {
+		fmt.Println("  Name:        (not configured)")
+	}
+	fmt.Printf("  SSH Port:    %d\n", cfg.SSHPort)
+	fmt.Printf("  Private Key: %s\n", cfg.PrivateKey)
+
+	// Check if keys exist
+	if _, err := os.Stat(cfg.PrivateKey); err == nil {
+		signer, err := config.LoadPrivateKey(cfg.PrivateKey)
+		if err == nil {
+			fingerprint := config.GetPublicKeyFingerprint(signer.PublicKey())
+			fmt.Printf("  Key FP:      %s\n", fingerprint)
+		}
+	} else {
+		fmt.Println("  Key FP:      (keys not initialized - run 'tunnelmesh init')")
+	}
+
+	fmt.Println()
+
+	// Server connection
+	fmt.Println("Server:")
+	if cfg.Server == "" {
+		fmt.Println("  URL:         (not configured)")
+		fmt.Println("  Status:      disconnected")
+		return nil
+	}
+	fmt.Printf("  URL:         %s\n", cfg.Server)
+
+	// Try to connect and get peer list
+	client := coord.NewClient(cfg.Server, cfg.AuthToken)
+	peers, err := client.ListPeers()
+	if err != nil {
+		fmt.Println("  Status:      unreachable")
+		fmt.Printf("  Error:       %v\n", err)
+		return nil
+	}
+	fmt.Println("  Status:      connected")
+
+	fmt.Println()
+
+	// Find ourselves in the peer list
+	fmt.Println("Mesh:")
+	var myPeer *proto.Peer
+	onlineCount := 0
+	for i, p := range peers {
+		if p.Name == cfg.Name {
+			myPeer = &peers[i]
+		}
+		// Consider peers seen in last 2 minutes as online
+		if time.Since(p.LastSeen) < 2*time.Minute {
+			onlineCount++
+		}
+	}
+
+	if myPeer != nil {
+		fmt.Printf("  Mesh IP:     %s\n", myPeer.MeshIP)
+		fmt.Printf("  Last Seen:   %s\n", myPeer.LastSeen.Format("2006-01-02 15:04:05"))
+		if myPeer.Connectable {
+			fmt.Println("  Connectable: yes")
+		} else {
+			fmt.Println("  Connectable: no (behind NAT)")
+		}
+	} else {
+		fmt.Println("  Mesh IP:     (not registered)")
+		fmt.Println("  Note:        run 'tunnelmesh join' to join the mesh")
+	}
+
+	fmt.Printf("  Total Peers: %d\n", len(peers))
+	fmt.Printf("  Online:      %d\n", onlineCount)
+
+	fmt.Println()
+
+	// TUN device info
+	fmt.Println("TUN Device:")
+	fmt.Printf("  Name:        %s\n", cfg.TUN.Name)
+	fmt.Printf("  MTU:         %d\n", cfg.TUN.MTU)
+
+	fmt.Println()
+
+	// DNS info
+	fmt.Println("DNS:")
+	if cfg.DNS.Enabled {
+		fmt.Println("  Enabled:     yes")
+		fmt.Printf("  Listen:      %s\n", cfg.DNS.Listen)
+		fmt.Printf("  Cache TTL:   %ds\n", cfg.DNS.CacheTTL)
+	} else {
+		fmt.Println("  Enabled:     no")
+	}
+
 	return nil
 }
 

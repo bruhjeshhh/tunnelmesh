@@ -66,16 +66,7 @@ func Create(cfg Config) (*Device, error) {
 	}
 
 	// Set platform-specific options
-	switch runtime.GOOS {
-	case "darwin":
-		// macOS uses utun devices
-		// water will auto-assign a utun number
-	case "linux":
-		tunCfg.Name = cfg.Name
-	case "windows":
-		// Windows requires wintun.dll
-		tunCfg.Name = cfg.Name
-	}
+	configurePlatformTUN(&tunCfg, cfg.Name, cfg.Address)
 
 	iface, err := water.New(tunCfg)
 	if err != nil {
