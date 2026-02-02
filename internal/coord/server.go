@@ -129,11 +129,6 @@ func (a *ipAllocator) allocateForPeer(peerName string) (string, error) {
 	return "", fmt.Errorf("no available IP addresses")
 }
 
-// allocate allocates an IP without peer name (legacy, uses sequential)
-func (a *ipAllocator) allocate() (string, error) {
-	return a.allocateForPeer("")
-}
-
 func (a *ipAllocator) release(ip string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
