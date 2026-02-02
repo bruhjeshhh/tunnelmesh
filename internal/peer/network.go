@@ -57,6 +57,10 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 		m.tunnelMgr.CloseAll()
 		log.Debug().Msg("closed stale tunnels after network change")
 		m.RecordNetworkChange()
+		// Reconnect persistent relay even if re-register failed
+		if m.PersistentRelay != nil {
+			go m.ReconnectPersistentRelay(context.Background())
+		}
 		m.TriggerDiscovery()
 		return
 	}
