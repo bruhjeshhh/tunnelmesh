@@ -28,6 +28,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	relaytransport "github.com/tunnelmesh/tunnelmesh/internal/transport/relay"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
+	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -496,7 +497,9 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Connect to coordination server
 	client := coord.NewClient(cfg.Server, cfg.AuthToken)
 
-	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
+	// UDP port is SSH port + 1
+	udpPort := cfg.SSHPort + 1
+	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -533,7 +536,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	// Create peer identity and mesh node
-	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, resp)
+	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, resp)
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router
@@ -559,10 +562,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Handle incoming SSH connections
 	go node.HandleIncomingSSH(ctx, sshListener)
 
-	// Create transport registry with default order: UDP -> SSH -> Relay
+	// Create transport registry with default order: SSH -> UDP -> Relay
+	// SSH is first because it's more reliable through firewalls
+	// UDP can be selected via admin UI for better performance when available
 	transportRegistry := transport.NewRegistry(transport.RegistryConfig{
 		DefaultOrder: []transport.TransportType{
-			transport.TransportSSH, // SSH first for now (UDP will be added later)
+			transport.TransportSSH,
+			transport.TransportUDP,
 			transport.TransportRelay,
 		},
 	})
@@ -581,6 +587,38 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		return fmt.Errorf("register SSH transport: %w", err)
 	}
 	log.Info().Msg("SSH transport registered")
+
+	// Create and register UDP transport (for lower latency when direct connection possible)
+	edPrivKey, err := config.LoadED25519PrivateKey(cfg.PrivateKey)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load ED25519 key for UDP transport, UDP disabled")
+	} else {
+		x25519Priv, x25519Pub, err := config.DeriveX25519KeyPair(edPrivKey)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to derive X25519 keys for UDP transport, UDP disabled")
+		} else {
+			var privKey, pubKey [32]byte
+			copy(privKey[:], x25519Priv)
+			copy(pubKey[:], x25519Pub)
+
+			udpTransport, err := udptransport.New(udptransport.Config{
+				Port:           cfg.SSHPort + 1, // Use SSH port + 1 for UDP
+				StaticPrivate:  privKey,
+				StaticPublic:   pubKey,
+				CoordServerURL: cfg.Server,
+				JWTToken:       client.JWTToken(),
+			})
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to create UDP transport, UDP disabled")
+			} else {
+				if err := transportRegistry.Register(udpTransport); err != nil {
+					log.Warn().Err(err).Msg("failed to register UDP transport")
+				} else {
+					log.Info().Int("port", cfg.SSHPort+1).Msg("UDP transport registered")
+				}
+			}
+		}
+	}
 
 	// Create and register relay transport
 	relayTransport, err := relaytransport.New(relaytransport.Config{

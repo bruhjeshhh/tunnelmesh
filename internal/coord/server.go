@@ -275,7 +275,12 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 
 	peers := make([]proto.Peer, 0, len(s.peers))
 	for _, info := range s.peers {
-		peers = append(peers, *info.peer)
+		peer := *info.peer
+		// Include admin-set transport preference
+		if info.preferredTransport != "" {
+			peer.PreferredTransport = info.preferredTransport
+		}
+		peers = append(peers, peer)
 	}
 
 	resp := proto.PeerListResponse{Peers: peers}
