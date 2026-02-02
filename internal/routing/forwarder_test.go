@@ -285,3 +285,158 @@ func TestForwarderLoop(t *testing.T) {
 	// The packet should have been forwarded to the tunnel
 	// Note: Due to timing, this may or may not have data
 }
+
+// mockRelay implements RelayPacketSender for testing.
+type mockRelay struct {
+	packets   []relayPacket
+	mu        sync.Mutex
+	connected bool
+}
+
+type relayPacket struct {
+	target string
+	data   []byte
+}
+
+func newMockRelay() *mockRelay {
+	return &mockRelay{
+		connected: true,
+	}
+}
+
+func (m *mockRelay) SendTo(targetPeer string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.packets = append(m.packets, relayPacket{target: targetPeer, data: append([]byte{}, data...)})
+	return nil
+}
+
+func (m *mockRelay) IsConnected() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.connected
+}
+
+func (m *mockRelay) GetPackets() []relayPacket {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.packets
+}
+
+func (m *mockRelay) SetConnected(connected bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = connected
+}
+
+func TestForwarder_RelayFallback_NoTunnel(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	// No direct tunnel for peer1
+
+	relay := newMockRelay()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetRelay(relay)
+
+	// Create a test packet
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test via relay"))
+
+	// Forward the packet - should use relay since no direct tunnel
+	err := fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet was sent to relay
+	packets := relay.GetPackets()
+	require.Len(t, packets, 1)
+	assert.Equal(t, "peer1", packets[0].target)
+	// Data should be framed
+	assert.True(t, len(packets[0].data) > len(packet))
+}
+
+func TestForwarder_DirectTunnelPreferred(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", tunnel)
+
+	relay := newMockRelay()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetRelay(relay)
+
+	// Create a test packet
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test via direct"))
+
+	// Forward the packet - should use direct tunnel
+	err := fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet was sent to tunnel, not relay
+	tunnelData := tunnel.GetData()
+	assert.NotEmpty(t, tunnelData)
+
+	relayPackets := relay.GetPackets()
+	assert.Empty(t, relayPackets)
+}
+
+func TestForwarder_RelayDisconnected(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	// No direct tunnel
+
+	relay := newMockRelay()
+	relay.SetConnected(false) // Relay not connected
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetRelay(relay)
+
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+
+	// Should fail - no tunnel and relay disconnected
+	err := fwd.ForwardPacket(packet)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no tunnel or relay")
+}
+
+func TestForwarder_HandleRelayPacket(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+
+	// Create a test IP packet
+	srcIP := net.ParseIP("10.99.0.2").To4()
+	dstIP := net.ParseIP("10.99.0.1").To4()
+	payload := []byte("relay packet data")
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
+
+	// Frame the packet as the relay would
+	frameLen := len(packet) + 1
+	framedData := make([]byte, 3+len(packet))
+	framedData[0] = byte(frameLen >> 8)
+	framedData[1] = byte(frameLen)
+	framedData[2] = 0x01 // IP packet protocol
+	copy(framedData[3:], packet)
+
+	// Handle relay packet
+	fwd.HandleRelayPacket("peer2", framedData)
+
+	// Verify packet was written to TUN
+	written := mockTun.GetWrittenPackets()
+	assert.Equal(t, packet, written)
+}

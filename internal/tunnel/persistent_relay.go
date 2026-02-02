@@ -244,6 +244,7 @@ func (p *PersistentRelay) Close() error {
 		return nil
 	}
 	p.closed = true
+	p.connected = false
 	close(p.closedChan)
 
 	if p.conn != nil {
@@ -354,9 +355,9 @@ func (pt *PeerTunnel) PeerName() string {
 	return pt.peerName
 }
 
-// IsClosed returns true if the tunnel is closed.
+// IsClosed returns true if the tunnel has been explicitly closed.
 func (pt *PeerTunnel) IsClosed() bool {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
-	return pt.closed || !pt.relay.IsConnected()
+	return pt.closed
 }
