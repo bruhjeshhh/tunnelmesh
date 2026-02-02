@@ -218,12 +218,7 @@ function formatPorts(peer) {
     const udpPort = peer.udp_port || 0;
     const parts = [`<span class="port-label">SSH:</span> <code>${sshPort}</code>`];
     if (udpPort > 0) {
-        let udpLine = `<span class="port-label">UDP:</span> <code>${udpPort}</code>`;
-        // Show IPv4 external address if available
-        if (peer.udp_external_addr4) {
-            udpLine += ` <span class="udp-external">(${peer.udp_external_addr4})</span>`;
-        }
-        parts.push(udpLine);
+        parts.push(`<span class="port-label">UDP:</span> <code>${udpPort}</code>`);
     }
     return parts.join('<br>');
 }
