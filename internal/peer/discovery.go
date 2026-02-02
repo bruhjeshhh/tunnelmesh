@@ -146,6 +146,7 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer, bypassA
 
 	// Set up dial options
 	dialOpts := transport.DialOptions{
+		LocalName: m.identity.Name,
 		PeerName:  peer.Name,
 		ServerURL: m.client.BaseURL(),
 		JWTToken:  m.client.JWTToken(),
