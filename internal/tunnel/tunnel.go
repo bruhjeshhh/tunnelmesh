@@ -33,14 +33,6 @@ type TransportConn interface {
 	PeerName() string
 }
 
-// TransportTunnel wraps a transport connection as a TunnelConnection.
-type TransportTunnel struct {
-	conn     TransportConn
-	peerName string
-	mu       sync.Mutex
-	closed   bool
-}
-
 // NewTunnelFromTransport creates a tunnel from a transport connection.
 func NewTunnelFromTransport(conn TransportConn) *Tunnel {
 	return &Tunnel{
