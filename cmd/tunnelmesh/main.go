@@ -564,13 +564,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Handle incoming SSH connections
 	go node.HandleIncomingSSH(ctx, sshListener)
 
-	// Create transport registry with default order: SSH -> UDP -> Relay
-	// SSH is first because it's more reliable through firewalls
-	// UDP can be selected via admin UI for better performance when available
+	// Create transport registry with default order: UDP -> SSH -> Relay
+	// UDP is first for better performance (lower latency, no head-of-line blocking)
+	// Falls back to SSH when UDP hole-punching fails or times out
 	transportRegistry := transport.NewRegistry(transport.RegistryConfig{
 		DefaultOrder: []transport.TransportType{
-			transport.TransportSSH,
 			transport.TransportUDP,
+			transport.TransportSSH,
 			transport.TransportRelay,
 		},
 	})
