@@ -211,7 +211,19 @@ function formatPorts(peer) {
     const udpPort = peer.udp_port || 0;
     const parts = [`<span class="port-label">SSH:</span> <code>${sshPort}</code>`];
     if (udpPort > 0) {
-        parts.push(`<span class="port-label">UDP:</span> <code>${udpPort}</code>`);
+        let udpLine = `<span class="port-label">UDP:</span> <code>${udpPort}</code>`;
+        // Show external addresses if available
+        const extAddrs = [];
+        if (peer.udp_external_addr4) {
+            extAddrs.push(`v4: ${peer.udp_external_addr4}`);
+        }
+        if (peer.udp_external_addr6) {
+            extAddrs.push(`v6: ${peer.udp_external_addr6}`);
+        }
+        if (extAddrs.length > 0) {
+            udpLine += ` <span class="udp-external">(${extAddrs.join(', ')})</span>`;
+        }
+        parts.push(udpLine);
     }
     return parts.join('<br>');
 }
