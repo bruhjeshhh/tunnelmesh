@@ -89,12 +89,12 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 		}
 
 		// Add peer's public key to authorized keys for incoming connections
-		if peer.PublicKey != "" && m.SSHServer != nil {
+		if peer.PublicKey != "" && m.SSHTransport != nil {
 			pubKey, err := config.DecodePublicKey(peer.PublicKey)
 			if err != nil {
 				log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
 			} else {
-				m.SSHServer.AddAuthorizedKey(pubKey)
+				m.SSHTransport.AddAuthorizedKey(pubKey)
 			}
 		}
 
@@ -220,9 +220,9 @@ func transportTypeFromString(s string) transport.TransportType {
 	}
 }
 
-// RefreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH server.
+// RefreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH transport.
 func (m *MeshNode) RefreshAuthorizedKeys() {
-	if m.SSHServer == nil {
+	if m.SSHTransport == nil {
 		return
 	}
 
@@ -238,7 +238,7 @@ func (m *MeshNode) RefreshAuthorizedKeys() {
 			if err != nil {
 				log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
 			} else {
-				m.SSHServer.AddAuthorizedKey(pubKey)
+				m.SSHTransport.AddAuthorizedKey(pubKey)
 			}
 		}
 		m.router.AddRoute(peer.MeshIP, peer.Name)

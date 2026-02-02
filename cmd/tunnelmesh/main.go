@@ -31,7 +31,6 @@ import (
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
 	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
-	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 	"golang.org/x/crypto/ssh"
 )
@@ -549,21 +548,6 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 	node.Forwarder = forwarder
 
-	// Create SSH server for incoming connections
-	sshServer := tunnel.NewSSHServer(signer, nil) // Will add authorized keys dynamically
-	node.SSHServer = sshServer
-
-	// Start SSH listener
-	sshListener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.SSHPort))
-	if err != nil {
-		return fmt.Errorf("start SSH listener: %w", err)
-	}
-	defer sshListener.Close()
-	log.Info().Int("port", cfg.SSHPort).Msg("SSH server listening")
-
-	// Handle incoming SSH connections
-	go node.HandleIncomingSSH(ctx, sshListener)
-
 	// Create transport registry with default order: UDP -> SSH -> Relay
 	// UDP is first for better performance (lower latency, no head-of-line blocking)
 	// Falls back to SSH when UDP hole-punching fails or times out
@@ -588,7 +572,17 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	if err := transportRegistry.Register(sshTransport); err != nil {
 		return fmt.Errorf("register SSH transport: %w", err)
 	}
-	log.Info().Msg("SSH transport registered")
+	node.SSHTransport = sshTransport
+
+	// Start SSH listener via transport layer
+	sshListener, err := sshTransport.Listen(ctx, transport.ListenOptions{
+		Port: cfg.SSHPort,
+	})
+	if err != nil {
+		return fmt.Errorf("create SSH listener: %w", err)
+	}
+	go node.HandleIncomingSSH(ctx, sshListener)
+	log.Info().Int("port", cfg.SSHPort).Msg("SSH transport listening")
 
 	// Create and register UDP transport (for lower latency when direct connection possible)
 	edPrivKey, err := config.LoadED25519PrivateKey(cfg.PrivateKey)
@@ -713,10 +707,6 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		EnableFallback:    true,
 	})
 	node.TransportNegotiator = transportNegotiator
-
-	// Create SSH client for outbound connections (used by HandleIncomingSSH)
-	sshClient := tunnel.NewSSHClient(signer, nil) // Accept any host key for now
-	node.SSHClient = sshClient
 
 	// Start DNS resolver if enabled
 	var dnsConfigured bool
