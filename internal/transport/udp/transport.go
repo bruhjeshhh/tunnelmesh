@@ -60,7 +60,10 @@ type Config struct {
 	// CoordServerURL is the coordination server URL for hole-punching
 	CoordServerURL string
 
-	// JWTToken for authenticating with coordination server
+	// AuthToken is the shared auth token for coordination server endpoints
+	AuthToken string
+
+	// JWTToken for authenticating with relay (not used for hole-punch)
 	JWTToken string
 
 	// KeepaliveInterval for NAT keepalive
@@ -522,8 +525,8 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if t.config.JWTToken != "" {
-		req.Header.Set("Authorization", "Bearer "+t.config.JWTToken)
+	if t.config.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -560,8 +563,8 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 		return "", err
 	}
 
-	if t.config.JWTToken != "" {
-		req.Header.Set("Authorization", "Bearer "+t.config.JWTToken)
+	if t.config.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -777,8 +780,8 @@ func (t *Transport) RegisterUDPEndpoint(ctx context.Context, peerName string) er
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if t.config.JWTToken != "" {
-		req.Header.Set("Authorization", "Bearer "+t.config.JWTToken)
+	if t.config.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

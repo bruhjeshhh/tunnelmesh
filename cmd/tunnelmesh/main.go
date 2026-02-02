@@ -606,7 +606,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 				StaticPrivate:  privKey,
 				StaticPublic:   pubKey,
 				CoordServerURL: cfg.Server,
-				JWTToken:       client.JWTToken(),
+				AuthToken:      cfg.AuthToken,
 			})
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to create UDP transport, UDP disabled")
