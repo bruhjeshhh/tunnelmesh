@@ -123,6 +123,11 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	// Update stored IPs
 	m.SetHeartbeatIPs(publicIPs, privateIPs, behindNAT)
 
+	// Reconnect persistent relay (non-blocking)
+	if m.PersistentRelay != nil {
+		go m.ReconnectPersistentRelay(context.Background())
+	}
+
 	// Trigger discovery
 	m.TriggerDiscovery()
 }
