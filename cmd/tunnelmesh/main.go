@@ -555,7 +555,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	log.Info().Int("port", cfg.SSHPort).Msg("SSH server listening")
 
 	// Handle incoming SSH connections
-	go handleSSHConnections(ctx, sshListener, sshServer, tunnelMgr, forwarder, router)
+	go handleSSHConnections(ctx, sshListener, sshServer, tunnelMgr, forwarder, router, client)
 
 	// Create negotiator for outbound connections
 	negotiator := negotiate.NewNegotiator(negotiate.Config{
@@ -764,7 +764,8 @@ func (t *TunnelAdapter) List() []string {
 
 // handleSSHConnections handles incoming SSH connections
 func handleSSHConnections(ctx context.Context, listener net.Listener, sshServer *tunnel.SSHServer,
-	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router) {
+	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router,
+	coordClient *coord.Client) {
 
 	for {
 		conn, err := listener.Accept()
@@ -776,16 +777,19 @@ func handleSSHConnections(ctx context.Context, listener net.Listener, sshServer 
 			continue
 		}
 
-		go handleSSHConnection(ctx, conn, sshServer, tunnelMgr, forwarder, router)
+		go handleSSHConnection(ctx, conn, sshServer, tunnelMgr, forwarder, router, coordClient)
 	}
 }
 
 func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.SSHServer,
-	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router) {
+	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router,
+	coordClient *coord.Client) {
 
 	sshConn, err := sshServer.Accept(conn)
 	if err != nil {
-		log.Warn().Err(err).Str("remote", conn.RemoteAddr().String()).Msg("SSH handshake failed")
+		// If handshake failed, try refreshing authorized keys and log for retry
+		log.Warn().Err(err).Str("remote", conn.RemoteAddr().String()).Msg("SSH handshake failed, refreshing peer keys")
+		refreshAuthorizedKeys(coordClient, sshServer, router)
 		conn.Close()
 		return
 	}
@@ -947,6 +951,30 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 		// Try to establish tunnel
 		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client)
 	}
+}
+
+// refreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH server.
+// This is called when an SSH handshake fails to ensure we have the latest keys.
+func refreshAuthorizedKeys(client *coord.Client, sshServer *tunnel.SSHServer, router *routing.Router) {
+	peers, err := client.ListPeers()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to refresh peer keys")
+		return
+	}
+
+	for _, peer := range peers {
+		if peer.PublicKey != "" {
+			pubKey, err := config.DecodePublicKey(peer.PublicKey)
+			if err != nil {
+				log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
+			} else {
+				sshServer.AddAuthorizedKey(pubKey)
+			}
+		}
+		// Also update routing table
+		router.AddRoute(peer.MeshIP, peer.Name)
+	}
+	log.Debug().Int("peers", len(peers)).Msg("refreshed authorized keys")
 }
 
 // networkChangeLoop handles network interface change events
