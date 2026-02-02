@@ -607,6 +607,17 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Create network monitor for detecting network changes
 	triggerDiscovery := make(chan struct{}, 1)
 	netChangeState := newNetworkChangeState()
+
+	// Set up callback to trigger discovery when a tunnel is removed
+	tunnelMgr.SetOnRemove(func() {
+		select {
+		case triggerDiscovery <- struct{}{}:
+			log.Debug().Msg("triggered discovery due to tunnel removal")
+		default:
+			// Discovery already pending
+		}
+	})
+
 	netMonitor, err := netmon.New(netmon.DefaultConfig())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to create network monitor, changes won't be detected")
@@ -681,14 +692,20 @@ func (s *networkChangeState) inBypassWindow(window time.Duration) bool {
 
 // TunnelAdapter wraps tunnel.TunnelManager to implement routing.TunnelProvider
 type TunnelAdapter struct {
-	tunnels map[string]io.ReadWriteCloser
-	mu      sync.RWMutex
+	tunnels  map[string]io.ReadWriteCloser
+	mu       sync.RWMutex
+	onRemove func() // Called when a tunnel is removed (for triggering reconnection)
 }
 
 func NewTunnelAdapter() *TunnelAdapter {
 	return &TunnelAdapter{
 		tunnels: make(map[string]io.ReadWriteCloser),
 	}
+}
+
+// SetOnRemove sets a callback that is called when a tunnel is removed.
+func (t *TunnelAdapter) SetOnRemove(callback func()) {
+	t.onRemove = callback
 }
 
 func (t *TunnelAdapter) Get(name string) (io.ReadWriteCloser, bool) {
@@ -711,11 +728,17 @@ func (t *TunnelAdapter) Add(name string, tunnel io.ReadWriteCloser) {
 
 func (t *TunnelAdapter) Remove(name string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	callback := t.onRemove
 	if tunnel, ok := t.tunnels[name]; ok {
 		tunnel.Close()
 		delete(t.tunnels, name)
 		log.Debug().Str("peer", name).Msg("tunnel removed")
+	}
+	t.mu.Unlock()
+
+	// Trigger reconnection callback outside the lock
+	if callback != nil {
+		callback()
 	}
 }
 
@@ -799,7 +822,10 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 		log.Info().Str("peer", peerName).Msg("tunnel established from incoming connection")
 
 		// Handle incoming packets from this tunnel
-		go forwarder.HandleTunnel(ctx, peerName, tun)
+		go func(name string) {
+			forwarder.HandleTunnel(ctx, name, tun)
+			tunnelMgr.Remove(name)
+		}(peerName)
 	}
 }
 
@@ -1035,7 +1061,10 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
 
 		// Handle incoming packets from this tunnel
-		go forwarder.HandleTunnel(ctx, peer.Name, relayTunnel)
+		go func(name string) {
+			forwarder.HandleTunnel(ctx, name, relayTunnel)
+			tunnelMgr.Remove(name)
+		}(peer.Name)
 		return
 
 	case negotiate.StrategyDirect:
@@ -1066,7 +1095,10 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		log.Info().Str("peer", peer.Name).Msg("tunnel established")
 
 		// Handle incoming packets from this tunnel
-		go forwarder.HandleTunnel(ctx, peer.Name, tun)
+		go func(name string) {
+			forwarder.HandleTunnel(ctx, name, tun)
+			tunnelMgr.Remove(name)
+		}(peer.Name)
 	}
 }
 
