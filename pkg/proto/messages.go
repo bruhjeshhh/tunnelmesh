@@ -67,6 +67,7 @@ type HeartbeatRequest struct {
 type HeartbeatResponse struct {
 	OK            bool     `json:"ok"`
 	RelayRequests []string `json:"relay_requests,omitempty"` // Peers waiting on relay for us
+	Reconnect     bool     `json:"reconnect,omitempty"`      // Signal to reconnect all tunnels
 }
 
 // RelayStatusResponse contains pending relay requests for a peer.

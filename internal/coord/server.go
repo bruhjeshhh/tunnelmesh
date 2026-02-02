@@ -346,6 +346,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var reconnectRequested bool
+
 	s.peersMu.Lock()
 	info, exists := s.peers[req.Name]
 	if exists {
@@ -356,6 +358,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			info.stats = req.Stats
 			info.lastStatsTime = time.Now()
 		}
+		// Check and reset reconnect flag
+		if info.reconnectRequested {
+			reconnectRequested = true
+			info.reconnectRequested = false
+		}
 	}
 	s.serverStats.totalHeartbeats++
 	s.peersMu.Unlock()
@@ -365,7 +372,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := proto.HeartbeatResponse{OK: true}
+	resp := proto.HeartbeatResponse{OK: true, Reconnect: reconnectRequested}
 
 	// Check if any peers are waiting on relay for this peer
 	if s.relay != nil {
