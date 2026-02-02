@@ -4,6 +4,7 @@ package coord
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"net/http"
 	"strings"
@@ -48,11 +49,13 @@ type Server struct {
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
+// It uses deterministic allocation based on peer name hash for consistency.
 type ipAllocator struct {
-	network *net.IPNet
-	used    map[string]bool
-	next    uint32
-	mu      sync.Mutex
+	network   *net.IPNet
+	used      map[string]bool
+	peerToIP  map[string]string // peer name -> allocated IP (for consistency)
+	next      uint32
+	mu        sync.Mutex
 }
 
 func newIPAllocator(cidr string) (*ipAllocator, error) {
@@ -62,15 +65,23 @@ func newIPAllocator(cidr string) (*ipAllocator, error) {
 	}
 
 	return &ipAllocator{
-		network: network,
-		used:    make(map[string]bool),
-		next:    1, // Start from .1, skip .0 (network address)
+		network:  network,
+		used:     make(map[string]bool),
+		peerToIP: make(map[string]string),
+		next:     1, // Start from .1, skip .0 (network address)
 	}, nil
 }
 
-func (a *ipAllocator) allocate() (string, error) {
+// allocateForPeer allocates an IP for a specific peer, using deterministic
+// hashing to ensure the same peer always gets the same IP.
+func (a *ipAllocator) allocateForPeer(peerName string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// Check if we already allocated an IP for this peer
+	if ip, exists := a.peerToIP[peerName]; exists {
+		return ip, nil
+	}
 
 	// Get the network address as uint32
 	ip := a.network.IP.To4()
@@ -80,16 +91,25 @@ func (a *ipAllocator) allocate() (string, error) {
 
 	base := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
 
-	// Find next available IP
 	ones, bits := a.network.Mask.Size()
 	maxHosts := uint32(1<<(bits-ones)) - 2 // Subtract network and broadcast
 
+	// Use hash of peer name to get a deterministic starting point
+	// This ensures the same peer always gets the same IP (if available)
+	h := fnv.New32a()
+	h.Write([]byte(peerName))
+	hashOffset := h.Sum32() % maxHosts
+	if hashOffset == 0 {
+		hashOffset = 1 // Skip .0
+	}
+
+	// Try the hash-based IP first, then fall back to sequential search
 	for i := uint32(0); i < maxHosts; i++ {
-		candidate := base + a.next
-		a.next++
-		if a.next > maxHosts {
-			a.next = 1
+		offset := (hashOffset + i) % maxHosts
+		if offset == 0 {
+			offset = 1 // Skip .0
 		}
+		candidate := base + offset
 
 		candidateIP := net.IPv4(
 			byte(candidate>>24),
@@ -101,11 +121,17 @@ func (a *ipAllocator) allocate() (string, error) {
 		ipStr := candidateIP.String()
 		if !a.used[ipStr] {
 			a.used[ipStr] = true
+			a.peerToIP[peerName] = ipStr
 			return ipStr, nil
 		}
 	}
 
 	return "", fmt.Errorf("no available IP addresses")
+}
+
+// allocate allocates an IP without peer name (legacy, uses sequential)
+func (a *ipAllocator) allocate() (string, error) {
+	return a.allocateForPeer("")
 }
 
 func (a *ipAllocator) release(ip string) {
@@ -211,21 +237,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
 
-	// Check if peer already exists
-	existing, exists := s.peers[req.Name]
-	var meshIP string
-
-	if exists {
-		// Re-use existing IP
-		meshIP = existing.peer.MeshIP
-	} else {
-		// Allocate new IP
-		var err error
-		meshIP, err = s.ipAlloc.allocate()
-		if err != nil {
-			s.jsonError(w, "failed to allocate IP: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// Allocate IP deterministically based on peer name
+	// This ensures the same peer always gets the same IP
+	meshIP, err := s.ipAlloc.allocateForPeer(req.Name)
+	if err != nil {
+		s.jsonError(w, "failed to allocate IP: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	peer := &proto.Peer{

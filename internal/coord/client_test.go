@@ -30,7 +30,7 @@ func TestClient_Register(t *testing.T) {
 	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
 
-	assert.Equal(t, "10.99.0.1", resp.MeshIP)
+	assert.Contains(t, resp.MeshIP, "10.99.") // IP is hash-based, just check it's in mesh range
 	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", resp.Domain)
 }
