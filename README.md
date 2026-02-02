@@ -1,6 +1,6 @@
 # TunnelMesh
 
-A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes using SSH. TunnelMesh enables direct, secure communication between peers in a distributed topology without requiring a traditional VPN or centralized traffic routing.
+A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes. TunnelMesh enables direct, secure communication between peers in a distributed topology without requiring a traditional VPN or centralized traffic routing.
 
 ## Features
 
@@ -135,11 +135,11 @@ TunnelMesh supports multiple transport types with automatic negotiation and fall
 
 | Transport | Description | Use Case |
 |-----------|-------------|----------|
-| **SSH** | SSH-based tunnels (default) | Reliable, works through most firewalls |
-| **UDP** | WireGuard-like encrypted UDP | Lower latency, better throughput |
+| **UDP** | WireGuard-like encrypted UDP (default) | Lower latency, better throughput, NAT traversal |
+| **SSH** | SSH-based tunnels | Reliable, works through most firewalls |
 | **Relay** | WebSocket through coordination server | Fallback when direct connection fails |
 
-The default transport order is: SSH → Relay. UDP transport can be enabled for better performance when both peers support it.
+The default transport order is: UDP → SSH → Relay. The system automatically negotiates the best available transport.
 
 **Transport features:**
 - Automatic fallback: If the preferred transport fails, the next one is tried
