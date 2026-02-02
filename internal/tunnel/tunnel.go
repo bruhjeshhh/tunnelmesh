@@ -300,3 +300,55 @@ func (m *TunnelManager) CloseAll() {
 	}
 	log.Debug().Msg("all tunnels closed")
 }
+
+// ConnectionAdapter wraps an io.ReadWriteCloser (like transport.Connection)
+// to implement the TunnelConnection interface.
+type ConnectionAdapter struct {
+	conn     ReadWriteCloserWithName
+	peerName string
+	mu       sync.Mutex
+	closed   bool
+}
+
+// ReadWriteCloserWithName is an interface for connections with a peer name.
+type ReadWriteCloserWithName interface {
+	Read(p []byte) (int, error)
+	Write(p []byte) (int, error)
+	Close() error
+	PeerName() string
+}
+
+// NewConnectionAdapter creates a ConnectionAdapter from any ReadWriteCloserWithName.
+func NewConnectionAdapter(conn ReadWriteCloserWithName, peerName string) *ConnectionAdapter {
+	return &ConnectionAdapter{
+		conn:     conn,
+		peerName: peerName,
+	}
+}
+
+// Read reads data from the connection.
+func (a *ConnectionAdapter) Read(p []byte) (int, error) {
+	return a.conn.Read(p)
+}
+
+// Write writes data to the connection.
+func (a *ConnectionAdapter) Write(p []byte) (int, error) {
+	return a.conn.Write(p)
+}
+
+// Close closes the connection.
+func (a *ConnectionAdapter) Close() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.closed {
+		return nil
+	}
+	a.closed = true
+	return a.conn.Close()
+}
+
+// PeerName returns the peer name.
+func (a *ConnectionAdapter) PeerName() string {
+	return a.peerName
+}

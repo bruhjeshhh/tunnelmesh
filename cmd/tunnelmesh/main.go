@@ -21,11 +21,13 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
-	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
+	relaytransport "github.com/tunnelmesh/tunnelmesh/internal/transport/relay"
+	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -557,17 +559,54 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Handle incoming SSH connections
 	go node.HandleIncomingSSH(ctx, sshListener)
 
-	// Create negotiator for outbound connections
-	negotiator := negotiate.NewNegotiator(negotiate.Config{
-		ProbeTimeout: 5 * time.Second,
-		MaxRetries:   3,
-		RetryDelay:   1 * time.Second,
-		AllowReverse: true,
-		AllowRelay:   true, // Enable relay through coordination server
+	// Create transport registry with default order: UDP -> SSH -> Relay
+	transportRegistry := transport.NewRegistry(transport.RegistryConfig{
+		DefaultOrder: []transport.TransportType{
+			transport.TransportSSH, // SSH first for now (UDP will be added later)
+			transport.TransportRelay,
+		},
 	})
-	node.Negotiator = negotiator
+	node.TransportRegistry = transportRegistry
 
-	// Create SSH client for outbound connections
+	// Create and register SSH transport
+	sshTransport, err := sshtransport.New(sshtransport.Config{
+		HostKey:      signer,
+		ClientSigner: signer,
+		ListenPort:   cfg.SSHPort,
+	})
+	if err != nil {
+		return fmt.Errorf("create SSH transport: %w", err)
+	}
+	if err := transportRegistry.Register(sshTransport); err != nil {
+		return fmt.Errorf("register SSH transport: %w", err)
+	}
+	log.Info().Msg("SSH transport registered")
+
+	// Create and register relay transport
+	relayTransport, err := relaytransport.New(relaytransport.Config{
+		ServerURL: cfg.Server,
+		JWTToken:  client.JWTToken(), // Will be updated after registration
+	})
+	if err != nil {
+		return fmt.Errorf("create relay transport: %w", err)
+	}
+	if err := transportRegistry.Register(relayTransport); err != nil {
+		return fmt.Errorf("register relay transport: %w", err)
+	}
+	log.Info().Msg("relay transport registered")
+
+	// Create transport negotiator
+	transportNegotiator := transport.NewNegotiator(transportRegistry, transport.NegotiatorConfig{
+		ProbeTimeout:      5 * time.Second,
+		ConnectionTimeout: 30 * time.Second,
+		MaxRetries:        3,
+		RetryDelay:        1 * time.Second,
+		ParallelProbes:    3,
+		EnableFallback:    true,
+	})
+	node.TransportNegotiator = transportNegotiator
+
+	// Create SSH client for outbound connections (used by HandleIncomingSSH)
 	sshClient := tunnel.NewSSHClient(signer, nil) // Accept any host key for now
 	node.SSHClient = sshClient
 
