@@ -22,7 +22,12 @@ function updateDashboard(data) {
     // Update header stats
     document.getElementById('uptime').textContent = data.server_uptime;
     document.getElementById('peer-count').textContent = `${data.online_peers}/${data.total_peers}`;
-    document.getElementById('heartbeats').textContent = formatNumber(data.total_heartbeats);
+
+    // Update footer version
+    const versionEl = document.getElementById('server-version');
+    if (versionEl && data.server_version) {
+        versionEl.textContent = data.server_version;
+    }
 
     // Update history for each peer
     data.peers.forEach(peer => {
@@ -112,7 +117,7 @@ function updateDashboard(data) {
                         <span class="rx">${formatRate(peer.packets_received_rate)}</span>
                     </div>
                 </td>
-                <td>${peer.stats?.errors ?? 0}</td>
+                <td><code>${escapeHtml(peer.version || '-')}</code></td>
                 <td>
                     <select class="transport-select" data-peer="${peerNameEscaped}" onchange="setTransport(this)">
                         <option value="auto" ${currentTransport === 'auto' ? 'selected' : ''}>Auto</option>
