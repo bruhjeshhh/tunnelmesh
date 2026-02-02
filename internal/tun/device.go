@@ -182,10 +182,15 @@ func (d *Device) configureWindows() error {
 		log.Warn().Str("output", string(out)).Msg("set MTU (may fail on some Windows versions)")
 	}
 
-	// Add route
+	// Add route - delete first to avoid conflicts
+	cmd = exec.Command("route", "delete", d.network.IP.String(), "mask", mask)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Debug().Str("output", string(out)).Msg("route delete (may not exist)")
+	}
+
 	cmd = exec.Command("route", "add", d.network.IP.String(), "mask", mask, d.ip.String())
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Debug().Str("output", string(out)).Msg("route add (may already exist)")
+		log.Warn().Str("output", string(out)).Msg("route add failed")
 	}
 
 	return nil
