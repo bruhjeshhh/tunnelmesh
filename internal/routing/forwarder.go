@@ -67,7 +67,9 @@ func NewForwarder(router *Router, tunnels TunnelProvider) *Forwarder {
 		framePool: &sync.Pool{
 			New: func() interface{} {
 				// Allocate buffer for header + max packet size
-				return make([]byte, FrameHeaderSize+MaxPacketSize)
+				// Use pointer to slice to avoid allocation on Put (SA6002)
+				buf := make([]byte, FrameHeaderSize+MaxPacketSize)
+				return &buf
 			},
 		},
 	}
@@ -176,8 +178,9 @@ func (f *Forwarder) ReceivePacket(packet []byte) error {
 func (f *Forwarder) writeFrame(w io.Writer, packet []byte) error {
 	// Frame format: [2 bytes length][1 byte proto][payload]
 	// Use pooled buffer to avoid allocations and combine into single write
-	buf := f.framePool.Get().([]byte)
-	defer f.framePool.Put(buf)
+	bufPtr := f.framePool.Get().(*[]byte)
+	buf := *bufPtr
+	defer f.framePool.Put(bufPtr)
 
 	frameLen := len(packet) + 1
 	binary.BigEndian.PutUint16(buf[0:2], uint16(frameLen))
