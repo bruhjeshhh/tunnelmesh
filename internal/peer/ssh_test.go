@@ -6,54 +6,80 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 )
 
-func TestMeshNode_HandleIncomingSSH_NoSSHServer(t *testing.T) {
-	identity := &PeerIdentity{
-		Name: "test-node",
-		Config: &config.PeerConfig{
-			Name: "test-node",
-		},
+// mockAddr implements net.Addr for testing.
+type mockAddr struct{}
+
+func (a mockAddr) Network() string { return "mock" }
+func (a mockAddr) String() string  { return "mock:0" }
+
+// mockListener implements transport.Listener for testing.
+type mockListener struct {
+	acceptCh chan transport.Connection
+	closed   bool
+}
+
+func newMockListener() *mockListener {
+	return &mockListener{
+		acceptCh: make(chan transport.Connection, 1),
 	}
-	client := coord.NewClient("http://localhost:8080", "test-token")
-	node := NewMeshNode(identity, client)
-	node.SSHServer = nil
+}
 
-	// Create a simple listener
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skip("cannot create listener for test")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	done := make(chan struct{})
-	go func() {
-		node.HandleIncomingSSH(ctx, listener)
-		close(done)
-	}()
-
-	// Make a connection - it should be rejected because SSHServer is nil
-	addr := listener.Addr().String()
-	conn, err := net.Dial("tcp", addr)
-	if err == nil {
-		conn.Close()
-	}
-
-	// Now cancel context and close listener to make HandleIncomingSSH exit
-	cancel()
-	listener.Close()
-
-	// Should exit when context is cancelled and listener closed
+func (l *mockListener) Accept(ctx context.Context) (transport.Connection, error) {
 	select {
-	case <-done:
-		// OK - exited properly
-	case <-time.After(2 * time.Second):
-		t.Fatal("HandleIncomingSSH did not exit on context cancel")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case conn := <-l.acceptCh:
+		return conn, nil
 	}
+}
+
+func (l *mockListener) Addr() net.Addr {
+	return mockAddr{}
+}
+
+func (l *mockListener) Close() error {
+	l.closed = true
+	return nil
+}
+
+// mockConnection implements transport.Connection for testing.
+type mockConnection struct {
+	peerName    string
+	closeCalled bool
+}
+
+func (c *mockConnection) Read(p []byte) (int, error) {
+	return 0, nil
+}
+
+func (c *mockConnection) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (c *mockConnection) Close() error {
+	c.closeCalled = true
+	return nil
+}
+
+func (c *mockConnection) PeerName() string {
+	return c.peerName
+}
+
+func (c *mockConnection) Type() transport.TransportType {
+	return transport.TransportSSH
+}
+
+func (c *mockConnection) LocalAddr() net.Addr {
+	return mockAddr{}
+}
+
+func (c *mockConnection) RemoteAddr() net.Addr {
+	return mockAddr{}
 }
 
 func TestMeshNode_HandleIncomingSSH_ContextCancel(t *testing.T) {
@@ -66,13 +92,7 @@ func TestMeshNode_HandleIncomingSSH_ContextCancel(t *testing.T) {
 	client := coord.NewClient("http://localhost:8080", "test-token")
 	node := NewMeshNode(identity, client)
 
-	// Create a simple listener
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skip("cannot create listener for test")
-	}
-	defer listener.Close()
-
+	listener := newMockListener()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
@@ -84,9 +104,6 @@ func TestMeshNode_HandleIncomingSSH_ContextCancel(t *testing.T) {
 	// Cancel context
 	cancel()
 
-	// Close listener to unblock Accept
-	listener.Close()
-
 	// Should exit when context is cancelled
 	select {
 	case <-done:
@@ -96,7 +113,7 @@ func TestMeshNode_HandleIncomingSSH_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestMeshNode_HandleSSHConnection_NilServer(t *testing.T) {
+func TestMeshNode_HandleSSHConnection_EmptyPeerName(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -105,22 +122,46 @@ func TestMeshNode_HandleSSHConnection_NilServer(t *testing.T) {
 	}
 	client := coord.NewClient("http://localhost:8080", "test-token")
 	node := NewMeshNode(identity, client)
-	node.SSHServer = nil
 
-	// Create a pair of connected connections for testing
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-
+	// Create a connection with empty peer name
+	conn := &mockConnection{peerName: ""}
 	ctx := context.Background()
 
-	// Should not panic, just close the connection
-	node.handleSSHConnection(ctx, serverConn)
+	// Should close connection when peer name is empty
+	node.handleSSHConnection(ctx, conn)
 
-	// Verify connection was closed by trying to write to the client side
-	// This should either succeed (connection still open) or fail (connection closed)
-	// We expect it to be closed
-	_ = clientConn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-	_, err := clientConn.Write([]byte("test"))
-	assert.Error(t, err, "connection should be closed")
+	if !conn.closeCalled {
+		t.Error("expected connection to be closed when peer name is empty")
+	}
+}
+
+func TestMeshNode_HandleSSHConnection_ValidPeer(t *testing.T) {
+	identity := &PeerIdentity{
+		Name: "test-node",
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	// Create a connection with valid peer name
+	conn := &mockConnection{peerName: "peer-1"}
+	ctx := context.Background()
+
+	// Should add tunnel to manager
+	node.handleSSHConnection(ctx, conn)
+
+	// Verify tunnel was added
+	tunnels := node.tunnelMgr.List()
+	found := false
+	for _, name := range tunnels {
+		if name == "peer-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected tunnel to be added to manager")
+	}
 }

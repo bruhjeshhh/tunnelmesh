@@ -165,7 +165,7 @@ func TestMeshNode_RunPeerDiscovery_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestMeshNode_RefreshAuthorizedKeys_NoSSHServer(t *testing.T) {
+func TestMeshNode_RefreshAuthorizedKeys_NoSSHTransport(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -174,9 +174,9 @@ func TestMeshNode_RefreshAuthorizedKeys_NoSSHServer(t *testing.T) {
 	}
 	client := coord.NewClient("http://localhost:8080", "test-token")
 	node := NewMeshNode(identity, client)
-	node.SSHServer = nil
+	node.SSHTransport = nil
 
-	// Should not panic when SSHServer is nil
+	// Should not panic when SSHTransport is nil
 	node.RefreshAuthorizedKeys()
 }
 
