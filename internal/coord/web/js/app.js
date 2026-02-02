@@ -22,7 +22,6 @@ function updateDashboard(data) {
     // Update header stats
     document.getElementById('uptime').textContent = data.server_uptime;
     document.getElementById('peer-count').textContent = `${data.online_peers}/${data.total_peers}`;
-    document.getElementById('heartbeats').textContent = formatNumber(data.total_heartbeats);
 
     // Update footer version
     const versionEl = document.getElementById('server-version');
