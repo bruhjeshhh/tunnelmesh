@@ -36,7 +36,7 @@ func (m *Manager) Add(peerName string, conn Connection) {
 
 	// Close existing connection if present
 	if existing, ok := m.connections[peerName]; ok {
-		existing.closeInternal()
+		_ = existing.closeInternal()
 	}
 
 	m.connections[peerName] = &ManagedConnection{
@@ -76,7 +76,7 @@ func (m *Manager) Remove(peerName string) {
 	m.mu.Lock()
 	var onRemove func(string)
 	if mc, ok := m.connections[peerName]; ok {
-		mc.closeInternal()
+		_ = mc.closeInternal()
 		delete(m.connections, peerName)
 		onRemove = m.onRemove
 	}
@@ -96,7 +96,7 @@ func (m *Manager) RemoveIfMatch(peerName string, conn Connection) bool {
 	var onRemove func(string)
 	var removed bool
 	if mc, ok := m.connections[peerName]; ok && mc.current == conn {
-		mc.closeInternal()
+		_ = mc.closeInternal()
 		delete(m.connections, peerName)
 		onRemove = m.onRemove
 		removed = true
@@ -135,7 +135,7 @@ func (m *Manager) CloseAll() {
 	defer m.mu.Unlock()
 
 	for name, mc := range m.connections {
-		mc.closeInternal()
+		_ = mc.closeInternal()
 		delete(m.connections, name)
 	}
 

@@ -237,7 +237,7 @@ func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
 			// Wait for channel
 			for newChannel := range sshConn.Channels {
 				if newChannel.ChannelType() != tunnel.ChannelType {
-					newChannel.Reject(gossh.UnknownChannelType, "unknown channel type")
+					_ = newChannel.Reject(gossh.UnknownChannelType, "unknown channel type")
 					continue
 				}
 
