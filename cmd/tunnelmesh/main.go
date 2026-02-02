@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"crypto"
 	"crypto/ed25519"
 	"fmt"
 	"io"
@@ -604,8 +603,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			copy(pubKey[:], x25519Pub)
 
 			// Debug: Also convert ED25519 public key directly to verify matching
-			ed25519Pub := edPrivKey.Public().(crypto.PublicKey)
-			ed25519PubBytes := ed25519Pub.(ed25519.PublicKey)
+			ed25519PubBytes := edPrivKey.Public().(ed25519.PublicKey)
 			x25519FromEd, _ := config.ED25519PublicToX25519(ed25519PubBytes)
 			log.Debug().
 				Hex("x25519_from_priv", x25519Pub).
