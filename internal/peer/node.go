@@ -298,11 +298,10 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 	})
 
 	// Set up handler for peer reconnection notifications
-	// When a peer reconnects to relay, our direct tunnel to them is likely stale.
-	// However, we only invalidate if there's an actual tunnel to invalidate.
-	// If we're still connecting (no tunnel yet), let the connection attempt complete.
-	// We also apply a grace period to avoid tearing down freshly established tunnels.
-	// If our tunnel is itself a relay tunnel, peer reconnecting is expected.
+	// NOTE: We no longer invalidate direct tunnels when a peer reconnects to relay.
+	// The peer maintains a persistent relay connection for fallback - reconnecting to it
+	// doesn't mean our direct tunnel is broken. We only rely on actual relay packet
+	// reception to detect asymmetric situations (handled in SetPacketHandler above).
 	m.PersistentRelay.SetPeerReconnectedHandler(func(peerName string) {
 		if pc := m.Connections.Get(peerName); pc != nil {
 			if !pc.HasTunnel() {
@@ -312,25 +311,14 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 					Msg("ignoring peer reconnect notification - no tunnel to invalidate")
 				return
 			}
-			// If our tunnel to this peer is a relay tunnel, peer reconnecting to relay
-			// is expected behavior - don't invalidate our relay tunnel
-			if pc.IsRelayTunnel() {
-				log.Debug().
-					Str("peer", peerName).
-					Msg("ignoring peer reconnect notification - our tunnel is also relay")
-				return
-			}
-			connectedSince := pc.ConnectedSince()
-			tunnelAge := time.Since(connectedSince)
-			if tunnelAge < asymmetricDetectionGracePeriod {
-				log.Debug().
-					Str("peer", peerName).
-					Dur("tunnel_age", tunnelAge).
-					Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
-				return
-			}
-			log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
-			_ = pc.Disconnect("peer reconnected to relay", nil)
+			// Don't invalidate direct tunnels (UDP/SSH) when peer reconnects to relay.
+			// Peer reconnecting to relay doesn't mean our direct path is broken -
+			// they may just be refreshing their persistent relay connection.
+			// We rely on actual relay packet reception to detect asymmetric situations.
+			log.Debug().
+				Str("peer", peerName).
+				Str("transport", pc.TransportType()).
+				Msg("ignoring peer reconnect notification - relying on packet-based detection")
 		}
 	})
 
