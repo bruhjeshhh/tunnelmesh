@@ -65,6 +65,44 @@ For a complete step-by-step setup guide including downloading releases, configur
 - Each peer runs a TUN interface for transparent IP routing
 - Peers behind NAT use hole-punching or relay as fallback
 
+### Mobile Client Support (WireGuard)
+
+Standard WireGuard clients on mobile devices can connect to the mesh via a WireGuard concentrator peer. Manage clients through the admin panel with QR codes for easy mobile setup.
+
+```
+                                    ┌─────────────────────────────────┐
+                                    │      Coordination Server        │
+                                    │    (Stateless, App Platform)    │
+                                    │                                 │
+                                    │  - WG Client Management API     │
+                                    │  - Admin Panel UI               │
+                                    │  - Config sync endpoint         │
+                                    └──────────────┬──────────────────┘
+                                                   │
+                         ┌─────────────────────────┼─────────────────────────┐
+                         │                         │                         │
+                    ┌────▼────┐              ┌─────▼─────┐             ┌─────▼─────┐
+                    │ Peer A  │              │    WG     │             │  Peer B   │
+                    │ Server  │◄────────────►│Concentrator◄───────────►│  Desktop  │
+                    └─────────┘   Tunnel     │  (Peer)   │   Tunnel    └───────────┘
+                                             │  wg0 intf │
+                                             └─────▲─────┘
+                                                   │ WireGuard Protocol
+                                    ┌──────────────┼──────────────┐
+                                    │              │              │
+                               ┌────▼────┐   ┌────▼────┐   ┌─────▼────┐
+                               │   📱    │   │   📱    │   │    💻    │
+                               │ iPhone  │   │ Android │   │  Laptop  │
+                               │   App   │   │   App   │   │  Client  │
+                               └─────────┘   └─────────┘   └──────────┘
+```
+
+**Features:**
+- Scan QR code in admin panel to configure mobile device
+- Full mesh access from any WireGuard client
+- Clients get mesh DNS names (e.g., `iphone.tunnelmesh`)
+- Managed via coordination server admin panel
+
 ## Configuration
 
 ### Server Configuration
