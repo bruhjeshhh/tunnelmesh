@@ -414,6 +414,11 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
+	log.Debug().
+		Uint32("unknown_index", pkt.UnknownIndex).
+		Str("from", remoteAddr.String()).
+		Msg("received rekey-required from peer")
+
 	// Find session by the index the peer says is unknown.
 	// The unknownIndex is the receiver index from packets we sent to them,
 	// which is our REMOTE index (the peer's local index from their perspective).
@@ -422,6 +427,11 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 	var session *Session
 	var localIndex uint32
 	for idx, s := range t.sessions {
+		log.Trace().
+			Uint32("session_local_idx", idx).
+			Uint32("session_remote_idx", s.RemoteIndex()).
+			Str("peer", s.PeerName()).
+			Msg("checking session for rekey match")
 		if s.RemoteIndex() == pkt.UnknownIndex {
 			session = s
 			localIndex = idx
@@ -433,6 +443,7 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		log.Debug().
 			Uint32("unknown_index", pkt.UnknownIndex).
 			Str("from", remoteAddr.String()).
+			Int("session_count", len(t.sessions)).
 			Msg("rekey-required for unknown remote index (already removed?)")
 		return
 	}
@@ -527,6 +538,35 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 			Str("remote", remoteAddr.String()).
 			Msg("unknown peer public key, rejecting connection")
 		return
+	}
+
+	// Check if we already have an active established session for this peer.
+	// If so, don't replace it - the peer is probably retrying due to packet loss.
+	// We still send the response (above) so they can complete their handshake,
+	// but we keep our existing session to avoid breaking ongoing communication.
+	t.mu.RLock()
+	existingSession, hasExisting := t.peerSessions[peerName]
+	if hasExisting && existingSession.IsEstablished() {
+		// Check if the existing session is still active (received data recently)
+		lastRecv := existingSession.LastReceive()
+		sessionAge := time.Since(lastRecv)
+		t.mu.RUnlock()
+
+		// If we received data in the last 30 seconds, keep the existing session
+		if sessionAge < 30*time.Second {
+			log.Debug().
+				Str("peer", peerName).
+				Str("remote", remoteAddr.String()).
+				Dur("session_age", sessionAge).
+				Msg("ignoring handshake init, active session exists")
+			return
+		}
+		log.Debug().
+			Str("peer", peerName).
+			Dur("session_age", sessionAge).
+			Msg("replacing stale session with new handshake")
+	} else {
+		t.mu.RUnlock()
 	}
 
 	// Create session using the same socket that received the handshake
