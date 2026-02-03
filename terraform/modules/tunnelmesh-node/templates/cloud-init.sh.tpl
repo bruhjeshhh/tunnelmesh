@@ -56,6 +56,7 @@ domain_suffix: "${domain_suffix}"
 
 admin:
   enabled: true
+  token: "${admin_token}"
 
 relay:
   enabled: ${relay_enabled}

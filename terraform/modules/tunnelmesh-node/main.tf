@@ -64,6 +64,7 @@ resource "digitalocean_droplet" "node" {
     mesh_cidr        = var.mesh_cidr
     relay_enabled    = var.relay_enabled
     auth_token       = var.auth_token
+    admin_token      = var.admin_token
 
     # Peer settings
     peer_server     = local.peer_server

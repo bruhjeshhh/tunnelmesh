@@ -14,3 +14,11 @@ mesh_cidr: "10.99.0.0/16"
 
 # Domain suffix for mesh hostnames
 domain_suffix: ".tunnelmesh"
+
+# Admin web interface configuration
+admin:
+  enabled: true
+  # Token for admin authentication (uses HTTP Basic Auth, username is ignored)
+  # If not set, admin interface is open (NOT recommended for production)
+  # Generate a secure token, e.g.: openssl rand -hex 32
+  token: "your-admin-token-here"
