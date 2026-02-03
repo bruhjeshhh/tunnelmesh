@@ -494,6 +494,52 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		return
 	}
 
+	// Look up peer name from public key BEFORE responding
+	// We need to check for existing active sessions before committing to this handshake
+	peerPubKey := hs.PeerStaticPublic()
+	peerName := ""
+	if t.config.PeerResolver != nil {
+		peerName = t.config.PeerResolver(peerPubKey)
+	}
+	if peerName == "" {
+		// If we can't identify the peer, log and return
+		log.Debug().
+			Hex("peer_pubkey", peerPubKey[:8]).
+			Str("remote", remoteAddr.String()).
+			Msg("unknown peer public key, rejecting connection")
+		return
+	}
+
+	// Check if we already have an active established session for this peer BEFORE responding.
+	// If so, don't respond - the peer is probably retrying due to packet loss.
+	// By not responding, the peer will either:
+	// 1. Receive packets from our existing session and realize it's still valid
+	// 2. Timeout and try again (at which point our session may be stale)
+	t.mu.RLock()
+	existingSession, hasExisting := t.peerSessions[peerName]
+	if hasExisting && existingSession.IsEstablished() {
+		// Check if the existing session is still active (received data recently)
+		lastRecv := existingSession.LastReceive()
+		sessionAge := time.Since(lastRecv)
+		t.mu.RUnlock()
+
+		// If we received data in the last 30 seconds, keep the existing session
+		if sessionAge < 30*time.Second {
+			log.Debug().
+				Str("peer", peerName).
+				Str("remote", remoteAddr.String()).
+				Dur("session_age", sessionAge).
+				Msg("ignoring handshake init, active session exists (not responding)")
+			return
+		}
+		log.Debug().
+			Str("peer", peerName).
+			Dur("session_age", sessionAge).
+			Msg("replacing stale session with new handshake")
+	} else {
+		t.mu.RUnlock()
+	}
+
 	// Create and send response
 	response, err := hs.CreateResponse()
 	if err != nil {
@@ -525,50 +571,6 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		return
 	}
 
-	// Look up peer name from public key
-	peerPubKey := hs.PeerStaticPublic()
-	peerName := ""
-	if t.config.PeerResolver != nil {
-		peerName = t.config.PeerResolver(peerPubKey)
-	}
-	if peerName == "" {
-		// If we can't identify the peer, log and return
-		log.Debug().
-			Hex("peer_pubkey", peerPubKey[:8]).
-			Str("remote", remoteAddr.String()).
-			Msg("unknown peer public key, rejecting connection")
-		return
-	}
-
-	// Check if we already have an active established session for this peer.
-	// If so, don't replace it - the peer is probably retrying due to packet loss.
-	// We still send the response (above) so they can complete their handshake,
-	// but we keep our existing session to avoid breaking ongoing communication.
-	t.mu.RLock()
-	existingSession, hasExisting := t.peerSessions[peerName]
-	if hasExisting && existingSession.IsEstablished() {
-		// Check if the existing session is still active (received data recently)
-		lastRecv := existingSession.LastReceive()
-		sessionAge := time.Since(lastRecv)
-		t.mu.RUnlock()
-
-		// If we received data in the last 30 seconds, keep the existing session
-		if sessionAge < 30*time.Second {
-			log.Debug().
-				Str("peer", peerName).
-				Str("remote", remoteAddr.String()).
-				Dur("session_age", sessionAge).
-				Msg("ignoring handshake init, active session exists")
-			return
-		}
-		log.Debug().
-			Str("peer", peerName).
-			Dur("session_age", sessionAge).
-			Msg("replacing stale session with new handshake")
-	} else {
-		t.mu.RUnlock()
-	}
-
 	// Create session using the same socket that received the handshake
 	session := NewSession(SessionConfig{
 		LocalIndex: hs.LocalIndex(),
@@ -580,8 +582,12 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 	session.SetCrypto(crypto, hs.RemoteIndex())
 	session.SetOnClose(t.removeSession)
 
-	// Register session, closing any existing session for this peer
-	t.registerSession(session)
+	// Register session, keeping any existing active session for this peer
+	if !t.registerSession(session) {
+		// Session was discarded because there's already an active session
+		// The handshake response was already sent, but we're keeping the old session
+		return
+	}
 
 	log.Debug().
 		Str("remote", remoteAddr.String()).
@@ -880,8 +886,26 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 	session.SetCrypto(crypto, hs.RemoteIndex())
 	session.SetOnClose(t.removeSession)
 
-	// Register session, closing any existing session for this peer
-	t.registerSession(session)
+	// Register session, keeping any existing active session for this peer
+	if !t.registerSession(session) {
+		// Session was discarded because there's already an active session
+		// Return the existing session instead
+		t.mu.RLock()
+		existingSession := t.peerSessions[peerName]
+		t.mu.RUnlock()
+
+		if existingSession != nil {
+			log.Debug().
+				Str("peer", peerName).
+				Str("addr", peerAddr.String()).
+				Msg("handshake completed but using existing active session")
+			// Return a connection wrapping the existing session
+			// Note: We return a new Connection wrapper but it points to the existing session
+			return existingSession, nil
+		}
+		// This shouldn't happen - registerSession rejected our session but there's no existing one
+		return nil, fmt.Errorf("session registration rejected but no existing session found")
+	}
 
 	log.Debug().
 		Str("peer", peerName).
@@ -1142,20 +1166,49 @@ func (t *Transport) removeSession(localIndex uint32, peerName string) {
 
 // registerSession adds a session to the transport's maps, closing any existing
 // session for the same peer to prevent orphaned sessions and memory leaks.
+// If there's an active session (received data recently), it will be kept and
+// the new session will be discarded to prevent disrupting ongoing communication.
+// Returns true if the session was registered, false if it was discarded.
 // Must be called WITHOUT holding t.mu.
-func (t *Transport) registerSession(session *Session) {
+func (t *Transport) registerSession(session *Session) bool {
 	peerName := session.PeerName()
 
 	t.mu.Lock()
-	// Check for existing session to this peer and close it
+	// Check for existing session to this peer
 	var oldSession *Session
+	var discardNew bool
 	if existing, ok := t.peerSessions[peerName]; ok {
 		if existing.LocalIndex() != session.LocalIndex() {
-			oldSession = existing
-			// Remove old session from sessions map
-			delete(t.sessions, existing.LocalIndex())
+			// Check if existing session is active (received data recently)
+			if existing.IsEstablished() {
+				lastRecv := existing.LastReceive()
+				sessionAge := time.Since(lastRecv)
+				if sessionAge < 30*time.Second {
+					// Existing session is active - discard the new one
+					log.Debug().
+						Str("peer", peerName).
+						Uint32("existing_index", existing.LocalIndex()).
+						Uint32("new_index", session.LocalIndex()).
+						Dur("session_age", sessionAge).
+						Msg("keeping active session, discarding new handshake")
+					discardNew = true
+				}
+			}
+			if !discardNew {
+				oldSession = existing
+				// Remove old session from sessions map
+				delete(t.sessions, existing.LocalIndex())
+			}
 		}
 	}
+
+	if discardNew {
+		t.mu.Unlock()
+		// Close the new session since we're keeping the old one
+		session.Close()
+		return false
+	}
+
 	t.sessions[session.LocalIndex()] = session
 	t.peerSessions[peerName] = session
 	t.mu.Unlock()
@@ -1169,6 +1222,8 @@ func (t *Transport) registerSession(session *Session) {
 			Msg("replacing existing session for peer")
 		oldSession.Close()
 	}
+
+	return true
 }
 
 // ClearNetworkState clears cached network state such as STUN-discovered external addresses.
