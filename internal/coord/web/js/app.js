@@ -224,15 +224,27 @@ function formatPorts(peer) {
 async function checkWireGuardStatus() {
     try {
         const resp = await fetch('/admin/api/wireguard/clients');
+        document.getElementById('wireguard-section').style.display = 'block';
+
         if (resp.ok) {
             state.wgEnabled = true;
-            document.getElementById('wireguard-section').style.display = 'block';
+            state.wgConcentratorConnected = true;
             const data = await resp.json();
             state.wgClients = data.clients || [];
             updateWGClientsTable();
+        } else if (resp.status === 503) {
+            // WireGuard enabled but no concentrator connected
+            state.wgEnabled = true;
+            state.wgConcentratorConnected = false;
+            state.wgClients = [];
+            updateWGClientsTable();
+        } else {
+            // WireGuard not enabled (404 or other error)
+            document.getElementById('wireguard-section').style.display = 'none';
+            state.wgEnabled = false;
         }
     } catch (err) {
-        // WireGuard not enabled
+        // WireGuard not enabled or network error
         state.wgEnabled = false;
     }
 }
@@ -243,8 +255,13 @@ async function fetchWGClients() {
     try {
         const resp = await fetch('/admin/api/wireguard/clients');
         if (resp.ok) {
+            state.wgConcentratorConnected = true;
             const data = await resp.json();
             state.wgClients = data.clients || [];
+            updateWGClientsTable();
+        } else if (resp.status === 503) {
+            state.wgConcentratorConnected = false;
+            state.wgClients = [];
             updateWGClientsTable();
         }
     } catch (err) {
@@ -255,9 +272,22 @@ async function fetchWGClients() {
 function updateWGClientsTable() {
     const tbody = document.getElementById('wg-clients-body');
     const noClients = document.getElementById('no-wg-clients');
+    const addBtn = document.getElementById('add-wg-client-btn');
+
+    // Check if concentrator is connected
+    if (!state.wgConcentratorConnected) {
+        tbody.innerHTML = '';
+        noClients.textContent = 'No WireGuard concentrator connected. Start a peer with --wireguard flag.';
+        noClients.style.display = 'block';
+        if (addBtn) addBtn.disabled = true;
+        return;
+    }
+
+    if (addBtn) addBtn.disabled = false;
 
     if (state.wgClients.length === 0) {
         tbody.innerHTML = '';
+        noClients.textContent = 'No WireGuard clients yet. Add a client to generate a QR code.';
         noClients.style.display = 'block';
         return;
     }
