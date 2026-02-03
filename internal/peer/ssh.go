@@ -77,7 +77,7 @@ func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Conne
 		go func(name string, p *tunnel.Tunnel, peerConn interface{ Disconnect(string, error) error }) {
 			m.Forwarder.HandleTunnel(ctx, name, p)
 			// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
-			peerConn.Disconnect("tunnel handler exited", nil)
+			_ = peerConn.Disconnect("tunnel handler exited", nil)
 		}(peerName, tun, pc)
 	}
 }

@@ -332,7 +332,8 @@ func (lm *LifecycleManager) ClearConnecting(peerName string) {
 	}
 
 	// Only transition if currently connecting
+	// Error is ignored - if state already changed, that's fine
 	if pc.State() == StateConnecting {
-		pc.Disconnect("connection attempt ended", nil)
+		_ = pc.Disconnect("connection attempt ended", nil)
 	}
 }

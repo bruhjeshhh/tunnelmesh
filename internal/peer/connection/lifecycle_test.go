@@ -178,7 +178,7 @@ func TestLifecycleManager_RouteLifecycle(t *testing.T) {
 
 	// Connect - route should be added
 	tunnel := &mockTunnel{}
-	pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test")
 
 	if !router.HasRoute("10.0.0.1") {
 		t.Error("Route should be added after Connected()")
@@ -189,7 +189,7 @@ func TestLifecycleManager_RouteLifecycle(t *testing.T) {
 	}
 
 	// Disconnect - route should be removed
-	pc.Disconnect("test", nil)
+	_ = pc.Disconnect("test", nil)
 
 	if router.HasRoute("10.0.0.1") {
 		t.Error("Route should be removed after Disconnect()")
@@ -213,7 +213,7 @@ func TestLifecycleManager_TunnelLifecycle(t *testing.T) {
 
 	// Connect - tunnel should be added
 	tunnel := &mockTunnel{}
-	pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test")
 
 	if !tunnels.Has("peer1") {
 		t.Error("Tunnel should be added after Connected()")
@@ -224,7 +224,7 @@ func TestLifecycleManager_TunnelLifecycle(t *testing.T) {
 	}
 
 	// Disconnect - tunnel should be removed
-	pc.Disconnect("test", nil)
+	_ = pc.Disconnect("test", nil)
 
 	if tunnels.Has("peer1") {
 		t.Error("Tunnel should be removed after Disconnect()")
@@ -243,7 +243,7 @@ func TestLifecycleManager_ReconnectingKeepsRoute(t *testing.T) {
 
 	// Connect
 	tunnel := &mockTunnel{}
-	pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test")
 
 	if !router.HasRoute("10.0.0.1") {
 		t.Error("Route should exist after Connected()")
@@ -253,7 +253,7 @@ func TestLifecycleManager_ReconnectingKeepsRoute(t *testing.T) {
 	}
 
 	// Start reconnecting - route should remain, tunnel should be removed
-	pc.StartReconnecting("network error", nil)
+	_ = pc.StartReconnecting("network error", nil)
 
 	if !router.HasRoute("10.0.0.1") {
 		t.Error("Route should remain during Reconnecting")
@@ -264,7 +264,7 @@ func TestLifecycleManager_ReconnectingKeepsRoute(t *testing.T) {
 
 	// Reconnect - tunnel should be added back
 	tunnel2 := &mockTunnel{}
-	pc.Connected(tunnel2, "reconnected")
+	_ = pc.Connected(tunnel2, "reconnected")
 
 	if !router.HasRoute("10.0.0.1") {
 		t.Error("Route should still exist after reconnect")
@@ -286,7 +286,7 @@ func TestLifecycleManager_CloseRemovesRoute(t *testing.T) {
 
 	// Connect
 	tunnel := &mockTunnel{}
-	pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test")
 
 	// Close - route and tunnel should be removed
 	pc.Close()
@@ -309,7 +309,7 @@ func TestLifecycleManager_Remove(t *testing.T) {
 
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
 	tunnel := &mockTunnel{}
-	pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test")
 
 	// Remove from manager
 	lm.Remove("peer1")
@@ -342,8 +342,8 @@ func TestLifecycleManager_CloseAll(t *testing.T) {
 
 	tunnel1 := &mockTunnel{}
 	tunnel2 := &mockTunnel{}
-	pc1.Connected(tunnel1, "test")
-	pc2.Connected(tunnel2, "test")
+	_ = pc1.Connected(tunnel1, "test")
+	_ = pc2.Connected(tunnel2, "test")
 
 	// Close all
 	lm.CloseAll()
@@ -375,8 +375,8 @@ func TestLifecycleManager_ListByState(t *testing.T) {
 	pc2 := lm.GetOrCreate("peer2", "10.0.0.2")
 	_ = lm.GetOrCreate("peer3", "10.0.0.3") // stays disconnected
 
-	pc1.StartConnecting("test")
-	pc2.Connected(&mockTunnel{}, "test")
+	_ = pc1.StartConnecting("test")
+	_ = pc2.Connected(&mockTunnel{}, "test")
 
 	connecting := lm.ListByState(StateConnecting)
 	if len(connecting) != 1 || connecting[0] != "peer1" {
@@ -407,8 +407,8 @@ func TestLifecycleManager_CountByState(t *testing.T) {
 	pc2 := lm.GetOrCreate("peer2", "10.0.0.2")
 	_ = lm.GetOrCreate("peer3", "10.0.0.3") // stays disconnected
 
-	pc1.Connected(&mockTunnel{}, "test")
-	pc2.Connected(&mockTunnel{}, "test")
+	_ = pc1.Connected(&mockTunnel{}, "test")
+	_ = pc2.Connected(&mockTunnel{}, "test")
 
 	if lm.CountByState(StateConnected) != 2 {
 		t.Errorf("CountByState(Connected) = %d, want 2", lm.CountByState(StateConnected))
@@ -437,13 +437,13 @@ func TestLifecycleManager_IsConnecting(t *testing.T) {
 	}
 
 	// Connecting
-	pc.StartConnecting("test")
+	_ = pc.StartConnecting("test")
 	if !lm.IsConnecting("peer1") {
 		t.Error("IsConnecting() should return true for connecting peer")
 	}
 
 	// Connected
-	pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test")
 	if lm.IsConnecting("peer1") {
 		t.Error("IsConnecting() should return false for connected peer")
 	}
@@ -465,7 +465,7 @@ func TestLifecycleManager_IsConnected(t *testing.T) {
 	}
 
 	// Connected
-	pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test")
 	if !lm.IsConnected("peer1") {
 		t.Error("IsConnected() should return true for connected peer")
 	}
@@ -480,7 +480,7 @@ func TestLifecycleManager_State(t *testing.T) {
 	}
 
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
-	pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test")
 
 	if lm.State("peer1") != StateConnected {
 		t.Errorf("State() = %v, want Connected", lm.State("peer1"))
@@ -493,7 +493,7 @@ func TestLifecycleManager_AllInfo(t *testing.T) {
 	pc1 := lm.GetOrCreate("peer1", "10.0.0.1")
 	_ = lm.GetOrCreate("peer2", "10.0.0.2") // stays disconnected
 
-	pc1.Connected(&mockTunnel{}, "test")
+	_ = pc1.Connected(&mockTunnel{}, "test")
 
 	infos := lm.AllInfo()
 	if len(infos) != 2 {
@@ -524,7 +524,7 @@ func TestLifecycleManager_AddObserver(t *testing.T) {
 
 	// New connections should have the observer
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
-	pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test")
 
 	transitions := recorder.Transitions()
 	if len(transitions) != 1 {
@@ -552,13 +552,13 @@ func TestLifecycleManager_ConcurrentAccess(t *testing.T) {
 			meshIP := "10.0.0." + string(rune('1'+n%9))
 
 			pc := lm.GetOrCreate(peerName, meshIP)
-			pc.StartConnecting("test")
-			pc.Connected(&mockTunnel{}, "test")
+			_ = pc.StartConnecting("test")
+			_ = pc.Connected(&mockTunnel{}, "test")
 			lm.List()
 			lm.Get(peerName)
 			lm.IsConnected(peerName)
 			lm.State(peerName)
-			pc.Disconnect("test", nil)
+			_ = pc.Disconnect("test", nil)
 		}(i)
 	}
 

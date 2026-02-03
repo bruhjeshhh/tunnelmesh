@@ -204,7 +204,7 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 	}
 
 	// Disconnect when tunnel handler exits (this removes tunnel via LifecycleManager observer)
-	pc.Disconnect("tunnel handler exited", nil)
+	_ = pc.Disconnect("tunnel handler exited", nil)
 }
 
 // buildTransportPeerInfo builds a transport.PeerInfo from a proto.Peer.

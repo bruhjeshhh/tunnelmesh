@@ -208,7 +208,7 @@ func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) 
 	}
 
 	// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
-	pc.Disconnect("relay tunnel handler exited", nil)
+	_ = pc.Disconnect("relay tunnel handler exited", nil)
 }
 
 // syncDNS syncs DNS records from the coordination server.

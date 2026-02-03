@@ -76,7 +76,7 @@ func (m *MeshNode) handleUDPConnection(ctx context.Context, conn transport.Conne
 		go func(name string, p *tunnel.Tunnel, peerConn interface{ Disconnect(string, error) error }) {
 			m.Forwarder.HandleTunnel(ctx, name, p)
 			// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
-			peerConn.Disconnect("tunnel handler exited", nil)
+			_ = peerConn.Disconnect("tunnel handler exited", nil)
 		}(peerName, tun, pc)
 	}
 }
@@ -90,7 +90,7 @@ func (m *MeshNode) HandleUDPSessionInvalidated(peerName string) {
 	// Disconnect the peer (removes tunnel via LifecycleManager observer)
 	pc := m.Connections.Get(peerName)
 	if pc != nil {
-		pc.Disconnect("session invalidated by peer", nil)
+		_ = pc.Disconnect("session invalidated by peer", nil)
 	}
 
 	// Trigger peer discovery to reconnect
