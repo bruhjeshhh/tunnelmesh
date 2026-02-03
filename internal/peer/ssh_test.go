@@ -117,7 +117,7 @@ func TestMeshNode_HandleIncomingSSH_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestMeshNode_HandleSSHConnection_EmptyPeerName(t *testing.T) {
+func TestMeshNode_HandleIncomingConnection_EmptyPeerName(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -132,14 +132,14 @@ func TestMeshNode_HandleSSHConnection_EmptyPeerName(t *testing.T) {
 	ctx := context.Background()
 
 	// Should close connection when peer name is empty
-	node.handleSSHConnection(ctx, conn)
+	node.handleIncomingConnection(ctx, conn, "SSH")
 
 	if !conn.closeCalled {
 		t.Error("expected connection to be closed when peer name is empty")
 	}
 }
 
-func TestMeshNode_HandleSSHConnection_ValidPeer(t *testing.T) {
+func TestMeshNode_HandleIncomingConnection_ValidPeer(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -154,7 +154,7 @@ func TestMeshNode_HandleSSHConnection_ValidPeer(t *testing.T) {
 	ctx := context.Background()
 
 	// Should add tunnel to manager
-	node.handleSSHConnection(ctx, conn)
+	node.handleIncomingConnection(ctx, conn, "SSH")
 
 	// Verify tunnel was added
 	tunnels := node.tunnelMgr.List()

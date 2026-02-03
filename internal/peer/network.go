@@ -53,9 +53,12 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to re-register after network change")
-		// Still close tunnels and record change even if re-register fails
+		// Still disconnect all peers and record change even if re-register fails
+		// Use DisconnectAll to properly transition FSM states and trigger observers
+		m.Connections.DisconnectAll("network change (re-register failed)")
+		// Also close any orphaned tunnels not tracked by FSM (belt and suspenders)
 		m.tunnelMgr.CloseAll()
-		log.Debug().Msg("closed stale tunnels after network change")
+		log.Debug().Msg("disconnected all peers after network change")
 		m.RecordNetworkChange()
 		// Reconnect persistent relay even if re-register failed
 		if m.PersistentRelay != nil {
@@ -69,9 +72,12 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 		Str("mesh_ip", resp.MeshIP).
 		Msg("re-registered with coordination server")
 
-	// Close all existing tunnels (they may be using stale IPs)
+	// Disconnect all peers (they may be using stale IPs)
+	// Use DisconnectAll to properly transition FSM states and trigger observers
+	m.Connections.DisconnectAll("network change")
+	// Also close any orphaned tunnels not tracked by FSM (belt and suspenders)
 	m.tunnelMgr.CloseAll()
-	log.Debug().Msg("closed stale tunnels after network change")
+	log.Debug().Msg("disconnected all peers after network change")
 
 	// Record network change time for bypass window
 	m.RecordNetworkChange()

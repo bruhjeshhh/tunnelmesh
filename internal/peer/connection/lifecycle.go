@@ -128,6 +128,7 @@ func (lm *LifecycleManager) Close(peerName string) {
 }
 
 // CloseAll closes all connections and clears the manager.
+// Connections transition to StateClosed (terminal) and cannot be reused.
 func (lm *LifecycleManager) CloseAll() {
 	// Get all connections
 	lm.mu.RLock()
@@ -146,6 +147,24 @@ func (lm *LifecycleManager) CloseAll() {
 	lm.mu.Lock()
 	lm.connections = make(map[string]*PeerConnection)
 	lm.mu.Unlock()
+}
+
+// DisconnectAll disconnects all connections but keeps them in the manager.
+// Connections transition to StateDisconnected and can be reused for reconnection.
+// This preserves connection history and stats across network changes.
+func (lm *LifecycleManager) DisconnectAll(reason string) {
+	// Get all connections
+	lm.mu.RLock()
+	connections := make([]*PeerConnection, 0, len(lm.connections))
+	for _, pc := range lm.connections {
+		connections = append(connections, pc)
+	}
+	lm.mu.RUnlock()
+
+	// Disconnect all connections (triggers observers for route/tunnel cleanup)
+	for _, pc := range connections {
+		_ = pc.Disconnect(reason, nil)
+	}
 }
 
 // List returns all peer names in the manager.

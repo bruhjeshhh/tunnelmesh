@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
-	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
 
 // HandleIncomingSSH accepts incoming SSH connections from the transport listener.
@@ -22,63 +21,7 @@ func (m *MeshNode) HandleIncomingSSH(ctx context.Context, listener transport.Lis
 			continue
 		}
 
-		go m.handleSSHConnection(ctx, conn)
-	}
-}
-
-// handleSSHConnection handles an individual incoming SSH connection.
-func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Connection) {
-	peerName := conn.PeerName()
-	if peerName == "" {
-		log.Warn().Msg("SSH connection without peer name, rejecting")
-		conn.Close()
-		return
-	}
-
-	log.Info().
-		Str("peer", peerName).
-		Str("transport", string(conn.Type())).
-		Msg("incoming SSH connection")
-
-	// Cancel any outbound connection attempt to this peer
-	m.Connections.CancelOutbound(peerName)
-
-	// If we already have a healthy tunnel to this peer, reject the incoming connection
-	// to avoid race conditions where both peers connect simultaneously
-	if existing, ok := m.tunnelMgr.Get(peerName); ok {
-		if hc, canCheck := existing.(tunnel.HealthChecker); canCheck && hc.IsHealthy() {
-			log.Debug().
-				Str("peer", peerName).
-				Msg("already have healthy tunnel, rejecting incoming connection")
-			conn.Close()
-			return
-		}
-	}
-
-	// Fetch peer info from coordination server to get mesh IP and add route
-	// This ensures routing works immediately, without waiting for next discovery cycle
-	meshIP := m.ensurePeerRoute(peerName)
-
-	// Wrap connection as a tunnel
-	tun := tunnel.NewTunnelFromTransport(conn)
-
-	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
-	pc := m.Connections.GetOrCreate(peerName, meshIP)
-	if err := pc.Connected(tun, "incoming SSH connection"); err != nil {
-		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
-		tun.Close()
-		return
-	}
-
-	log.Info().Str("peer", peerName).Msg("tunnel established from incoming SSH connection")
-
-	// Handle incoming packets from this tunnel
-	if m.Forwarder != nil {
-		go func(name string, p *tunnel.Tunnel, peerConn interface{ Disconnect(string, error) error }) {
-			m.Forwarder.HandleTunnel(ctx, name, p)
-			// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
-			_ = peerConn.Disconnect("tunnel handler exited", nil)
-		}(peerName, tun, pc)
+		go m.handleIncomingConnection(ctx, conn, "SSH")
 	}
 }
 
