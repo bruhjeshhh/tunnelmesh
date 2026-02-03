@@ -815,8 +815,8 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}
 	}
 
-	// Close all tunnels
-	node.TunnelMgr().CloseAll()
+	// Close all connections via FSM (properly transitions states and triggers observers)
+	node.Connections.CloseAll()
 
 	// Don't deregister on shutdown - keep the peer record so we get the same
 	// mesh IP when we reconnect. Use 'tunnelmesh leave' for intentional removal.

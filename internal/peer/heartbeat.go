@@ -109,9 +109,12 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	// Close stale HTTP connections
 	m.client.CloseIdleConnections()
 
-	// Close all existing tunnels
+	// Disconnect all peers (tunnels may be using stale IPs)
+	// Use DisconnectAll to properly transition FSM states and trigger observers
+	m.Connections.DisconnectAll("IP change")
+	// Also close any orphaned tunnels not tracked by FSM (belt and suspenders)
 	m.tunnelMgr.CloseAll()
-	log.Debug().Msg("closed stale tunnels due to IP change")
+	log.Debug().Msg("disconnected all peers due to IP change")
 
 	// Update stored IPs
 	m.SetHeartbeatIPs(publicIPs, privateIPs, behindNAT)

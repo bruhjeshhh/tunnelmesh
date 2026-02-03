@@ -362,6 +362,68 @@ func TestLifecycleManager_CloseAll(t *testing.T) {
 	}
 }
 
+func TestLifecycleManager_DisconnectAll(t *testing.T) {
+	router := newMockRouter()
+	tunnels := newMockTunnelProvider()
+	lm := NewLifecycleManager(LifecycleConfig{
+		Router:  router,
+		Tunnels: tunnels,
+	})
+
+	// Create multiple connections
+	pc1 := lm.GetOrCreate("peer1", "10.0.0.1")
+	pc2 := lm.GetOrCreate("peer2", "10.0.0.2")
+
+	tunnel1 := &mockTunnel{}
+	tunnel2 := &mockTunnel{}
+	_ = pc1.Connected(tunnel1, "test")
+	_ = pc2.Connected(tunnel2, "test")
+
+	// Verify connections are in Connected state
+	if pc1.State() != StateConnected || pc2.State() != StateConnected {
+		t.Error("Both connections should be in Connected state before DisconnectAll")
+	}
+
+	// Disconnect all (non-terminal - connections remain in manager)
+	lm.DisconnectAll("network change")
+
+	// Connections should still be in manager but in Disconnected state
+	if len(lm.List()) != 2 {
+		t.Errorf("Connections should remain in manager after DisconnectAll, got %d", len(lm.List()))
+	}
+
+	// Both connections should be in Disconnected state (reusable)
+	if pc1.State() != StateDisconnected {
+		t.Errorf("peer1 should be Disconnected after DisconnectAll, got %v", pc1.State())
+	}
+	if pc2.State() != StateDisconnected {
+		t.Errorf("peer2 should be Disconnected after DisconnectAll, got %v", pc2.State())
+	}
+
+	// All routes and tunnels should be cleaned up
+	if router.HasRoute("10.0.0.1") || router.HasRoute("10.0.0.2") {
+		t.Error("All routes should be removed after DisconnectAll()")
+	}
+	if tunnels.Has("peer1") || tunnels.Has("peer2") {
+		t.Error("All tunnels should be removed after DisconnectAll()")
+	}
+
+	// Verify tunnels were closed
+	if !tunnel1.closed || !tunnel2.closed {
+		t.Error("Tunnels should be closed after DisconnectAll()")
+	}
+
+	// Connections can be reused - try reconnecting
+	newTunnel := &mockTunnel{}
+	err := pc1.Connected(newTunnel, "reconnection")
+	if err != nil {
+		t.Errorf("Should be able to reconnect after DisconnectAll: %v", err)
+	}
+	if pc1.State() != StateConnected {
+		t.Errorf("peer1 should be Connected after reconnection, got %v", pc1.State())
+	}
+}
+
 func TestLifecycleManager_ListByState(t *testing.T) {
 	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
