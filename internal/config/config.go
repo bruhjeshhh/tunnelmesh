@@ -13,7 +13,8 @@ import (
 
 // AdminConfig holds configuration for the admin web interface.
 type AdminConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled bool   `yaml:"enabled"`
+	Token   string `yaml:"token"` // Authentication token for admin access (optional, but recommended)
 }
 
 // RelayConfig holds configuration for the relay server.

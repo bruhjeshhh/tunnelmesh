@@ -21,6 +21,12 @@ variable "auth_token" {
   sensitive   = true
 }
 
+variable "admin_token" {
+  description = "Authentication token for admin web interface (generate with: openssl rand -hex 32)"
+  type        = string
+  sensitive   = true
+}
+
 # ============================================================================
 # NODE DEFINITIONS
 # ============================================================================

@@ -11,13 +11,38 @@ const state = {
 async function fetchData() {
     try {
         const resp = await fetch('/admin/api/overview');
+        if (resp.status === 401) {
+            // Browser will show Basic Auth prompt on page load
+            // If we get 401 during polling, credentials were rejected
+            showAuthError();
+            return;
+        }
         if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
         }
+        hideAuthError();
         const data = await resp.json();
         updateDashboard(data);
     } catch (err) {
         console.error('Failed to fetch data:', err);
+    }
+}
+
+function showAuthError() {
+    let banner = document.getElementById('auth-error-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'auth-error-banner';
+        banner.style.cssText = 'background:#d32f2f;color:white;padding:12px 20px;text-align:center;position:fixed;top:0;left:0;right:0;z-index:1000;';
+        banner.innerHTML = 'Authentication required. <a href="/admin/" style="color:white;text-decoration:underline;">Click here to login</a>';
+        document.body.prepend(banner);
+    }
+}
+
+function hideAuthError() {
+    const banner = document.getElementById('auth-error-banner');
+    if (banner) {
+        banner.remove();
     }
 }
 
