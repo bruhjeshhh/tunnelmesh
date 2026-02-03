@@ -85,9 +85,9 @@ func TestStoreList(t *testing.T) {
 	}
 
 	// Create some clients
-	store.Create("iPhone")
-	store.Create("Android")
-	store.Create("Laptop")
+	_, _ = store.Create("iPhone")
+	_, _ = store.Create("Android")
+	_, _ = store.Create("Laptop")
 
 	clients = store.List()
 	if len(clients) != 3 {
@@ -223,7 +223,7 @@ func TestStoreConcurrency(t *testing.T) {
 	done := make(chan bool)
 	for i := 0; i < 10; i++ {
 		go func() {
-			store.Create("device")
+			_, _ = store.Create("device")
 			done <- true
 		}()
 	}
@@ -278,10 +278,7 @@ func (__fmtImport) Sscanf(s, format string, a ...interface{}) (int, error) {
 
 func scanfImpl(s, format string, a ...interface{}) (int, error) {
 	// Minimal implementation for tests
-	var parts []string
-	for _, p := range splitDots(s) {
-		parts = append(parts, p)
-	}
+	parts := splitDots(s)
 	if len(parts) != 4 || len(a) != 4 {
 		return 0, nil
 	}
