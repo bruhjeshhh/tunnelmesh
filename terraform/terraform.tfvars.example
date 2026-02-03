@@ -24,3 +24,21 @@ auth_token = ""
 # DigitalOcean region (default: "ams")
 # Options: nyc, sfo, ams, sgp, lon, fra, tor, blr, syd
 # region = "ams"
+
+# --- WireGuard Peer Droplet ---
+
+# Enable the WireGuard peer droplet (default: true)
+# wg_peer_enabled = true
+
+# Name for the WireGuard peer - becomes {name}.{domain} DNS record
+# wg_peer_name = "tm-net"
+
+# Droplet size (default: s-1vcpu-512mb-10gb = $4/mo)
+# Options: s-1vcpu-512mb-10gb ($4/mo), s-1vcpu-1gb ($6/mo)
+# wg_peer_size = "s-1vcpu-512mb-10gb"
+
+# WireGuard UDP listen port (default: 51820)
+# wg_listen_port = 51820
+
+# SSH key name for droplet access (from DigitalOcean account)
+# ssh_key_fingerprint = "my-ssh-key"
