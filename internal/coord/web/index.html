@@ -64,6 +64,70 @@
                 No DNS records yet.
             </div>
         </section>
+
+        <section id="wireguard-section" style="display: none;">
+            <div class="section-header">
+                <h2>WireGuard Clients</h2>
+                <button id="add-wg-client-btn" class="btn-primary">+ Add Client</button>
+            </div>
+            <table id="wireguard-clients">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Mesh IP</th>
+                        <th>DNS Name</th>
+                        <th>Status</th>
+                        <th>Last Seen</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="wg-clients-body"></tbody>
+            </table>
+            <div id="no-wg-clients" class="empty-state" style="display: none;">
+                No WireGuard clients yet. Add a client to generate a QR code.
+            </div>
+        </section>
+
+        <!-- WireGuard Client Modal -->
+        <div id="wg-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="wg-modal-title">Add WireGuard Client</h3>
+                    <button class="modal-close" onclick="closeWGModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Add Client Form -->
+                    <div id="wg-add-form">
+                        <div class="form-group">
+                            <label for="wg-client-name">Client Name</label>
+                            <input type="text" id="wg-client-name" placeholder="e.g., iPhone, Laptop">
+                        </div>
+                        <button id="wg-create-btn" class="btn-primary" onclick="createWGClient()">Create Client</button>
+                    </div>
+                    <!-- Client Config Display -->
+                    <div id="wg-config-display" style="display: none;">
+                        <div class="config-grid">
+                            <div class="qr-code">
+                                <img id="wg-qr-image" alt="WireGuard QR Code">
+                            </div>
+                            <div class="config-details">
+                                <p><strong>Name:</strong> <span id="wg-created-name"></span></p>
+                                <p><strong>Mesh IP:</strong> <span id="wg-created-ip"></span></p>
+                                <p><strong>DNS:</strong> <span id="wg-created-dns"></span></p>
+                                <button class="btn-secondary" onclick="downloadWGConfig()">Download .conf</button>
+                            </div>
+                        </div>
+                        <div class="warning-box">
+                            <strong>Important:</strong> Save this configuration now. The private key cannot be retrieved later.
+                        </div>
+                        <div class="config-textarea">
+                            <label>Configuration File:</label>
+                            <textarea id="wg-config-text" readonly rows="12"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </main>
 
     <footer>

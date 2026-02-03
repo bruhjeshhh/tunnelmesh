@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -43,7 +44,8 @@ type Server struct {
 	serverStats serverStats
 	relay       *relayManager
 	holePunch   *holePunchManager
-	version     string // Server version for admin display
+	wgStore     *wireguard.Store // WireGuard client storage
+	version     string           // Server version for admin display
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -151,6 +153,12 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		},
 	}
 
+	// Initialize WireGuard client store if enabled
+	if cfg.WireGuard.Enabled {
+		srv.wgStore = wireguard.NewStore(cfg.MeshCIDR)
+		log.Info().Msg("WireGuard client management enabled")
+	}
+
 	srv.setupRoutes()
 	return srv, nil
 }
@@ -180,6 +188,11 @@ func (s *Server) setupRoutes() {
 
 	// Setup UDP hole-punch coordination routes
 	s.setupHolePunchRoutes()
+
+	// Setup WireGuard concentrator sync endpoint (JWT auth)
+	if s.cfg.WireGuard.Enabled {
+		s.setupWireGuardRoutes()
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -434,4 +447,98 @@ func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
 func (s *Server) ListenAndServe() error {
 	log.Info().Str("listen", s.cfg.Listen).Msg("starting coordination server")
 	return http.ListenAndServe(s.cfg.Listen, s)
+}
+
+// setupWireGuardRoutes registers the WireGuard API routes for concentrator sync.
+func (s *Server) setupWireGuardRoutes() {
+	// Concentrator fetches client list (JWT auth)
+	s.mux.HandleFunc("/api/v1/wireguard/clients", s.handleWireGuardClients)
+	// Concentrator reports handshakes (JWT auth)
+	s.mux.HandleFunc("/api/v1/wireguard/handshake", s.handleWireGuardHandshake)
+}
+
+// handleWireGuardClients returns the list of WireGuard clients for the concentrator.
+// Uses JWT authentication.
+func (s *Server) handleWireGuardClients(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Validate JWT token
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		s.jsonError(w, "missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		s.jsonError(w, "invalid authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	_, err := s.ValidateToken(parts[1])
+	if err != nil {
+		s.jsonError(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	// Return only enabled clients
+	allClients := s.wgStore.List()
+	enabledClients := make([]wireguard.Client, 0)
+	for _, c := range allClients {
+		if c.Enabled {
+			enabledClients = append(enabledClients, c)
+		}
+	}
+
+	resp := wireguard.ClientListResponse{
+		Clients: enabledClients,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleWireGuardHandshake updates the last seen time for a WireGuard client.
+// Called by the concentrator when it detects a client handshake.
+func (s *Server) handleWireGuardHandshake(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Validate JWT token
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		s.jsonError(w, "missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		s.jsonError(w, "invalid authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	_, err := s.ValidateToken(parts[1])
+	if err != nil {
+		s.jsonError(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	var req wireguard.HandshakeReport
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.wgStore.UpdateLastSeen(req.ClientID, req.HandshakeAt); err != nil {
+		s.jsonError(w, "client not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

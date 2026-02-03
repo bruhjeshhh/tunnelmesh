@@ -22,26 +22,44 @@ type RelayConfig struct {
 	PairTimeout string `yaml:"pair_timeout"` // Duration string, e.g. "30s"
 }
 
+// WireGuardServerConfig holds configuration for WireGuard client management.
+type WireGuardServerConfig struct {
+	Enabled  bool   `yaml:"enabled"`  // Enable WireGuard client management
+	Endpoint string `yaml:"endpoint"` // Public endpoint for clients (concentrator address:port)
+}
+
+// WireGuardPeerConfig holds configuration for the WireGuard concentrator mode.
+type WireGuardPeerConfig struct {
+	Enabled      bool   `yaml:"enabled"`       // Run as WireGuard concentrator
+	ListenPort   int    `yaml:"listen_port"`   // WireGuard UDP port (default: 51820)
+	Interface    string `yaml:"interface"`     // Interface name (default: "wg0")
+	MTU          int    `yaml:"mtu"`           // MTU (default: 1420)
+	DataDir      string `yaml:"data_dir"`      // Server key storage directory
+	SyncInterval string `yaml:"sync_interval"` // Config sync interval (default: "30s")
+}
+
 // ServerConfig holds configuration for the coordination server.
 type ServerConfig struct {
-	Listen       string      `yaml:"listen"`
-	AuthToken    string      `yaml:"auth_token"`
-	MeshCIDR     string      `yaml:"mesh_cidr"`
-	DomainSuffix string      `yaml:"domain_suffix"`
-	Admin        AdminConfig `yaml:"admin"`
-	Relay        RelayConfig `yaml:"relay"`
-	JoinMesh     *PeerConfig `yaml:"join_mesh,omitempty"`
+	Listen       string                `yaml:"listen"`
+	AuthToken    string                `yaml:"auth_token"`
+	MeshCIDR     string                `yaml:"mesh_cidr"`
+	DomainSuffix string                `yaml:"domain_suffix"`
+	Admin        AdminConfig           `yaml:"admin"`
+	Relay        RelayConfig           `yaml:"relay"`
+	WireGuard    WireGuardServerConfig `yaml:"wireguard"`
+	JoinMesh     *PeerConfig           `yaml:"join_mesh,omitempty"`
 }
 
 // PeerConfig holds configuration for a peer node.
 type PeerConfig struct {
-	Name       string    `yaml:"name"`
-	Server     string    `yaml:"server"`
-	AuthToken  string    `yaml:"auth_token"`
-	SSHPort    int       `yaml:"ssh_port"`
-	PrivateKey string    `yaml:"private_key"`
-	TUN        TUNConfig `yaml:"tun"`
-	DNS        DNSConfig `yaml:"dns"`
+	Name       string              `yaml:"name"`
+	Server     string              `yaml:"server"`
+	AuthToken  string              `yaml:"auth_token"`
+	SSHPort    int                 `yaml:"ssh_port"`
+	PrivateKey string              `yaml:"private_key"`
+	TUN        TUNConfig           `yaml:"tun"`
+	DNS        DNSConfig           `yaml:"dns"`
+	WireGuard  WireGuardPeerConfig `yaml:"wireguard"`
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -85,6 +103,8 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	if cfg.Relay.PairTimeout == "" {
 		cfg.Relay.PairTimeout = "90s"
 	}
+
+	// WireGuard defaults are applied on demand (endpoint must be set manually)
 
 	// Apply defaults to JoinMesh if configured
 	if cfg.JoinMesh != nil {
@@ -153,6 +173,29 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			cfg.PrivateKey = filepath.Join(homeDir, cfg.PrivateKey[2:])
+		}
+	}
+
+	// WireGuard concentrator defaults
+	if cfg.WireGuard.Enabled {
+		if cfg.WireGuard.ListenPort == 0 {
+			cfg.WireGuard.ListenPort = 51820
+		}
+		if cfg.WireGuard.Interface == "" {
+			cfg.WireGuard.Interface = "wg0"
+		}
+		if cfg.WireGuard.MTU == 0 {
+			cfg.WireGuard.MTU = 1420
+		}
+		if cfg.WireGuard.SyncInterval == "" {
+			cfg.WireGuard.SyncInterval = "30s"
+		}
+		// Expand home directory in data dir
+		if strings.HasPrefix(cfg.WireGuard.DataDir, "~/") {
+			homeDir, err := os.UserHomeDir()
+			if err == nil {
+				cfg.WireGuard.DataDir = filepath.Join(homeDir, cfg.WireGuard.DataDir[2:])
+			}
 		}
 	}
 

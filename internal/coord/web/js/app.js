@@ -1,7 +1,10 @@
 // Dashboard state - track history per peer
 const state = {
     peerHistory: {}, // { peerName: { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] } }
-    maxHistoryPoints: 20
+    maxHistoryPoints: 20,
+    wgClients: [],
+    wgEnabled: false,
+    currentWGConfig: null
 };
 
 // Fetch and update dashboard
@@ -216,8 +219,222 @@ function formatPorts(peer) {
     return parts.join('<br>');
 }
 
+// WireGuard Client Management
+
+async function checkWireGuardStatus() {
+    try {
+        const resp = await fetch('/admin/api/wireguard/clients');
+        if (resp.ok) {
+            state.wgEnabled = true;
+            document.getElementById('wireguard-section').style.display = 'block';
+            const data = await resp.json();
+            state.wgClients = data.clients || [];
+            updateWGClientsTable();
+        }
+    } catch (err) {
+        // WireGuard not enabled
+        state.wgEnabled = false;
+    }
+}
+
+async function fetchWGClients() {
+    if (!state.wgEnabled) return;
+
+    try {
+        const resp = await fetch('/admin/api/wireguard/clients');
+        if (resp.ok) {
+            const data = await resp.json();
+            state.wgClients = data.clients || [];
+            updateWGClientsTable();
+        }
+    } catch (err) {
+        console.error('Failed to fetch WG clients:', err);
+    }
+}
+
+function updateWGClientsTable() {
+    const tbody = document.getElementById('wg-clients-body');
+    const noClients = document.getElementById('no-wg-clients');
+
+    if (state.wgClients.length === 0) {
+        tbody.innerHTML = '';
+        noClients.style.display = 'block';
+        return;
+    }
+
+    noClients.style.display = 'none';
+    tbody.innerHTML = state.wgClients.map(client => {
+        const statusClass = client.enabled ? 'online' : 'offline';
+        const statusText = client.enabled ? 'Enabled' : 'Disabled';
+        const lastSeen = client.last_seen ? formatLastSeen(client.last_seen) : 'Never';
+
+        return `
+            <tr>
+                <td><strong>${escapeHtml(client.name)}</strong></td>
+                <td><code>${client.mesh_ip}</code></td>
+                <td><code>${escapeHtml(client.dns_name)}.tunnelmesh</code></td>
+                <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                <td>${lastSeen}</td>
+                <td>
+                    <button class="btn-icon" onclick="toggleWGClient('${client.id}', ${!client.enabled})" title="${client.enabled ? 'Disable' : 'Enable'}">
+                        ${client.enabled ? '⏸' : '▶'}
+                    </button>
+                    <button class="btn-danger" onclick="deleteWGClient('${client.id}', '${escapeHtml(client.name)}')">Delete</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function formatLastSeen(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+
+    if (diffSec < 60) return 'Just now';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    return date.toLocaleDateString();
+}
+
+function showAddWGClientModal() {
+    document.getElementById('wg-modal-title').textContent = 'Add WireGuard Client';
+    document.getElementById('wg-add-form').style.display = 'block';
+    document.getElementById('wg-config-display').style.display = 'none';
+    document.getElementById('wg-client-name').value = '';
+    document.getElementById('wg-modal').style.display = 'flex';
+}
+
+function closeWGModal() {
+    document.getElementById('wg-modal').style.display = 'none';
+    state.currentWGConfig = null;
+    // Refresh the client list
+    fetchWGClients();
+}
+
+async function createWGClient() {
+    const nameInput = document.getElementById('wg-client-name');
+    const name = nameInput.value.trim();
+
+    if (!name) {
+        alert('Please enter a client name');
+        return;
+    }
+
+    try {
+        const resp = await fetch('/admin/api/wireguard/clients', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            alert('Failed to create client: ' + (err.message || 'Unknown error'));
+            return;
+        }
+
+        const data = await resp.json();
+        state.currentWGConfig = data;
+
+        // Show the config
+        document.getElementById('wg-modal-title').textContent = 'Client Created';
+        document.getElementById('wg-add-form').style.display = 'none';
+        document.getElementById('wg-config-display').style.display = 'block';
+
+        document.getElementById('wg-qr-image').src = data.qr_code || '';
+        document.getElementById('wg-created-name').textContent = data.client.name;
+        document.getElementById('wg-created-ip').textContent = data.client.mesh_ip;
+        document.getElementById('wg-created-dns').textContent = data.client.dns_name + '.tunnelmesh';
+        document.getElementById('wg-config-text').value = data.config;
+
+    } catch (err) {
+        console.error('Failed to create WG client:', err);
+        alert('Failed to create client');
+    }
+}
+
+function downloadWGConfig() {
+    if (!state.currentWGConfig) return;
+
+    const config = state.currentWGConfig.config;
+    const name = state.currentWGConfig.client.dns_name || 'wireguard';
+    const blob = new Blob([config], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.conf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+async function toggleWGClient(id, enabled) {
+    try {
+        const resp = await fetch(`/admin/api/wireguard/clients/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+
+        if (!resp.ok) {
+            alert('Failed to update client');
+            return;
+        }
+
+        fetchWGClients();
+    } catch (err) {
+        console.error('Failed to toggle WG client:', err);
+        alert('Failed to update client');
+    }
+}
+
+async function deleteWGClient(id, name) {
+    if (!confirm(`Delete WireGuard client "${name}"?`)) {
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/admin/api/wireguard/clients/${id}`, {
+            method: 'DELETE'
+        });
+
+        if (!resp.ok) {
+            alert('Failed to delete client');
+            return;
+        }
+
+        fetchWGClients();
+    } catch (err) {
+        console.error('Failed to delete WG client:', err);
+        alert('Failed to delete client');
+    }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     fetchData();
     setInterval(fetchData, 5000); // Refresh every 5 seconds
+
+    // Check if WireGuard is enabled and setup handlers
+    checkWireGuardStatus();
+    setInterval(fetchWGClients, 10000); // Refresh WG clients every 10 seconds
+
+    // Add client button handler
+    const addBtn = document.getElementById('add-wg-client-btn');
+    if (addBtn) {
+        addBtn.addEventListener('click', showAddWGClientModal);
+    }
+
+    // Close modal on background click
+    const modal = document.getElementById('wg-modal');
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeWGModal();
+            }
+        });
+    }
 });
