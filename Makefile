@@ -173,8 +173,8 @@ GITHUB_OWNER ?= zombar
 
 deploy-update:
 	@echo "Updating tunnelmesh on all deployed nodes..."
-	@cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r 'keys[]' | while read -r NAME; do \
-		IP=$$(cd $(TF_DIR) && terraform output -json node_ips 2>/dev/null | jq -r ".\"$$NAME\""); \
+	@cd $(TF_DIR) && terraform output -json node_ips 2>/dev/null | jq -r 'to_entries[] | "\(.key) \(.value)"' | \
+	while read -r NAME IP; do \
 		echo ""; \
 		echo "=== Updating $$NAME ($$IP) ==="; \
 		ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
