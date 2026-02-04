@@ -14,7 +14,7 @@ const state = {
             throughput: {},  // { peerName: [values] }
             packets: {}      // { peerName: [values] }
         },
-        maxChartPoints: 300  // max points to display on chart
+        maxChartPoints: 8640  // 3 days at 30-second intervals
     }
 };
 
@@ -24,7 +24,9 @@ const CHART_FILL_COLOR = 'rgba(63, 185, 80, 0.15)';
 
 // Max time range in days (clamp to 3 days)
 const MAX_RANGE_DAYS = 3;
-const MAX_CHART_POINTS = 288;
+// At 30-second heartbeat intervals, 3 days = 8640 points
+// Request full resolution (no downsampling)
+const MAX_CHART_POINTS = 8640;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
