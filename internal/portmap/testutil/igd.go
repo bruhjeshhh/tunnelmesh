@@ -22,9 +22,6 @@ const (
 	pcpOpAnnounce = 0
 	pcpOpMap      = 1
 	pcpOpReply    = 0x80
-
-	pcpUDPMapping = 17
-	pcpTCPMapping = 6
 )
 
 // TestIGD is a mock Internet Gateway Device for testing port mapping protocols.
@@ -254,9 +251,7 @@ func (igd *TestIGD) servePxP() {
 	for {
 		n, addr, err := igd.pxpConn.ReadFrom(buf)
 		if err != nil {
-			if !igd.closed.Load() {
-				// Log error in production
-			}
+			// Error expected when closed - stop silently
 			return
 		}
 
@@ -482,18 +477,13 @@ func buildPCPMapResponse(cfg igdConfig, req []byte) []byte {
 	return resp
 }
 
-// UPnP discovery packet (simplified)
-var upnpDiscoveryPacket = []byte("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n")
-
 // serveUPnPDiscovery handles UPnP SSDP discovery.
 func (igd *TestIGD) serveUPnPDiscovery() {
 	buf := make([]byte, 1500)
 	for {
 		n, addr, err := igd.upnpConn.ReadFrom(buf)
 		if err != nil {
-			if !igd.closed.Load() {
-				// Log error in production
-			}
+			// Error expected when closed - stop silently
 			return
 		}
 
@@ -532,7 +522,7 @@ func (igd *TestIGD) serveUPnPHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/rootDesc.xml":
 		w.Header().Set("Content-Type", "text/xml")
-		w.Write([]byte(igd.rootDescXML()))
+		_, _ = w.Write([]byte(igd.rootDescXML()))
 	case "/WANIPConnection":
 		igd.handleUPnPAction(w, r)
 	default:
@@ -573,7 +563,7 @@ func (igd *TestIGD) handleUPnPAction(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case contains(action, "GetExternalIPAddress"):
 		w.Header().Set("Content-Type", "text/xml")
-		w.Write([]byte(`<?xml version="1.0"?>
+		_, _ = w.Write([]byte(`<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body>
     <u:GetExternalIPAddressResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
@@ -588,7 +578,7 @@ func (igd *TestIGD) handleUPnPAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/xml")
-		w.Write([]byte(`<?xml version="1.0"?>
+		_, _ = w.Write([]byte(`<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body>
     <u:AddPortMappingResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
@@ -598,7 +588,7 @@ func (igd *TestIGD) handleUPnPAction(w http.ResponseWriter, r *http.Request) {
 
 	case contains(action, "DeletePortMapping"):
 		w.Header().Set("Content-Type", "text/xml")
-		w.Write([]byte(`<?xml version="1.0"?>
+		_, _ = w.Write([]byte(`<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body>
     <u:DeletePortMappingResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">

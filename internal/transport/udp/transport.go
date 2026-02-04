@@ -1326,7 +1326,7 @@ func (t *Transport) Close() error {
 
 	// Stop port mapper if running
 	if t.portMapper != nil {
-		t.portMapper.Stop()
+		_ = t.portMapper.Stop()
 	}
 
 	// Close packet queue to signal workers to exit

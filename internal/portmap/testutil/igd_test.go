@@ -48,7 +48,9 @@ func TestTestIGD_PMPPublicAddr(t *testing.T) {
 	}
 
 	buf := make([]byte, 256)
-	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
 	n, _, err := conn.ReadFrom(buf)
 	if err != nil {
 		t.Fatalf("failed to read response: %v", err)
@@ -113,7 +115,9 @@ func TestTestIGD_PMPMapping(t *testing.T) {
 	}
 
 	buf := make([]byte, 256)
-	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
 	n, _, err := conn.ReadFrom(buf)
 	if err != nil {
 		t.Fatalf("failed to read response: %v", err)
@@ -169,7 +173,9 @@ func TestTestIGD_PCPAnnounce(t *testing.T) {
 	}
 
 	buf := make([]byte, 256)
-	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
 	n, _, err := conn.ReadFrom(buf)
 	if err != nil {
 		t.Fatalf("failed to read response: %v", err)
@@ -243,7 +249,9 @@ func TestTestIGD_PCPMap(t *testing.T) {
 	}
 
 	buf := make([]byte, 256)
-	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
 	n, _, err := conn.ReadFrom(buf)
 	if err != nil {
 		t.Fatalf("failed to read response: %v", err)
@@ -294,7 +302,9 @@ func TestTestIGD_FailProbe(t *testing.T) {
 	}
 
 	buf := make([]byte, 256)
-	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
 	_, _, err = conn.ReadFrom(buf)
 	if err == nil {
 		t.Error("expected timeout, got response")
@@ -330,7 +340,9 @@ func TestTestIGD_Disabled(t *testing.T) {
 	}
 
 	buf := make([]byte, 256)
-	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
 	_, _, err = conn.ReadFrom(buf)
 	if err == nil {
 		t.Error("expected timeout when protocol disabled")

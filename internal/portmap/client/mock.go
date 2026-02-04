@@ -86,12 +86,15 @@ func (m *MockClient) Probe(ctx context.Context) (net.IP, error) {
 
 func (m *MockClient) GetExternalAddress(ctx context.Context) (net.IP, error) {
 	m.mu.Lock()
+	externalIP := m.ExternalIP
+	getExternalErr := m.GetExternalErr
+	getExternalAddressFunc := m.GetExternalAddressFunc
 	m.mu.Unlock()
 
-	if m.GetExternalAddressFunc != nil {
-		return m.GetExternalAddressFunc(ctx)
+	if getExternalAddressFunc != nil {
+		return getExternalAddressFunc(ctx)
 	}
-	return m.ExternalIP, m.GetExternalErr
+	return externalIP, getExternalErr
 }
 
 func (m *MockClient) RequestMapping(ctx context.Context, protocol Protocol, internalPort int, lifetime time.Duration) (*Mapping, error) {

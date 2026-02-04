@@ -69,7 +69,7 @@ func TestFSM_InitialState(t *testing.T) {
 		LocalPort: 51820,
 		Client:    mock,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	assert.Equal(t, StateIdle, pm.State())
 	assert.Nil(t, pm.Mapping())
@@ -86,7 +86,7 @@ func TestFSM_StartDiscovery(t *testing.T) {
 		Client:    mock,
 		Observers: []Observer{obs},
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestFSM_DiscoverySuccess(t *testing.T) {
 		Client:    mock,
 		Observers: []Observer{obs},
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestFSM_DiscoveryFailure(t *testing.T) {
 		Client:    mock,
 		Observers: []Observer{obs},
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestFSM_MappingFailure(t *testing.T) {
 		Client:    mock,
 		Observers: []Observer{obs},
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestFSM_RefreshSuccess(t *testing.T) {
 		Observers:     []Observer{obs},
 		RefreshMargin: 50 * time.Millisecond,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestFSM_RefreshFailure(t *testing.T) {
 		Observers:     []Observer{obs},
 		RefreshMargin: 50 * time.Millisecond,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -251,7 +251,7 @@ func TestFSM_NetworkChange_FromActive(t *testing.T) {
 		Client:    mock,
 		Observers: []Observer{obs},
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestFSM_NetworkChange_FromDiscovering(t *testing.T) {
 		LocalPort: 51820,
 		Client:    mock,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -441,7 +441,7 @@ func TestFSM_ObserverNotifications(t *testing.T) {
 	mappings := obs.getMappingsAcquired()
 	assert.Len(t, mappings, 1)
 
-	pm.Stop()
+	_ = pm.Stop()
 
 	// Verify mapping lost was called
 	lost := obs.getMappingsLost()
@@ -466,7 +466,7 @@ func TestFSM_MultipleObservers(t *testing.T) {
 	// Wait for active state
 	waitForState(t, pm, StateActive, 2*time.Second)
 
-	pm.Stop()
+	_ = pm.Stop()
 
 	// Both observers should have received notifications
 	assert.GreaterOrEqual(t, len(obs1.getStateChanges()), 1)
@@ -513,7 +513,7 @@ func TestFSM_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
-	pm.Stop()
+	_ = pm.Stop()
 }
 
 func TestFSM_DoubleStart(t *testing.T) {
@@ -524,13 +524,13 @@ func TestFSM_DoubleStart(t *testing.T) {
 		LocalPort: 51820,
 		Client:    mock,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
 
 	// Second start should return error or be no-op
-	err = pm.Start()
+	_ = pm.Start()
 	// Either returns error or succeeds (idempotent)
 	// The important thing is it doesn't panic or cause issues
 }
@@ -572,7 +572,7 @@ func TestFSM_MappingContents(t *testing.T) {
 		LocalPort: 51820,
 		Client:    mock,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)
@@ -603,7 +603,7 @@ func TestFSM_TCPProtocol(t *testing.T) {
 		LocalPort: 22,
 		Client:    mock,
 	})
-	defer pm.Stop()
+	defer func() { _ = pm.Stop() }()
 
 	err := pm.Start()
 	require.NoError(t, err)

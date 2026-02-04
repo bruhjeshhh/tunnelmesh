@@ -61,7 +61,9 @@ func (c *NATMPClient) Probe(ctx context.Context) (net.IP, error) {
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 	}
 
 	// Send public address request (opcode 0)
@@ -112,7 +114,9 @@ func (c *NATMPClient) RequestMapping(ctx context.Context, protocol Protocol, int
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 	}
 
 	// Build mapping request
@@ -157,7 +161,9 @@ func (c *NATMPClient) RefreshMapping(ctx context.Context, existing *Mapping) (*M
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 	}
 
 	opcode := pmpOpMapUDP
@@ -200,7 +206,9 @@ func (c *NATMPClient) DeleteMapping(ctx context.Context, mapping *Mapping) error
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return err
+		}
 	}
 
 	opcode := pmpOpMapUDP

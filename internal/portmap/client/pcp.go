@@ -62,7 +62,9 @@ func (c *PCPClient) Probe(ctx context.Context) (net.IP, error) {
 
 	// Set deadline from context
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 	}
 
 	// Build announce packet
@@ -114,7 +116,9 @@ func (c *PCPClient) RequestMapping(ctx context.Context, protocol Protocol, inter
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 	}
 
 	// Build MAP request
@@ -158,7 +162,9 @@ func (c *PCPClient) RefreshMapping(ctx context.Context, existing *Mapping) (*Map
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 	}
 
 	proto := uint8(pcpUDPProtocol)
@@ -205,7 +211,9 @@ func (c *PCPClient) DeleteMapping(ctx context.Context, mapping *Mapping) error {
 	defer conn.Close()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return err
+		}
 	}
 
 	proto := uint8(pcpUDPProtocol)
@@ -262,7 +270,12 @@ func (c *PCPClient) buildMapPacket(internalPort, suggestedPort uint16, lifetimeS
 	mapData := pkt[24:]
 
 	// Generate and store nonce
-	rand.Read(c.lastNonce[:])
+	if _, err := rand.Read(c.lastNonce[:]); err != nil {
+		// Fallback to zero nonce if crypto/rand fails (unlikely)
+		for i := range c.lastNonce {
+			c.lastNonce[i] = 0
+		}
+	}
 	copy(mapData[0:12], c.lastNonce[:])
 
 	// Protocol
