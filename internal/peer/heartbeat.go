@@ -239,6 +239,11 @@ func (m *MeshNode) HandleHolePunchRequests(ctx context.Context, holePunchRequest
 
 		log.Info().Str("peer", peerName).Msg("peer wants to hole-punch with us, initiating connection")
 
+		// Pre-register outbound intent BEFORE spawning the goroutine.
+		// This ensures crossing handshake detection works correctly even if
+		// the other peer's init arrives before our goroutine starts.
+		m.PreRegisterUDPOutbound(peerName)
+
 		// Get the peer info and start a connection attempt
 		// This will use the negotiator which will try UDP hole-punching
 		go m.ConnectToPeerByName(ctx, peerName)

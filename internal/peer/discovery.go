@@ -276,6 +276,11 @@ func (m *MeshNode) buildTransportPeerInfo(peer proto.Peer) *transport.PeerInfo {
 // Uses forced initiation to bypass pubkey comparison, as hole-punch requires both sides to send.
 // Uses cached peer info if available, falls back to API if not in cache.
 func (m *MeshNode) ConnectToPeerByName(ctx context.Context, peerName string) {
+	// Clear pre-registered outbound intent when function exits.
+	// Note: initiateHandshake will re-register with the real index, and clean up on completion.
+	// This ensures the pre-registration from HandleHolePunchRequests doesn't leak if we bail early.
+	defer m.ClearUDPOutbound(peerName)
+
 	// Skip if tunnel already exists
 	if _, exists := m.tunnelMgr.Get(peerName); exists {
 		log.Debug().Str("peer", peerName).Msg("tunnel already exists, skipping connection attempt")
