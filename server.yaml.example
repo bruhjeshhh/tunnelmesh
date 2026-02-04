@@ -15,6 +15,10 @@ mesh_cidr: "10.99.0.0/16"
 # Domain suffix for mesh hostnames
 domain_suffix: ".tunnelmesh"
 
+# Log level: trace, debug, info, warn, error (default: info)
+# Use "debug" or "trace" for troubleshooting, "warn" for minimal logging
+# log_level: "info"
+
 # Admin web interface configuration
 # Access is controlled by bind_address (no authentication)
 admin:

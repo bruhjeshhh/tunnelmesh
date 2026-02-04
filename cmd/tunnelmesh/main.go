@@ -294,6 +294,14 @@ func runServeFromService(ctx context.Context, configPath string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	// Apply configured log level
+	if cfg.LogLevel != "" {
+		if level, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
+			zerolog.SetGlobalLevel(level)
+			log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
+		}
+	}
+
 	srv, err := coord.NewServer(cfg)
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)
@@ -378,6 +386,14 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		}
 	} else {
 		return fmt.Errorf("config file required")
+	}
+
+	// Apply configured log level
+	if cfg.LogLevel != "" {
+		if level, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
+			zerolog.SetGlobalLevel(level)
+			log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
+		}
 	}
 
 	log.Info().
@@ -1517,9 +1533,10 @@ func logStartupBanner() {
 // setupServiceLogging configures logging for service mode.
 // This writes directly to a file because launchd/kardianos-service
 // may not properly redirect stderr.
+// Default level is Info; can be overridden by config after loading.
 func setupServiceLogging() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 	// Try to open log file for direct writing
 	logPath := "/var/log/tunnelmesh-service.log"
