@@ -173,17 +173,11 @@ GITHUB_OWNER ?= zombar
 
 deploy-update:
 	@echo "Updating tunnelmesh on all deployed nodes..."
-	@NODES=$$(cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r 'to_entries[] | "\(.key)|\(.value)"'); \
-	if [ -z "$$NODES" ]; then \
-		echo "Error: No nodes found in terraform state. Run 'make deploy' first."; \
-		exit 1; \
-	fi; \
-	for node in $$NODES; do \
-		NAME=$${node%%|*}; \
-		SSH=$${node##*|}; \
+	@cd $(TF_DIR) && terraform output -json node_ips 2>/dev/null | jq -r 'to_entries[] | "\(.key) \(.value)"' | \
+	while read -r NAME IP; do \
 		echo ""; \
-		echo "=== Updating $$NAME ==="; \
-		$$SSH -o StrictHostKeyChecking=no -o ConnectTimeout=10 ' \
+		echo "=== Updating $$NAME ($$IP) ==="; \
+		ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
 			set -e; \
 			ARCH=$$(dpkg --print-architecture); \
 			if [ "$(BINARY_VERSION)" = "latest" ]; then \
@@ -198,9 +192,14 @@ deploy-update:
 			OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
 			echo "Current: $$OLD_VER"; \
 			echo "New:     $$NEW_VER"; \
-			mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
-			systemctl restart tunnelmesh; \
-			echo "Service restarted"; \
+			if [ "$$OLD_VER" = "$$NEW_VER" ]; then \
+				echo "Already up to date, skipping"; \
+				rm /tmp/tunnelmesh-new; \
+			else \
+				mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
+				systemctl restart tunnelmesh; \
+				echo "Service restarted"; \
+			fi; \
 		' || echo "Failed to update $$NAME"; \
 	done; \
 	echo ""; \
@@ -213,13 +212,13 @@ deploy-update-node:
 		echo "Error: NODE not specified. Usage: make deploy-update-node NODE=tunnelmesh"; \
 		exit 1; \
 	fi
-	@SSH=$$(cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r '.["$(NODE)"]'); \
-	if [ -z "$$SSH" ] || [ "$$SSH" = "null" ]; then \
+	@IP=$$(cd $(TF_DIR) && terraform output -json node_ips 2>/dev/null | jq -r '.["$(NODE)"]'); \
+	if [ -z "$$IP" ] || [ "$$IP" = "null" ]; then \
 		echo "Error: Node '$(NODE)' not found in terraform state"; \
 		exit 1; \
 	fi; \
-	echo "=== Updating $(NODE) ==="; \
-	$$SSH -o StrictHostKeyChecking=no -o ConnectTimeout=10 ' \
+	echo "=== Updating $(NODE) ($$IP) ==="; \
+	ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
 		set -e; \
 		ARCH=$$(dpkg --print-architecture); \
 		if [ "$(BINARY_VERSION)" = "latest" ]; then \
@@ -234,9 +233,14 @@ deploy-update-node:
 		OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
 		echo "Current: $$OLD_VER"; \
 		echo "New:     $$NEW_VER"; \
-		mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
-		systemctl restart tunnelmesh; \
-		echo "Service restarted"; \
+		if [ "$$OLD_VER" = "$$NEW_VER" ]; then \
+			echo "Already up to date, skipping"; \
+			rm /tmp/tunnelmesh-new; \
+		else \
+			mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
+			systemctl restart tunnelmesh; \
+			echo "Service restarted"; \
+		fi; \
 	'
 
 ghcr-login:
