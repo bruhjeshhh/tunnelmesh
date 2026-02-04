@@ -224,7 +224,11 @@ sysctl -p
 %{ endif ~}
 
 # Start the tunnelmesh service
-/usr/local/bin/tunnelmesh service start
+%{ if coordinator_enabled ~}
+/usr/local/bin/tunnelmesh service start --mode serve
+%{ else ~}
+/usr/local/bin/tunnelmesh service start --mode join
+%{ endif ~}
 
 %{ if coordinator_enabled && ssl_enabled ~}
 # Wait for DNS propagation and obtain SSL certificate
