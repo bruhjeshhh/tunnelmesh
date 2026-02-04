@@ -62,6 +62,12 @@ relay:
   enabled: ${relay_enabled}
   pair_timeout: "90s"
 
+%{ if wireguard_enabled ~}
+wireguard:
+  enabled: true
+  endpoint: "${wg_endpoint}"
+%{ endif ~}
+
 %{ if peer_enabled ~}
 # Embedded peer (join_mesh mode)
 join_mesh:
