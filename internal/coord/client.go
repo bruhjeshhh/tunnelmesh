@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -71,6 +73,67 @@ func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string
 	c.jwtToken = result.Token
 
 	return &result, nil
+}
+
+// RetryConfig configures the retry behavior for registration.
+type RetryConfig struct {
+	MaxRetries     int           // Maximum number of retry attempts (default: 10)
+	InitialBackoff time.Duration // Initial backoff duration (default: 2s)
+	MaxBackoff     time.Duration // Maximum backoff duration (default: 60s)
+}
+
+// DefaultRetryConfig returns the default retry configuration.
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxRetries:     10,
+		InitialBackoff: 2 * time.Second,
+		MaxBackoff:     60 * time.Second,
+	}
+}
+
+// RegisterWithRetry registers this peer with exponential backoff retry.
+// It will retry up to MaxRetries times if registration fails.
+func (c *Client) RegisterWithRetry(ctx context.Context, name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool, version string, cfg RetryConfig) (*proto.RegisterResponse, error) {
+	if cfg.MaxRetries == 0 {
+		cfg = DefaultRetryConfig()
+	}
+
+	backoff := cfg.InitialBackoff
+	var lastErr error
+
+	for attempt := 1; attempt <= cfg.MaxRetries; attempt++ {
+		resp, err := c.Register(name, publicKey, publicIPs, privateIPs, sshPort, udpPort, behindNAT, version)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		if attempt == cfg.MaxRetries {
+			break
+		}
+
+		log.Warn().
+			Err(err).
+			Int("attempt", attempt).
+			Int("max_attempts", cfg.MaxRetries).
+			Dur("retry_in", backoff).
+			Msg("failed to register with server, retrying...")
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		// Exponential backoff with cap
+		backoff = backoff * 2
+		if backoff > cfg.MaxBackoff {
+			backoff = cfg.MaxBackoff
+		}
+	}
+
+	return nil, fmt.Errorf("register with server after %d attempts: %w", cfg.MaxRetries, lastErr)
 }
 
 // ListPeers returns a list of all registered peers.
