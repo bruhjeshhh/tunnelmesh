@@ -270,20 +270,20 @@ function initCharts() {
             x: {
                 type: 'time',
                 time: {
-                    unit: 'hour',
                     displayFormats: {
+                        minute: 'HH:mm',
                         hour: 'HH:mm',
-                        day: 'MMM d'
+                        day: 'd MMM'
                     }
                 },
                 grid: { color: '#21262d' },
-                ticks: { color: '#8b949e', maxTicksLimit: 8 },
+                ticks: { color: '#8b949e', maxTicksLimit: 5, maxRotation: 0 },
                 border: { color: '#30363d' }
             },
             y: {
                 beginAtZero: true,
                 grid: { color: '#21262d' },
-                ticks: { color: '#8b949e' },
+                ticks: { color: '#8b949e', maxTicksLimit: 4 },
                 border: { color: '#30363d' }
             }
         },
@@ -306,7 +306,8 @@ function initCharts() {
                     y: {
                         ...chartOptions.scales.y,
                         ticks: {
-                            ...chartOptions.scales.y.ticks,
+                            color: '#8b949e',
+                            maxTicksLimit: 4,
                             callback: function(value) {
                                 return formatBytes(value) + '/s';
                             }
@@ -331,9 +332,10 @@ function initCharts() {
                     y: {
                         ...chartOptions.scales.y,
                         ticks: {
-                            ...chartOptions.scales.y.ticks,
+                            color: '#8b949e',
+                            maxTicksLimit: 4,
                             callback: function(value) {
-                                return value.toFixed(1) + ' pkt/s';
+                                return value.toFixed(0) + ' pkt/s';
                             }
                         }
                     }
