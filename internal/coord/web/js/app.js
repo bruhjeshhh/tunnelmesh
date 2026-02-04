@@ -10,9 +10,7 @@ const state = {
         throughput: null,
         packets: null,
         selectedRange: '1d',
-        sliderPosition: 100,
-        peerColors: {},
-        colorIndex: 0,
+        stacked: false,
         chartData: {
             labels: [],      // timestamps (shared across both charts)
             throughput: {},  // { peerName: [values] }
@@ -22,11 +20,9 @@ const state = {
     }
 };
 
-// Color palette for chart lines (GitHub-themed)
-const PEER_COLORS = [
-    '#58a6ff', '#3fb950', '#f0883e', '#a371f7', '#f85149',
-    '#79c0ff', '#56d364', '#ffab70', '#bc8cff', '#ff7b72'
-];
+// Single color for all chart lines (GitHub blue)
+const CHART_LINE_COLOR = '#58a6ff';
+const CHART_FILL_COLOR = 'rgba(88, 166, 255, 0.15)';
 
 // Range presets in days
 const RANGE_DAYS = {
@@ -376,8 +372,8 @@ function initCharts() {
 }
 
 function setupTimelineControls() {
-    // Setup preset buttons
-    const presetButtons = document.querySelectorAll('.preset-btn');
+    // Setup preset buttons (range selection)
+    const presetButtons = document.querySelectorAll('.preset-btn[data-range]');
     presetButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             const range = btn.dataset.range;
@@ -388,45 +384,30 @@ function setupTimelineControls() {
             btn.classList.add('active');
 
             state.charts.selectedRange = range;
-            state.charts.sliderPosition = 100;
-            document.getElementById('timeline-slider').value = 100;
-            updateTimelineLabel();
             fetchChartHistory(range);
         });
     });
 
-    // Setup slider
-    const slider = document.getElementById('timeline-slider');
-    if (slider) {
-        slider.addEventListener('input', () => {
-            state.charts.sliderPosition = parseInt(slider.value);
-            updateTimelineLabel();
-            updateChartVisibleWindow();
+    // Setup stacked button
+    const stackedBtn = document.getElementById('stacked-btn');
+    if (stackedBtn) {
+        stackedBtn.addEventListener('click', () => {
+            state.charts.stacked = !state.charts.stacked;
+            stackedBtn.classList.toggle('active', state.charts.stacked);
+            updateChartStackedMode();
+            rebuildChartDatasets();
         });
     }
-
-    updateTimelineLabel();
 }
 
-function updateTimelineLabel() {
-    const label = document.getElementById('timeline-label');
-    if (!label) return;
+function updateChartStackedMode() {
+    const stacked = state.charts.stacked;
 
-    const range = state.charts.selectedRange;
-    const days = RANGE_DAYS[range];
-    const position = state.charts.sliderPosition;
-
-    if (position === 100) {
-        label.textContent = `Last ${days === 1 ? '24 hours' : days + ' days'}`;
-    } else {
-        // Calculate the visible window based on slider position
-        const windowEnd = (position / 100);
-        const daysAgo = Math.round(days * (1 - windowEnd));
-        if (daysAgo === 0) {
-            label.textContent = `Last ${days === 1 ? '24 hours' : days + ' days'}`;
-        } else {
-            label.textContent = `${daysAgo}d - ${daysAgo + days}d ago`;
-        }
+    if (state.charts.throughput) {
+        state.charts.throughput.options.scales.y.stacked = stacked;
+    }
+    if (state.charts.packets) {
+        state.charts.packets.options.scales.y.stacked = stacked;
     }
 }
 
@@ -462,12 +443,6 @@ function initializeChartData(data) {
 
     data.peers.forEach(peer => {
         if (!peer.history || peer.history.length === 0) return;
-
-        // Assign color if new peer
-        if (!state.charts.peerColors[peer.name]) {
-            state.charts.peerColors[peer.name] = PEER_COLORS[state.charts.colorIndex % PEER_COLORS.length];
-            state.charts.colorIndex++;
-        }
 
         // History comes newest first, reverse to get oldest first
         const history = [...peer.history].reverse();
@@ -510,7 +485,6 @@ function initializeChartData(data) {
     });
 
     rebuildChartDatasets();
-    renderChartLegend();
 }
 
 function updateChartsWithNewData(peers) {
@@ -519,12 +493,6 @@ function updateChartsWithNewData(peers) {
     const now = new Date();
 
     peers.forEach(peer => {
-        // Assign color if new peer
-        if (!state.charts.peerColors[peer.name]) {
-            state.charts.peerColors[peer.name] = PEER_COLORS[state.charts.colorIndex % PEER_COLORS.length];
-            state.charts.colorIndex++;
-        }
-
         // Initialize arrays if needed
         if (!state.charts.chartData.throughput[peer.name]) {
             state.charts.chartData.throughput[peer.name] = [];
@@ -566,74 +534,49 @@ function updateChartsWithNewData(peers) {
     });
 
     rebuildChartDatasets();
-    renderChartLegend();
 }
 
 function rebuildChartDatasets() {
     const labels = state.charts.chartData.labels;
+    const stacked = state.charts.stacked;
 
-    // Build throughput datasets
+    // Build throughput datasets - all same color with fill
     const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => ({
         label: peerName,
         data: values.map((v, i) => ({ x: labels[i], y: v })),
-        borderColor: state.charts.peerColors[peerName],
-        backgroundColor: state.charts.peerColors[peerName] + '20',
-        borderWidth: 2,
+        borderColor: CHART_LINE_COLOR,
+        backgroundColor: CHART_FILL_COLOR,
+        borderWidth: 1.5,
         pointRadius: 0,
         tension: 0.3,
-        fill: false,
-        spanGaps: true
+        fill: stacked ? 'origin' : true,
+        spanGaps: true,
+        stack: stacked ? 'stack0' : undefined
     }));
 
-    // Build packets datasets
+    // Build packets datasets - all same color with fill
     const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => ({
         label: peerName,
         data: values.map((v, i) => ({ x: labels[i], y: v })),
-        borderColor: state.charts.peerColors[peerName],
-        backgroundColor: state.charts.peerColors[peerName] + '20',
-        borderWidth: 2,
+        borderColor: CHART_LINE_COLOR,
+        backgroundColor: CHART_FILL_COLOR,
+        borderWidth: 1.5,
         pointRadius: 0,
         tension: 0.3,
-        fill: false,
-        spanGaps: true
+        fill: stacked ? 'origin' : true,
+        spanGaps: true,
+        stack: stacked ? 'stack0' : undefined
     }));
 
     if (state.charts.throughput) {
         state.charts.throughput.data.datasets = throughputDatasets;
-        state.charts.throughput.update('none');
+        state.charts.throughput.update();
     }
 
     if (state.charts.packets) {
         state.charts.packets.data.datasets = packetsDatasets;
-        state.charts.packets.update('none');
+        state.charts.packets.update();
     }
-}
-
-function updateChartVisibleWindow() {
-    // This is called when the slider changes
-    // For now, we'll just refresh the data
-    // A more sophisticated implementation would adjust the chart's x-axis range
-    const range = state.charts.selectedRange;
-    fetchChartHistory(range);
-}
-
-function renderChartLegend() {
-    const legendEl = document.getElementById('chart-legend');
-    if (!legendEl) return;
-
-    const peerNames = Object.keys(state.charts.chartData.throughput);
-    if (peerNames.length === 0) {
-        legendEl.innerHTML = '<span class="legend-item" style="color: #8b949e;">No peers connected</span>';
-        return;
-    }
-
-    legendEl.innerHTML = peerNames.map(peerName => {
-        const color = state.charts.peerColors[peerName] || PEER_COLORS[0];
-        return `<span class="legend-item">
-            <span class="legend-color" style="background: ${color}"></span>
-            ${escapeHtml(peerName)}
-        </span>`;
-    }).join('');
 }
 
 function formatNumber(num) {
