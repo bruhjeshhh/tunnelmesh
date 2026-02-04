@@ -544,7 +544,9 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 	// UDP port is SSH port + 1
 	udpPort := cfg.SSHPort + 1
-	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version)
+
+	// Register with retry and exponential backoff
+	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, coord.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
