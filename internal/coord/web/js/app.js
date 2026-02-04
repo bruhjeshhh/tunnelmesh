@@ -14,7 +14,7 @@ const state = {
             throughput: {},  // { peerName: [values] }
             packets: {}      // { peerName: [values] }
         },
-        maxChartPoints: 8640  // 3 days at 30-second intervals
+        maxChartPoints: 25920  // 3 days at 10-second intervals
     }
 };
 
@@ -30,9 +30,9 @@ const GREEN_GRADIENT = [
 
 // Max time range in days (clamp to 3 days)
 const MAX_RANGE_DAYS = 3;
-// At 30-second heartbeat intervals, 3 days = 8640 points
+// At 10-second heartbeat intervals, 3 days = 25920 points
 // Request full resolution (no downsampling)
-const MAX_CHART_POINTS = 8640;
+const MAX_CHART_POINTS = 25920;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {

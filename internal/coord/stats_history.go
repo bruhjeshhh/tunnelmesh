@@ -8,8 +8,8 @@ import (
 )
 
 // MaxHistoryPoints is the maximum number of stats data points to store per peer.
-// At 30-second heartbeat intervals, this provides ~3 days of history.
-const MaxHistoryPoints = 8640
+// At 10-second heartbeat intervals, this provides ~3 days of history.
+const MaxHistoryPoints = 25920
 
 // StatsDataPoint represents a single stats measurement at a point in time.
 type StatsDataPoint struct {

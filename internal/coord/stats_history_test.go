@@ -274,15 +274,15 @@ func TestStatsHistory_FileSizeLimit(t *testing.T) {
 	now := time.Now()
 
 	// Add maximum data points for multiple peers (simulating 3 days of data)
-	// At 30-second intervals, 3 days = 8640 points per peer
+	// At 10-second intervals, 3 days = 25920 points per peer
 	numPeers := 10
-	pointsPerPeer := MaxHistoryPoints // 8640
+	pointsPerPeer := MaxHistoryPoints // 25920
 
 	for p := 0; p < numPeers; p++ {
 		peerName := "peer" + string(rune('A'+p))
 		for i := 0; i < pointsPerPeer; i++ {
 			sh.RecordStats(peerName, StatsDataPoint{
-				Timestamp:           now.Add(-time.Duration(pointsPerPeer-i) * 30 * time.Second),
+				Timestamp:           now.Add(-time.Duration(pointsPerPeer-i) * 10 * time.Second),
 				BytesSentRate:       float64(i * 100),
 				BytesReceivedRate:   float64(i * 50),
 				PacketsSentRate:     float64(i),
@@ -303,8 +303,8 @@ func TestStatsHistory_FileSizeLimit(t *testing.T) {
 
 	// File should be reasonable size
 	// Each data point is roughly 80-100 bytes in JSON
-	// 10 peers * 8640 points * ~100 bytes = ~8.6 MB max
-	maxExpectedSize := int64(15 * 1024 * 1024) // 15 MB max
+	// 10 peers * 25920 points * ~100 bytes = ~26 MB max
+	maxExpectedSize := int64(30 * 1024 * 1024) // 30 MB max
 	if info.Size() > maxExpectedSize {
 		t.Errorf("file size %d bytes exceeds expected max %d bytes", info.Size(), maxExpectedSize)
 	}

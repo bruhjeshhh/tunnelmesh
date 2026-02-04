@@ -28,6 +28,7 @@ type peerInfo struct {
 	heartbeatCount uint64
 	registeredAt   time.Time
 	lastStatsTime  time.Time
+	prevStatsTime  time.Time
 }
 
 // serverStats tracks server-level statistics.

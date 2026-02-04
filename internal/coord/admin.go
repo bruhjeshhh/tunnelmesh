@@ -138,11 +138,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 		// Calculate rates if we have previous stats
 		if info.prevStats != nil && info.stats != nil && !info.lastStatsTime.IsZero() {
-			// Rate is calculated as delta over 30 seconds (heartbeat interval)
-			peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / 30.0
-			peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / 30.0
-			peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / 30.0
-			peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / 30.0
+			// Use actual time delta for rate calculation (more accurate than fixed interval)
+			delta := info.lastStatsTime.Sub(info.prevStatsTime).Seconds()
+			if delta > 0 {
+				peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / delta
+				peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / delta
+				peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / delta
+				peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / delta
+			}
 		}
 
 		// Include history if requested
