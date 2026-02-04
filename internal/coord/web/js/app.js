@@ -9,8 +9,6 @@ const state = {
     charts: {
         throughput: null,
         packets: null,
-        selectedRange: '1d',
-        stacked: false,
         chartData: {
             labels: [],      // timestamps (shared across both charts)
             throughput: {},  // { peerName: [values] }
@@ -24,25 +22,9 @@ const state = {
 const CHART_LINE_COLOR = '#3fb950';
 const CHART_FILL_COLOR = 'rgba(63, 185, 80, 0.15)';
 
-// Range presets in days
-const RANGE_DAYS = {
-    '1d': 1,
-    '3d': 3,
-    '7d': 7,
-    '14d': 14,
-    '30d': 30,
-    '90d': 90
-};
-
-// Max points to request for each range (for downsampling)
-const RANGE_MAX_POINTS = {
-    '1d': 288,
-    '3d': 288,
-    '7d': 336,
-    '14d': 336,
-    '30d': 360,
-    '90d': 360
-};
+// Max time range in days (clamp to 3 days)
+const MAX_RANGE_DAYS = 3;
+const MAX_CHART_POINTS = 288;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
@@ -276,15 +258,13 @@ function initCharts() {
                         day: 'd MMM'
                     }
                 },
-                grid: { color: '#21262d' },
+                grid: { display: false },
                 ticks: { color: '#8b949e', maxTicksLimit: 5, maxRotation: 0 },
-                border: { color: '#30363d' }
+                border: { display: false }
             },
             y: {
-                beginAtZero: true,
-                grid: { color: '#21262d' },
-                ticks: { color: '#8b949e', maxTicksLimit: 4 },
-                border: { color: '#30363d' }
+                display: false,
+                beginAtZero: true
             }
         },
         plugins: {
@@ -293,29 +273,13 @@ function initCharts() {
         }
     };
 
-    // Throughput chart with bytes formatting
+    // Throughput chart
     const throughputCtx = document.getElementById('throughput-chart');
     if (throughputCtx) {
         state.charts.throughput = new Chart(throughputCtx, {
             type: 'line',
             data: { datasets: [] },
-            options: {
-                ...chartOptions,
-                scales: {
-                    ...chartOptions.scales,
-                    y: {
-                        ...chartOptions.scales.y,
-                        ticks: {
-                            color: '#8b949e',
-                            maxTicksLimit: 4,
-                            callback: function(value) {
-                                return formatBytes(value) + '/s';
-                            }
-                        }
-                    }
-                },
-                plugins: chartOptions.plugins
-            }
+            options: chartOptions
         });
     }
 
@@ -325,74 +289,17 @@ function initCharts() {
         state.charts.packets = new Chart(packetsCtx, {
             type: 'line',
             data: { datasets: [] },
-            options: {
-                ...chartOptions,
-                scales: {
-                    ...chartOptions.scales,
-                    y: {
-                        ...chartOptions.scales.y,
-                        ticks: {
-                            color: '#8b949e',
-                            maxTicksLimit: 4,
-                            callback: function(value) {
-                                return value.toFixed(0) + ' pkt/s';
-                            }
-                        }
-                    }
-                },
-                plugins: chartOptions.plugins
-            }
+            options: chartOptions
         });
     }
 }
 
-function setupTimelineControls() {
-    // Setup preset buttons (range selection)
-    const presetButtons = document.querySelectorAll('.preset-btn[data-range]');
-    presetButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const range = btn.dataset.range;
-            if (range === state.charts.selectedRange) return;
-
-            // Update active button
-            presetButtons.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            state.charts.selectedRange = range;
-            fetchChartHistory(range);
-        });
-    });
-
-    // Setup stacked button
-    const stackedBtn = document.getElementById('stacked-btn');
-    if (stackedBtn) {
-        stackedBtn.addEventListener('click', () => {
-            state.charts.stacked = !state.charts.stacked;
-            stackedBtn.classList.toggle('active', state.charts.stacked);
-            updateChartStackedMode();
-            rebuildChartDatasets();
-        });
-    }
-}
-
-function updateChartStackedMode() {
-    const stacked = state.charts.stacked;
-
-    if (state.charts.throughput) {
-        state.charts.throughput.options.scales.y.stacked = stacked;
-    }
-    if (state.charts.packets) {
-        state.charts.packets.options.scales.y.stacked = stacked;
-    }
-}
-
-async function fetchChartHistory(range) {
+async function fetchChartHistory() {
     try {
-        const days = RANGE_DAYS[range];
-        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-        const maxPoints = RANGE_MAX_POINTS[range];
+        // Fetch up to 3 days of history
+        const since = new Date(Date.now() - MAX_RANGE_DAYS * 24 * 60 * 60 * 1000);
 
-        const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${maxPoints}`;
+        const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${MAX_CHART_POINTS}`;
         const resp = await fetch(url);
         if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
@@ -513,7 +420,6 @@ function updateChartsWithNewData(peers) {
 
 function rebuildChartDatasets() {
     const labels = state.charts.chartData.labels;
-    const stacked = state.charts.stacked;
 
     // Build throughput datasets
     const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
@@ -521,7 +427,7 @@ function rebuildChartDatasets() {
         const firstRealIdx = values.findIndex(v => v !== null);
         const filledValues = values.map((v, i) => {
             if (v === null && i < firstRealIdx && firstRealIdx >= 0) {
-                return values[firstRealIdx]; // Use first real value for leading nulls
+                return values[firstRealIdx];
             }
             return v;
         });
@@ -529,13 +435,11 @@ function rebuildChartDatasets() {
             label: peerName,
             data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
             borderColor: CHART_LINE_COLOR,
-            backgroundColor: CHART_FILL_COLOR,
             borderWidth: 1.5,
             pointRadius: 0,
             tension: 0,
-            fill: stacked ? 'origin' : false,
-            spanGaps: true,
-            stack: stacked ? 'stack0' : undefined
+            fill: false,
+            spanGaps: true
         };
     });
 
@@ -545,7 +449,7 @@ function rebuildChartDatasets() {
         const firstRealIdx = values.findIndex(v => v !== null);
         const filledValues = values.map((v, i) => {
             if (v === null && i < firstRealIdx && firstRealIdx >= 0) {
-                return values[firstRealIdx]; // Use first real value for leading nulls
+                return values[firstRealIdx];
             }
             return v;
         });
@@ -553,13 +457,11 @@ function rebuildChartDatasets() {
             label: peerName,
             data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
             borderColor: CHART_LINE_COLOR,
-            backgroundColor: CHART_FILL_COLOR,
             borderWidth: 1.5,
             pointRadius: 0,
             tension: 0,
-            fill: stacked ? 'origin' : false,
-            spanGaps: true,
-            stack: stacked ? 'stack0' : undefined
+            fill: false,
+            spanGaps: true
         };
     });
 
@@ -847,10 +749,9 @@ async function deleteWGClient(id, name) {
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize charts first
     initCharts();
-    setupTimelineControls();
 
-    // Fetch initial chart history
-    fetchChartHistory(state.charts.selectedRange);
+    // Fetch initial chart history (up to 3 days)
+    fetchChartHistory();
 
     fetchData(true); // Load with history on initial fetch
     setInterval(() => fetchData(false), 5000); // Refresh every 5 seconds without history
