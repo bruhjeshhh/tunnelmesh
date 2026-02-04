@@ -596,7 +596,11 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			if peer.stats != nil && !peer.lastStatsTime.IsZero() {
 				// Use actual time delta for accurate rate calculation
 				delta := now.Sub(peer.lastStatsTime).Seconds()
-				if delta > 0 {
+				// Skip if delta is too large (server/peer restart) or too small
+				// Also skip if counters decreased (peer restart with counter reset)
+				if delta > 0 && delta < 60 &&
+					stats.BytesSent >= peer.stats.BytesSent &&
+					stats.BytesReceived >= peer.stats.BytesReceived {
 					dp := StatsDataPoint{
 						Timestamp:           now,
 						BytesSentRate:       float64(stats.BytesSent-peer.stats.BytesSent) / delta,
