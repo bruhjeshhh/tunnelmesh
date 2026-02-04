@@ -166,18 +166,6 @@ deploy:
 	@echo "=== Deployment Complete ==="
 	@cd $(TF_DIR) && terraform output -json nodes | jq -r 'to_entries[] | "\(.key): \(.value.ip) - \(.value.hostname)"'
 
-deploy-destroy:
-	cd $(TF_DIR) && terraform destroy
-
-deploy-taint-coordinator:
-	@COORD=$$(cd $(TF_DIR) && terraform output -raw coordinator_name 2>/dev/null); \
-	if [ -z "$$COORD" ]; then \
-		echo "Error: No coordinator found in terraform state"; \
-		exit 1; \
-	fi; \
-	echo "Tainting coordinator droplet: $$COORD"; \
-	cd $(TF_DIR) && terraform taint "module.node[\"$$COORD\"].digitalocean_droplet.node"
-
 # Update tunnelmesh binary on all deployed nodes
 # Usage: make deploy-update [BINARY_VERSION=latest]
 BINARY_VERSION ?= latest
