@@ -297,6 +297,16 @@ func (p *PersistentRelay) autoReconnect() {
 
 		if err == nil {
 			log.Info().Int("attempt", attempt).Msg("relay reconnected successfully")
+
+			// Re-announce as WG concentrator if we were one before
+			p.mu.RLock()
+			wasConcentrator := p.isWGConcentrator
+			p.mu.RUnlock()
+			if wasConcentrator {
+				if err := p.AnnounceWGConcentrator(); err != nil {
+					log.Error().Err(err).Msg("failed to re-announce as WireGuard concentrator after reconnect")
+				}
+			}
 			return
 		}
 
