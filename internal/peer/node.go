@@ -14,6 +14,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
+	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -41,6 +42,7 @@ type MeshNode struct {
 	TransportRegistry   *transport.Registry
 	TransportNegotiator *transport.Negotiator
 	SSHTransport        *sshtransport.Transport // For incoming SSH and key management
+	UDPTransport        *udptransport.Transport // For crossing handshake pre-registration
 
 	// Persistent relay for DERP-like instant connectivity
 	PersistentRelay *tunnel.PersistentRelay

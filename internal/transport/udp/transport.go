@@ -244,6 +244,29 @@ func (t *Transport) SetSessionInvalidCallback(cb func(peerName string)) {
 	t.onSessionInvalid = cb
 }
 
+// RegisterPendingOutbound pre-registers intent to connect to a peer.
+// This should be called BEFORE spawning the connection goroutine to ensure
+// crossing handshake detection works correctly. The pendingOutboundPeers map
+// is checked in handleHandshakeInit to detect and handle simultaneous connections.
+// Call ClearPendingOutbound when the connection attempt completes (success or failure).
+func (t *Transport) RegisterPendingOutbound(peerName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Use 0 as placeholder - the real index will be set in initiateHandshake
+	t.pendingOutboundPeers[peerName] = 0
+	log.Debug().Str("peer", peerName).Msg("pre-registered pending outbound for crossing handshake detection")
+}
+
+// ClearPendingOutbound removes the pending outbound registration for a peer.
+// This should be called when the connection attempt completes or if the peer
+// won't actually be connected via UDP (e.g., if UDP transport is skipped).
+func (t *Transport) ClearPendingOutbound(peerName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.pendingOutboundPeers, peerName)
+	log.Debug().Str("peer", peerName).Msg("cleared pending outbound registration")
+}
+
 // selectSocketForPeer returns the appropriate socket for communicating with the peer.
 // Returns the IPv4 socket for IPv4 addresses, IPv6 socket for IPv6 addresses.
 // Returns nil if no suitable socket is available (e.g., no IPv6 socket for IPv6 peer).
