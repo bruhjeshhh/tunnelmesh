@@ -962,9 +962,21 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		return nil, fmt.Errorf("peer public key not available")
 	}
 
-	// Attempt hole-punch if needed
-	if err := t.holePunch(ctx, opts.PeerName, peerAddr, conn); err != nil {
-		log.Debug().Err(err).Str("peer", opts.PeerName).Msg("hole-punch failed, trying direct")
+	// Check if we can skip hole-punching
+	// When both peers have PCP/NAT-PMP mappings, their external addresses
+	// are directly reachable without hole-punching
+	weHavePCP := t.HasPCPMapping()
+	peerHasPCP := opts.PeerInfo != nil && opts.PeerInfo.PCPMapped
+
+	if weHavePCP && peerHasPCP {
+		log.Debug().
+			Str("peer", opts.PeerName).
+			Msg("both peers have PCP mapping, skipping hole-punch")
+	} else {
+		// Attempt hole-punch if needed
+		if err := t.holePunch(ctx, opts.PeerName, peerAddr, conn); err != nil {
+			log.Debug().Err(err).Str("peer", opts.PeerName).Msg("hole-punch failed, trying direct")
+		}
 	}
 
 	// Perform handshake
