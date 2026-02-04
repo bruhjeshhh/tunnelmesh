@@ -18,9 +18,15 @@ const state = {
     }
 };
 
-// Single color for all chart lines (GitHub green)
-const CHART_LINE_COLOR = '#3fb950';
-const CHART_FILL_COLOR = 'rgba(63, 185, 80, 0.15)';
+// Green gradient for chart lines (dim to bright based on outlier status)
+// Dimmest green for average peers, brightest for outliers
+const GREEN_GRADIENT = [
+    '#2d4a37', // dimmest - most average
+    '#3d6b4a',
+    '#3fb950', // middle
+    '#56d364',
+    '#7ee787'  // brightest - outliers
+];
 
 // Max time range in days (clamp to 3 days)
 const MAX_RANGE_DAYS = 3;
@@ -422,8 +428,51 @@ function updateChartsWithNewData(peers) {
     rebuildChartDatasets();
 }
 
+// Calculate color for each peer based on how much they deviate from average
+// Peers close to average get dim green, outliers get bright green
+function calculatePeerColors(dataMap) {
+    const peerAverages = {};
+    const allAverages = [];
+
+    // Calculate average for each peer
+    Object.entries(dataMap).forEach(([peerName, values]) => {
+        const validValues = values.filter(v => v !== null && v > 0);
+        if (validValues.length > 0) {
+            const avg = validValues.reduce((a, b) => a + b, 0) / validValues.length;
+            peerAverages[peerName] = avg;
+            allAverages.push(avg);
+        } else {
+            peerAverages[peerName] = 0;
+        }
+    });
+
+    if (allAverages.length === 0) return {};
+
+    // Calculate overall average
+    const overallAvg = allAverages.reduce((a, b) => a + b, 0) / allAverages.length;
+
+    // Calculate max deviation from average
+    const deviations = allAverages.map(avg => Math.abs(avg - overallAvg));
+    const maxDeviation = Math.max(...deviations, 1); // avoid division by zero
+
+    // Assign colors based on deviation (normalized 0-1)
+    const colors = {};
+    Object.entries(peerAverages).forEach(([peerName, avg]) => {
+        const deviation = Math.abs(avg - overallAvg);
+        const normalizedDeviation = deviation / maxDeviation; // 0 = average, 1 = max outlier
+        const colorIndex = Math.floor(normalizedDeviation * (GREEN_GRADIENT.length - 1));
+        colors[peerName] = GREEN_GRADIENT[colorIndex];
+    });
+
+    return colors;
+}
+
 function rebuildChartDatasets() {
     const labels = state.charts.chartData.labels;
+
+    // Calculate colors based on outlier status
+    const throughputColors = calculatePeerColors(state.charts.chartData.throughput);
+    const packetsColors = calculatePeerColors(state.charts.chartData.packets);
 
     // Build throughput datasets
     const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
@@ -438,7 +487,7 @@ function rebuildChartDatasets() {
         return {
             label: peerName,
             data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
-            borderColor: CHART_LINE_COLOR,
+            borderColor: throughputColors[peerName] || GREEN_GRADIENT[2],
             borderWidth: 1.5,
             pointRadius: 0,
             tension: 0,
@@ -460,7 +509,7 @@ function rebuildChartDatasets() {
         return {
             label: peerName,
             data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
-            borderColor: CHART_LINE_COLOR,
+            borderColor: packetsColors[peerName] || GREEN_GRADIENT[2],
             borderWidth: 1.5,
             pointRadius: 0,
             tension: 0,
