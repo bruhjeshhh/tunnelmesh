@@ -407,29 +407,82 @@ function fitChartsToData() {
 function updateChartsWithNewData(peers) {
     if (!state.charts.throughput || !state.charts.packets) return;
 
-    const now = new Date();
+    // Track last seen times to detect new heartbeats
+    if (!state.charts.lastSeenTimes) {
+        state.charts.lastSeenTimes = {};
+    }
+
+    // Collect new data points with their timestamps
+    const newPoints = [];
 
     peers.forEach(peer => {
-        // Initialize arrays if needed
-        if (!state.charts.chartData.throughput[peer.name]) {
-            state.charts.chartData.throughput[peer.name] = [];
-            state.charts.chartData.packets[peer.name] = [];
+        const peerLastSeen = new Date(peer.last_seen);
+        const peerLastSeenMs = peerLastSeen.getTime();
+        const knownLastSeen = state.charts.lastSeenTimes[peer.name] || 0;
+
+        // Only process if this is a new heartbeat
+        if (peerLastSeenMs > knownLastSeen) {
+            state.charts.lastSeenTimes[peer.name] = peerLastSeenMs;
+
+            newPoints.push({
+                peer: peer.name,
+                timestamp: peerLastSeen,
+                throughput: (peer.bytes_sent_rate || 0) + (peer.bytes_received_rate || 0),
+                packets: (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0)
+            });
         }
-
-        // Calculate total throughput and packets (TX + RX)
-        const throughput = (peer.bytes_sent_rate || 0) + (peer.bytes_received_rate || 0);
-        const packets = (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0);
-
-        state.charts.chartData.throughput[peer.name].push(throughput);
-        state.charts.chartData.packets[peer.name].push(packets);
     });
 
-    // Add timestamp
-    state.charts.chartData.labels.push(now);
+    // No new data
+    if (newPoints.length === 0) return;
+
+    // Group new points by timestamp (within 5 second window = same heartbeat cycle)
+    const groups = new Map();
+    newPoints.forEach(point => {
+        // Round to nearest 5 seconds to group peers from same heartbeat cycle
+        const roundedTime = new Date(Math.round(point.timestamp.getTime() / 5000) * 5000);
+        const key = roundedTime.getTime();
+        if (!groups.has(key)) {
+            groups.set(key, { timestamp: roundedTime, peers: {} });
+        }
+        groups.get(key).peers[point.peer] = point;
+    });
+
+    // Sort groups by timestamp and add each as a data point
+    const sortedGroups = Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
+
+    sortedGroups.forEach(group => {
+        // Add timestamp
+        state.charts.chartData.labels.push(group.timestamp);
+
+        // For each existing peer, add their value (or null if no data in this group)
+        const allPeers = new Set([
+            ...Object.keys(state.charts.chartData.throughput),
+            ...Object.keys(group.peers)
+        ]);
+
+        allPeers.forEach(peerName => {
+            // Initialize arrays if needed
+            if (!state.charts.chartData.throughput[peerName]) {
+                state.charts.chartData.throughput[peerName] = [];
+                state.charts.chartData.packets[peerName] = [];
+            }
+
+            if (group.peers[peerName]) {
+                // This peer has data for this timestamp
+                state.charts.chartData.throughput[peerName].push(group.peers[peerName].throughput);
+                state.charts.chartData.packets[peerName].push(group.peers[peerName].packets);
+            } else {
+                // Peer has no data for this timestamp - use null (gap)
+                state.charts.chartData.throughput[peerName].push(null);
+                state.charts.chartData.packets[peerName].push(null);
+            }
+        });
+    });
 
     // Trim to max points (rolling window)
     const maxPoints = state.charts.maxChartPoints;
-    if (state.charts.chartData.labels.length > maxPoints) {
+    while (state.charts.chartData.labels.length > maxPoints) {
         state.charts.chartData.labels.shift();
         Object.keys(state.charts.chartData.throughput).forEach(peerName => {
             if (state.charts.chartData.throughput[peerName].length > maxPoints) {
@@ -447,6 +500,7 @@ function updateChartsWithNewData(peers) {
         if (!currentPeers.has(peerName)) {
             delete state.charts.chartData.throughput[peerName];
             delete state.charts.chartData.packets[peerName];
+            delete state.charts.lastSeenTimes[peerName];
         }
     });
 
