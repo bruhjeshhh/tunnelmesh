@@ -225,9 +225,9 @@ sysctl -p
 
 # Start the tunnelmesh service
 %{ if coordinator_enabled ~}
-/usr/local/bin/tunnelmesh service start --mode serve
+/usr/local/bin/tunnelmesh service start --name tunnelmesh-server
 %{ else ~}
-/usr/local/bin/tunnelmesh service start --mode join
+/usr/local/bin/tunnelmesh service start --name tunnelmesh
 %{ endif ~}
 
 %{ if coordinator_enabled && ssl_enabled ~}
