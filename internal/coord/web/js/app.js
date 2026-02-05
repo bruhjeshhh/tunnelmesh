@@ -579,7 +579,8 @@ function rebuildChartDatasets() {
             borderColor: throughputColors[peerName] || GREEN_GRADIENT[2],
             borderWidth: 1.5,
             pointRadius: 0,
-            tension: 0,
+            tension: 0.3,
+            cubicInterpolationMode: 'monotone',
             fill: false,
             spanGaps: true
         };
@@ -601,7 +602,8 @@ function rebuildChartDatasets() {
             borderColor: packetsColors[peerName] || GREEN_GRADIENT[2],
             borderWidth: 1.5,
             pointRadius: 0,
-            tension: 0,
+            tension: 0.3,
+            cubicInterpolationMode: 'monotone',
             fill: false,
             spanGaps: true
         };
