@@ -117,7 +117,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		City:      "London",
 		Country:   "United Kingdom",
 	}
-	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location)
+	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false)
 	require.NoError(t, err)
 
 	// Fetch admin overview
@@ -139,6 +139,128 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	assert.Equal(t, "manual", overview.Peers[0].Location.Source)
 	assert.Equal(t, "London", overview.Peers[0].Location.City)
 	assert.Equal(t, "United Kingdom", overview.Peers[0].Location.Country)
+}
+
+func TestAdminOverview_ExitNodeInfo(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Admin: config.AdminConfig{
+			Enabled: true,
+		},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Register an exit node
+	client := NewClient(ts.URL, "test-token")
+	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true)
+	require.NoError(t, err)
+
+	// Register a client that uses the exit node
+	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false)
+	require.NoError(t, err)
+
+	// Fetch admin overview
+	resp, err := http.Get(ts.URL + "/admin/api/overview")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var overview AdminOverview
+	err = json.NewDecoder(resp.Body).Decode(&overview)
+	require.NoError(t, err)
+
+	// Find peers by name
+	var exitNodeInfo, clientInfo *AdminPeerInfo
+	for i := range overview.Peers {
+		if overview.Peers[i].Name == "exit-node" {
+			exitNodeInfo = &overview.Peers[i]
+		}
+		if overview.Peers[i].Name == "client1" {
+			clientInfo = &overview.Peers[i]
+		}
+	}
+
+	require.NotNil(t, exitNodeInfo, "exit-node should be in peers")
+	require.NotNil(t, clientInfo, "client1 should be in peers")
+
+	// Verify exit node info
+	assert.True(t, exitNodeInfo.AllowsExitTraffic, "exit-node should allow exit traffic")
+	assert.Equal(t, "", exitNodeInfo.ExitNode, "exit-node should not have an exit node")
+	assert.Contains(t, exitNodeInfo.ExitClients, "client1", "exit-node should have client1 as exit client")
+
+	// Verify client info
+	assert.False(t, clientInfo.AllowsExitTraffic, "client1 should not allow exit traffic")
+	assert.Equal(t, "exit-node", clientInfo.ExitNode, "client1 should use exit-node")
+	assert.Empty(t, clientInfo.ExitClients, "client1 should not have exit clients")
+}
+
+func TestAdminOverview_ConnectionTypes(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Admin: config.AdminConfig{
+			Enabled: true,
+		},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Register a peer
+	client := NewClient(ts.URL, "test-token")
+	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false)
+	require.NoError(t, err)
+
+	// Directly set stats on the server (simulating heartbeat)
+	// This is necessary because heartbeats are sent via WebSocket in production
+	srv.peersMu.Lock()
+	if peerInfo, ok := srv.peers["peer1"]; ok {
+		peerInfo.stats = &proto.PeerStats{
+			PacketsSent: 100,
+			Connections: map[string]string{
+				"peer2": "ssh",
+				"peer3": "udp",
+			},
+		}
+	}
+	srv.peersMu.Unlock()
+
+	// Fetch admin overview
+	resp, err := http.Get(ts.URL + "/admin/api/overview")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var overview AdminOverview
+	err = json.NewDecoder(resp.Body).Decode(&overview)
+	require.NoError(t, err)
+
+	// Find peer1
+	var peer1Info *AdminPeerInfo
+	for i := range overview.Peers {
+		if overview.Peers[i].Name == "peer1" {
+			peer1Info = &overview.Peers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, peer1Info, "peer1 should be in peers")
+	require.NotNil(t, peer1Info.Connections, "peer1 should have connections")
+	assert.Equal(t, "ssh", peer1Info.Connections["peer2"])
+	assert.Equal(t, "udp", peer1Info.Connections["peer3"])
 }
 
 func TestDownsampleHistory_Uniformity(t *testing.T) {

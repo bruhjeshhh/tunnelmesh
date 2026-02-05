@@ -18,6 +18,7 @@ admin:
 join_mesh:
   name: "server-node"
   private_key: "/root/.tunnelmesh/id_ed25519"
+  allow_exit_traffic: true  # Allow clients to route internet through this node
   tun:
     name: "tun-mesh0"
     mtu: 1400

@@ -7,6 +7,7 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
 - **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic fallback
 - **Coordination Server** - Central hub for peer discovery, IP allocation, and NAT traversal coordination (not a traffic router)
+- **Exit Nodes** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
@@ -133,6 +134,7 @@ admin:
 join_mesh:
   name: "server-node"
   private_key: "~/.tunnelmesh/id_ed25519"
+  allow_exit_traffic: true  # Allow clients to route internet through this node
   tun:
     name: "tun-mesh0"
     mtu: 1400
@@ -159,6 +161,15 @@ ssh_port: 2222
 
 # Path to SSH private key
 private_key: "~/.tunnelmesh/id_ed25519"
+
+# Exit node settings (optional)
+exit_node: "server-node"      # Route internet traffic through this peer
+allow_exit_traffic: false     # Set true to allow others to use this node as exit
+
+# Manual location (optional, overrides IP geolocation)
+location:
+  latitude: 52.3676
+  longitude: 4.9041
 
 # TUN interface settings
 tun:
@@ -189,6 +200,51 @@ The default transport order is: UDP → SSH → Relay. The system automatically 
 - Per-peer preferences: Configure different transports for specific peers via admin UI
 - NAT traversal: Built-in STUN-like endpoint discovery and UDP hole-punching
 - Zero-copy forwarding: Optimized packet path for high throughput
+
+### Exit Nodes (Split-Tunnel VPN)
+
+Route internet traffic through a designated peer while keeping mesh-to-mesh traffic direct. This is useful for:
+- Accessing geo-restricted content through a peer in another region
+- Privacy: route external traffic through a trusted exit point
+- Compliance: ensure internet traffic egresses from a specific location
+
+```
+┌─────────────────┐                      ┌─────────────────┐
+│   Client Peer   │                      │   Exit Node     │
+│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│                 │                      │                 │
+│  Internet ──────┼──── Tunnel ─────────►│──► Internet     │
+│  traffic        │  (encrypted)         │   (NAT)         │
+│                 │                      │                 │
+│  Mesh traffic ──┼──── Direct ─────────►│  Other peers    │
+└─────────────────┘                      └─────────────────┘
+```
+
+**On the exit node** (the peer that will forward internet traffic):
+```bash
+tunnelmesh join --allow-exit-traffic
+```
+
+Or in config:
+```yaml
+allow_exit_traffic: true
+```
+
+**On the client** (the peer that wants to route through the exit):
+```bash
+tunnelmesh join --exit-node exit-peer-name
+```
+
+Or in config:
+```yaml
+exit_node: "exit-peer-name"
+```
+
+TunnelMesh automatically configures:
+- **Exit node**: IP forwarding and NAT/masquerade rules
+- **Client**: Default routes (0.0.0.0/1 and 128.0.0.0/1) through the TUN interface
+
+This works on Linux and macOS. On Windows, manual route configuration may be required.
 
 ### Config File Locations
 
@@ -225,6 +281,15 @@ The tool searches for config files in the following order:
 | `-s, --server` | Coordination server URL |
 | `-t, --token` | Authentication token |
 | `-n, --name` | Node name |
+
+### Join Flags
+
+| Flag | Description |
+|------|-------------|
+| `--exit-node` | Route internet traffic through specified peer |
+| `--allow-exit-traffic` | Allow this node to act as an exit node |
+| `--latitude` | Manual latitude for location (overrides IP geolocation) |
+| `--longitude` | Manual longitude for location |
 
 ## Running as a System Service
 

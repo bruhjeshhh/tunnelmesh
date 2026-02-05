@@ -82,6 +82,10 @@ var (
 	longitude float64
 	city      string
 
+	// Exit node flags
+	exitNodeFlag       string
+	allowExitTraffic   bool
+
 	// Server feature flags
 	locationsEnabled bool
 
@@ -143,6 +147,8 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
 	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
+	joinCmd.Flags().StringVar(&exitNodeFlag, "exit-node", "", "name of peer to route internet traffic through")
+	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this node to act as exit node for other peers")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -536,6 +542,12 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if city != "" {
 		cfg.Geolocation.City = city
 	}
+	if exitNodeFlag != "" {
+		cfg.ExitNode = exitNodeFlag
+	}
+	if allowExitTraffic {
+		cfg.AllowExitTraffic = true
+	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
@@ -606,7 +618,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	// Register with retry and exponential backoff
-	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, coord.DefaultRetryConfig())
+	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, cfg.ExitNode, cfg.AllowExitTraffic, coord.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -654,6 +666,51 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		forwarder.SetLocalIP(net.ParseIP(resp.MeshIP))
 	}
 	node.Forwarder = forwarder
+
+	// Configure exit node settings
+	if tunDev != nil {
+		// Parse mesh CIDR for split-tunnel detection
+		_, meshNet, err := net.ParseCIDR(resp.MeshCIDR)
+		if err != nil {
+			log.Warn().Err(err).Str("cidr", resp.MeshCIDR).Msg("failed to parse mesh CIDR, exit routing disabled")
+		} else {
+			forwarder.SetMeshCIDR(meshNet)
+
+			exitCfg := tun.ExitRouteConfig{
+				InterfaceName: tunDev.Name(),
+				MeshCIDR:      resp.MeshCIDR,
+			}
+
+			// Configure exit node routing (client side)
+			if cfg.ExitNode != "" {
+				// Strip domain suffix if present (allow both "peer" and "peer.tunnelmesh")
+				exitNodeName := cfg.ExitNode
+				if resp.Domain != "" && strings.HasSuffix(exitNodeName, resp.Domain) {
+					exitNodeName = strings.TrimSuffix(exitNodeName, resp.Domain)
+				}
+				forwarder.SetExitNode(exitNodeName)
+				log.Info().Str("exit_node", exitNodeName).Msg("exit node configured, internet traffic will route through peer")
+
+				if err := tun.ConfigureExitRoutes(exitCfg); err != nil {
+					log.Warn().Err(err).Msg("failed to configure exit routes, manual setup may be required")
+				} else {
+					log.Info().Msg("exit routes configured (0.0.0.0/1, 128.0.0.0/1 via TUN)")
+				}
+			}
+
+			// Configure NAT for exit node (server side)
+			if cfg.AllowExitTraffic {
+				log.Info().Msg("this node allows exit traffic from other peers")
+				exitCfg.IsExitNode = true
+
+				if err := tun.ConfigureExitNAT(exitCfg); err != nil {
+					log.Warn().Err(err).Msg("failed to configure exit NAT, manual setup may be required")
+				} else {
+					log.Info().Msg("exit NAT configured (IP forwarding + masquerade)")
+				}
+			}
+		}
+	}
 
 	// When forwarder detects a dead tunnel (write fails), disconnect the peer
 	// This removes the tunnel and triggers discovery for reconnection

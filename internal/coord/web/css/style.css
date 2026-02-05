@@ -717,6 +717,45 @@ td {
     margin-left: 0.25rem;
 }
 
+/* Exit node badge (square corners, compact) */
+.status-badge.exit {
+    background: rgba(240, 165, 0, 0.2);
+    color: #f0a500;
+    border-color: rgba(240, 165, 0, 0.5);
+    border-radius: 0;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+
+/* Transport type badges */
+.status-badge.ssh {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--color-accent-green);
+    border-color: rgba(63, 185, 80, 0.4);
+}
+
+.status-badge.udp {
+    background: rgba(88, 166, 255, 0.15);
+    color: #58a6ff;
+    border-color: rgba(88, 166, 255, 0.4);
+}
+
+.status-badge.relay {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    border-color: rgba(210, 153, 34, 0.4);
+}
+
+/* Exit node text indicator */
+.exit-via {
+    font-size: 0.7rem;
+    color: #f0a500;
+    margin-left: 0.25rem;
+}
+
 .empty-state {
     text-align: center;
     padding: 3rem;

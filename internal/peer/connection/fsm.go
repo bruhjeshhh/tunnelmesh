@@ -325,6 +325,7 @@ type ConnectionInfo struct {
 	ConnectedSince time.Time
 	ReconnectCount int
 	HasTunnel      bool
+	TransportType  string // "ssh", "udp", "relay", or "" if not connected
 }
 
 // Info returns a snapshot of the connection's current state.
@@ -340,5 +341,6 @@ func (pc *PeerConnection) Info() ConnectionInfo {
 		ConnectedSince: pc.connectedSince,
 		ReconnectCount: pc.reconnectCount,
 		HasTunnel:      pc.tunnel != nil,
+		TransportType:  pc.transportType,
 	}
 }

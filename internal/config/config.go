@@ -66,7 +66,9 @@ type PeerConfig struct {
 	TUN               TUNConfig           `yaml:"tun"`
 	DNS               DNSConfig           `yaml:"dns"`
 	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
-	Geolocation       GeolocationConfig   `yaml:"geolocation"` // Manual geolocation coordinates
+	Geolocation       GeolocationConfig   `yaml:"geolocation"`       // Manual geolocation coordinates
+	ExitNode          string              `yaml:"exit_node"`         // Name of peer to route internet traffic through
+	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this node to act as exit node for other peers
 }
 
 // TUNConfig holds configuration for the TUN interface.

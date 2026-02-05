@@ -370,18 +370,20 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := &proto.Peer{
-		Name:        req.Name,
-		PublicKey:   req.PublicKey,
-		PublicIPs:   req.PublicIPs,
-		PrivateIPs:  req.PrivateIPs,
-		SSHPort:     req.SSHPort,
-		UDPPort:     req.UDPPort,
-		MeshIP:      meshIP,
-		LastSeen:    time.Now(),
-		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,
-		BehindNAT:   req.BehindNAT,
-		Version:     req.Version,
-		Location:    location,
+		Name:              req.Name,
+		PublicKey:         req.PublicKey,
+		PublicIPs:         req.PublicIPs,
+		PrivateIPs:        req.PrivateIPs,
+		SSHPort:           req.SSHPort,
+		UDPPort:           req.UDPPort,
+		MeshIP:            meshIP,
+		LastSeen:          time.Now(),
+		Connectable:       len(req.PublicIPs) > 0 && !req.BehindNAT,
+		BehindNAT:         req.BehindNAT,
+		Version:           req.Version,
+		Location:          location,
+		AllowsExitTraffic: req.AllowsExitTraffic,
+		ExitNode:          req.ExitNode,
 	}
 
 	// Preserve registeredAt for existing peers

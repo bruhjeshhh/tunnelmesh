@@ -316,8 +316,20 @@ function updateDashboard(data, loadHistory = false) {
         }
     });
 
+    // Sort peers: exit nodes first, then online, then by name
+    const sortedPeers = [...data.peers].sort((a, b) => {
+        // Exit-capable nodes (allows_exit_traffic) come first
+        if (a.allows_exit_traffic && !b.allows_exit_traffic) return -1;
+        if (!a.allows_exit_traffic && b.allows_exit_traffic) return 1;
+        // Online nodes come before offline
+        if (a.online && !b.online) return -1;
+        if (!a.online && b.online) return 1;
+        // Then sort by name
+        return a.name.localeCompare(b.name);
+    });
+
     // Store peers data for pagination
-    state.currentPeers = data.peers;
+    state.currentPeers = sortedPeers;
 
     // Render tables with pagination (reuse the render functions)
     renderDnsTable();
@@ -445,9 +457,11 @@ function renderPeersTable() {
     dom.peersBody.innerHTML = visiblePeers.map(peer => {
         const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
         const peerNameEscaped = escapeHtml(peer.name);
+        const exitBadge = peer.allows_exit_traffic ? '<span class="status-badge exit">EXIT</span>' : '';
+        const exitVia = peer.exit_node ? `<span class="exit-via">via ${escapeHtml(peer.exit_node)}</span>` : '';
         return `
         <tr>
-            <td><strong>${peerNameEscaped}</strong></td>
+            <td><strong>${peerNameEscaped}</strong>${exitBadge}${exitVia}</td>
             <td><code>${peer.mesh_ip}</code></td>
             <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
             <td class="ports-cell">${formatPorts(peer)}</td>

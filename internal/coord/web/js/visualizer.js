@@ -32,7 +32,12 @@ const COLORS = {
     text: '#e6edf3',
     textDim: '#8b949e',
     connection: '#30363d',
-    connectionHighlight: '#58a6ff'
+    connectionHighlight: '#58a6ff',
+    exitConnection: '#f0a500',  // Golden color for exit path connections
+    // Transport type badge colors
+    transportSSH: '#3fb950',    // Green
+    transportUDP: '#58a6ff',    // Blue
+    transportRelay: '#d29922'   // Orange/amber
 };
 
 // =============================================================================
@@ -62,6 +67,14 @@ class VisualizerNode {
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
         this.dnsName = fullDns.length > 25 ? fullDns.substring(0, 22) + '...' : fullDns;
+
+        // Exit node info
+        this.exitNode = peer.exit_node || '';           // Name of peer this node uses as exit
+        this.allowsExitTraffic = peer.allows_exit_traffic || false;  // Whether this node can be exit
+        this.exitClients = peer.exit_clients || [];     // Clients using this as exit
+
+        // Connection types (peer -> transport type)
+        this.connections = peer.connections || {};
 
         // Layout positions
         this.x = 0;
@@ -168,10 +181,12 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     slots.push(centerSlot);
 
     // Bidirectional mesh visualization:
-    // Left: nodes that can reach selected (incoming)
-    // Right: nodes that selected can reach (outgoing)
+    // Left: nodes that can reach selected (incoming), plus exit clients using selected as exit
+    // Right: nodes that selected can reach (outgoing), plus selected's exit node
     const incoming = [];
     const outgoing = [];
+    const incomingSet = new Set();
+    const outgoingSet = new Set();
 
     for (const [id, node] of nodes) {
         if (id === selectedId) continue;
@@ -179,16 +194,52 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
 
         if (canNodeReach(node, selectedNode)) {
             incoming.push(node);
+            incomingSet.add(id);
         }
         if (canNodeReach(selectedNode, node)) {
             outgoing.push(node);
+            outgoingSet.add(id);
         }
     }
 
-    // Sort consistently
-    const sortByName = (a, b) => a.name.localeCompare(b.name);
-    incoming.sort(sortByName);
-    outgoing.sort(sortByName);
+    // Always include selected node's exit node in outgoing (if configured and exists)
+    if (selectedNode.exitNode && nodes.has(selectedNode.exitNode) && !outgoingSet.has(selectedNode.exitNode)) {
+        const exitNodeObj = nodes.get(selectedNode.exitNode);
+        outgoing.push(exitNodeObj);
+        outgoingSet.add(selectedNode.exitNode);
+    }
+
+    // Always include exit clients (nodes using selected as their exit) in incoming
+    if (selectedNode.exitClients) {
+        for (const clientName of selectedNode.exitClients) {
+            if (nodes.has(clientName) && !incomingSet.has(clientName)) {
+                const clientNode = nodes.get(clientName);
+                if (clientNode.online) {
+                    incoming.push(clientNode);
+                    incomingSet.add(clientName);
+                }
+            }
+        }
+    }
+
+    // Sort: exit nodes first, then by name
+    // For outgoing: selected's exit node first, then other exit-capable nodes, then rest
+    // For incoming: nodes using selected as exit first, then other exit-capable nodes, then rest
+    const sortWithExitPriority = (selectedExitNode, isIncoming) => (a, b) => {
+        // Selected's exit node goes first (only for outgoing)
+        if (!isIncoming && selectedExitNode) {
+            if (a.name === selectedExitNode) return -1;
+            if (b.name === selectedExitNode) return 1;
+        }
+        // Exit-capable nodes (allowsExitTraffic) come next
+        if (a.allowsExitTraffic && !b.allowsExitTraffic) return -1;
+        if (!a.allowsExitTraffic && b.allowsExitTraffic) return 1;
+        // Then sort by name
+        return a.name.localeCompare(b.name);
+    };
+
+    incoming.sort(sortWithExitPriority(null, true));
+    outgoing.sort(sortWithExitPriority(selectedNode.exitNode, false));
 
     // Create slots for each column
     layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left, slots, 'left');
@@ -325,6 +376,12 @@ class NodeVisualizer {
                 node.bytesSentRate = peer.bytes_sent_rate || 0;
                 node.bytesReceivedRate = peer.bytes_received_rate || 0;
                 node.region = extractRegion(peer);
+                // Exit node info
+                node.exitNode = peer.exit_node || '';
+                node.allowsExitTraffic = peer.allows_exit_traffic || false;
+                node.exitClients = peer.exit_clients || [];
+                // Connection types
+                node.connections = peer.connections || {};
             } else {
                 // Add new node
                 const node = new VisualizerNode(peer, this.domainSuffix, nodeType);
@@ -812,9 +869,15 @@ class NodeVisualizer {
 
             const isLeft = slot.side === 'left';
 
+            // Check if this is an exit path connection (only for outbound/right side)
+            // Exit path is golden only when: slot is on right AND it's the center node's exit node
+            const centerNode = centerSlot.node;
+            const otherNode = slot.node;
+            const isExitPath = !isLeft && (centerNode.exitNode === otherNode.name);
+
             ctx.beginPath();
-            ctx.strokeStyle = COLORS.connectionHighlight;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = isExitPath ? COLORS.exitConnection : COLORS.connectionHighlight;
+            ctx.lineWidth = isExitPath ? 3 : 2;  // Thicker for exit path
 
             const startX = isLeft ? slot.x + CARD_WIDTH / 2 : slot.x - CARD_WIDTH / 2;
             const startY = slot.y;
@@ -827,8 +890,9 @@ class NodeVisualizer {
             ctx.bezierCurveTo(midX, startY, midX, endY, endX, endY);
             ctx.stroke();
 
-            // Connection dots
-            ctx.fillStyle = COLORS.connectionHighlight;
+            // Connection dots - use same color as line
+            const dotColor = isExitPath ? COLORS.exitConnection : COLORS.connectionHighlight;
+            ctx.fillStyle = dotColor;
             ctx.beginPath();
             ctx.arc(startX, startY, CONNECTION_DOT_RADIUS, 0, Math.PI * 2);
             ctx.fill();
@@ -845,7 +909,17 @@ class NodeVisualizer {
 
         const tabText = node.name;
         ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-        const tabWidth = ctx.measureText(tabText).width + 14;
+        const tabTextWidth = ctx.measureText(tabText).width;
+
+        // Calculate EXIT badge width if needed
+        let exitBadgeWidth = 0;
+        if (node.allowsExitTraffic) {
+            ctx.font = 'bold 8px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            const exitTextWidth = ctx.measureText('EXIT').width;
+            exitBadgeWidth = exitTextWidth + 6 + 6; // padding + gap before badge
+        }
+
+        const tabWidth = tabTextWidth + 14 + exitBadgeWidth;
         const tabX = x;
         const tabY = y - TAB_HEIGHT;
 
@@ -873,10 +947,18 @@ class NodeVisualizer {
         ctx.stroke();
 
         // Tab text
+        ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         ctx.fillStyle = COLORS.text;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(tabText, tabX + 7, tabY + TAB_HEIGHT / 2);
+
+        // Exit badge next to title in tab (for nodes that allow exit traffic)
+        if (node.allowsExitTraffic) {
+            const badgeX = tabX + 7 + tabTextWidth + 6; // after text + gap
+            const badgeY = tabY + (TAB_HEIGHT - 12) / 2; // vertically centered (badge height = 12)
+            this.drawExitBadge(ctx, badgeX, badgeY);
+        }
 
         // Content
         const contentX = x + 10;
@@ -913,6 +995,69 @@ class NodeVisualizer {
             ctx.textAlign = 'left';
             ctx.fillText(node.region, contentX, contentY + lineHeight * 2 + 8);
         }
+
+        // Transport type badge (show connection type to selected node)
+        const selectedNode = this.selectedNodeId ? this.nodes.get(this.selectedNodeId) : null;
+        if (selectedNode && slot.side !== 'center') {
+            // Get transport type from this node's connections to the selected node
+            // or from selected node's connections to this node
+            let transportType = node.connections[selectedNode.name] ||
+                               selectedNode.connections[node.name];
+            if (transportType) {
+                this.drawTransportBadge(ctx, x + CARD_WIDTH - 10, contentY + lineHeight * 2 + 8, transportType);
+            }
+        }
+    }
+
+    drawTransportBadge(ctx, x, y, transportType) {
+        const type = transportType.toLowerCase();
+        let color;
+        switch (type) {
+            case 'ssh':
+                color = COLORS.transportSSH;
+                break;
+            case 'udp':
+                color = COLORS.transportUDP;
+                break;
+            case 'relay':
+                color = COLORS.transportRelay;
+                break;
+            default:
+                color = COLORS.textDim;
+        }
+
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = color;
+        ctx.fillText(type.toUpperCase(), x, y);
+    }
+
+    drawExitBadge(ctx, x, y) {
+        const text = 'EXIT';
+        ctx.font = 'bold 8px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        const textWidth = ctx.measureText(text).width;
+
+        // Draw badge background (square corners)
+        const paddingH = 3;  // horizontal padding
+        const paddingV = 2;  // vertical padding
+        const badgeWidth = textWidth + paddingH * 2;
+        const badgeHeight = 12;
+        const badgeX = x;
+        const badgeY = y;
+
+        ctx.fillStyle = 'rgba(240, 165, 0, 0.2)';
+        ctx.strokeStyle = 'rgba(240, 165, 0, 0.5)';
+        ctx.lineWidth = 1;
+
+        // Square corners - use fillRect/strokeRect instead of roundRect
+        ctx.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
+        ctx.strokeRect(badgeX, badgeY, badgeWidth, badgeHeight);
+
+        // Draw text centered in badge
+        ctx.fillStyle = COLORS.exitConnection;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2);
     }
 
 }

@@ -329,3 +329,154 @@ func TestRegisterRequest_WithLocation(t *testing.T) {
 	assert.Equal(t, 51.5074, decoded.Location.Latitude)
 	assert.Equal(t, -0.1278, decoded.Location.Longitude)
 }
+
+// Exit Node Feature Tests
+
+func TestPeerStats_ConnectionsJSON(t *testing.T) {
+	stats := PeerStats{
+		PacketsSent:   100,
+		ActiveTunnels: 3,
+		Connections: map[string]string{
+			"peer-a": "udp",
+			"peer-b": "ssh",
+			"peer-c": "relay",
+		},
+	}
+
+	// Test marshaling
+	data, err := json.Marshal(stats)
+	require.NoError(t, err)
+
+	// Test unmarshaling
+	var decoded PeerStats
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, stats.PacketsSent, decoded.PacketsSent)
+	assert.Equal(t, stats.ActiveTunnels, decoded.ActiveTunnels)
+	require.NotNil(t, decoded.Connections)
+	assert.Len(t, decoded.Connections, 3)
+	assert.Equal(t, "udp", decoded.Connections["peer-a"])
+	assert.Equal(t, "ssh", decoded.Connections["peer-b"])
+	assert.Equal(t, "relay", decoded.Connections["peer-c"])
+}
+
+func TestPeerStats_ConnectionsOmitEmpty(t *testing.T) {
+	// Empty connections should be omitted from JSON
+	stats := PeerStats{
+		PacketsSent:   50,
+		ActiveTunnels: 1,
+	}
+
+	data, err := json.Marshal(stats)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	err = json.Unmarshal(data, &m)
+	require.NoError(t, err)
+
+	_, hasConnections := m["connections"]
+	assert.False(t, hasConnections, "connections should be omitted when nil")
+}
+
+func TestPeer_ExitNodeFields(t *testing.T) {
+	peer := Peer{
+		Name:              "exit-node-1",
+		MeshIP:            "10.99.0.5",
+		AllowsExitTraffic: true,
+	}
+
+	// Test marshaling
+	data, err := json.Marshal(peer)
+	require.NoError(t, err)
+
+	// Test unmarshaling
+	var decoded Peer
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, "exit-node-1", decoded.Name)
+	assert.True(t, decoded.AllowsExitTraffic)
+}
+
+func TestPeer_UsingExitNode(t *testing.T) {
+	peer := Peer{
+		Name:     "client-1",
+		MeshIP:   "10.99.0.10",
+		ExitNode: "exit-node-1",
+	}
+
+	// Test marshaling
+	data, err := json.Marshal(peer)
+	require.NoError(t, err)
+
+	// Test unmarshaling
+	var decoded Peer
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, "client-1", decoded.Name)
+	assert.Equal(t, "exit-node-1", decoded.ExitNode)
+}
+
+func TestPeer_ExitFieldsOmitEmpty(t *testing.T) {
+	// Exit fields should be omitted when false/empty
+	peer := Peer{
+		Name:   "regular-peer",
+		MeshIP: "10.99.0.1",
+	}
+
+	data, err := json.Marshal(peer)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	err = json.Unmarshal(data, &m)
+	require.NoError(t, err)
+
+	_, hasAllowsExit := m["allows_exit_traffic"]
+	_, hasExitNode := m["exit_node"]
+	assert.False(t, hasAllowsExit, "allows_exit_traffic should be omitted when false")
+	assert.False(t, hasExitNode, "exit_node should be omitted when empty")
+}
+
+func TestRegisterRequest_ExitNodeFields(t *testing.T) {
+	req := RegisterRequest{
+		Name:              "exit-node",
+		PublicKey:         "ssh-ed25519 AAAA...",
+		SSHPort:           2222,
+		AllowsExitTraffic: true,
+	}
+
+	// Test marshaling
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	// Test unmarshaling
+	var decoded RegisterRequest
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, "exit-node", decoded.Name)
+	assert.True(t, decoded.AllowsExitTraffic)
+}
+
+func TestRegisterRequest_UsingExitNode(t *testing.T) {
+	req := RegisterRequest{
+		Name:      "client",
+		PublicKey: "ssh-ed25519 BBBB...",
+		SSHPort:   2222,
+		ExitNode:  "exit-node",
+	}
+
+	// Test marshaling
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	// Test unmarshaling
+	var decoded RegisterRequest
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, "client", decoded.Name)
+	assert.Equal(t, "exit-node", decoded.ExitNode)
+}
