@@ -22,3 +22,44 @@ admin:
   # If not set, admin interface is open (NOT recommended for production)
   # Generate a secure token, e.g.: openssl rand -hex 32
   token: "your-admin-token-here"
+
+# WebSocket relay for peers that can't establish direct connections
+relay:
+  enabled: true
+  pair_timeout: "90s"
+
+# Node location tracking (shows map in admin dashboard)
+# WARNING: Queries ip-api.com to geolocate nodes by public IP
+locations: false
+
+# WireGuard endpoint advertised to mobile clients (when server runs WG concentrator)
+# wireguard:
+#   enabled: true
+#   endpoint: "server.example.com:51820"
+
+# Server as mesh peer (all-in-one deployment)
+# join_mesh:
+#   name: "server-node"
+#   ssh_port: 2222
+#   private_key: "/etc/tunnelmesh/peer.key"
+#   tun:
+#     name: tun-mesh
+#     mtu: 1400
+#   dns:
+#     enabled: true
+#     listen: "127.0.0.1:5353"
+#   # Exit node (split-tunnel VPN)
+#   # allow_exit_traffic: true
+#   # exit_node: "other-peer"
+#   # Manual location (overrides IP geolocation)
+#   # location:
+#   #   latitude: 52.3676
+#   #   longitude: 4.9041
+#   #   city: "Amsterdam"
+#   #   country: "Netherlands"
+#   # WireGuard concentrator for mobile clients
+#   # wireguard:
+#   #   enabled: true
+#   #   listen_port: 51820
+#   #   data_dir: /var/lib/tunnelmesh/wireguard
+#   #   endpoint: "server.example.com:51820"

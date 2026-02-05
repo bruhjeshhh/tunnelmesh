@@ -7,6 +7,7 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
 - **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic fallback
 - **Coordination Server** - Central hub for peer discovery, IP allocation, and NAT traversal coordination (not a traffic router)
+- **Exit Nodes** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
@@ -190,6 +191,51 @@ The default transport order is: UDP → SSH → Relay. The system automatically 
 - NAT traversal: Built-in STUN-like endpoint discovery and UDP hole-punching
 - Zero-copy forwarding: Optimized packet path for high throughput
 
+### Exit Nodes (Split-Tunnel VPN)
+
+Route internet traffic through a designated peer while keeping mesh-to-mesh traffic direct. This is useful for:
+- Accessing geo-restricted content through a peer in another region
+- Privacy: route external traffic through a trusted exit point
+- Compliance: ensure internet traffic egresses from a specific location
+
+```
+┌─────────────────┐                      ┌─────────────────┐
+│   Client Peer   │                      │   Exit Node     │
+│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│                 │                      │                 │
+│  Internet ──────┼──── Tunnel ─────────►│──► Internet     │
+│  traffic        │  (encrypted)         │   (NAT)         │
+│                 │                      │                 │
+│  Mesh traffic ──┼──── Direct ─────────►│  Other peers    │
+└─────────────────┘                      └─────────────────┘
+```
+
+**On the exit node** (the peer that will forward internet traffic):
+```bash
+tunnelmesh join --allow-exit-traffic
+```
+
+Or in config:
+```yaml
+allow_exit_traffic: true
+```
+
+**On the client** (the peer that wants to route through the exit):
+```bash
+tunnelmesh join --exit-node exit-peer-name
+```
+
+Or in config:
+```yaml
+exit_node: "exit-peer-name"
+```
+
+The exit node must have IP forwarding enabled and NAT configured. On Linux:
+```bash
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A POSTROUTING -s 10.99.0.0/16 ! -d 10.99.0.0/16 -j MASQUERADE
+```
+
 ### Config File Locations
 
 The tool searches for config files in the following order:
@@ -225,6 +271,15 @@ The tool searches for config files in the following order:
 | `-s, --server` | Coordination server URL |
 | `-t, --token` | Authentication token |
 | `-n, --name` | Node name |
+
+### Join Flags
+
+| Flag | Description |
+|------|-------------|
+| `--exit-node` | Route internet traffic through specified peer |
+| `--allow-exit-traffic` | Allow this node to act as an exit node |
+| `--latitude` | Manual latitude for location (overrides IP geolocation) |
+| `--longitude` | Manual longitude for location |
 
 ## Running as a System Service
 

@@ -376,5 +376,62 @@ cat /etc/tunnelmesh/peer.yaml
 - **Enable server as peer**: Add `join_mesh` section to server config (see main README)
 - **Customize network**: Adjust `mesh_cidr` for different IP ranges
 - **Secure the server**: Put behind a reverse proxy with TLS
+- **Set up exit nodes**: Route internet traffic through specific peers (see below)
 
 For full configuration options, see the [main README](../README.md).
+
+---
+
+## Part 3: Exit Node Setup (Optional)
+
+Exit nodes allow you to route internet traffic through a specific peer while keeping mesh traffic direct. This is useful for geo-unblocking or routing through a trusted exit point.
+
+### Configure the Exit Node
+
+On the peer that will serve as the exit node:
+
+```bash
+# Edit the peer config
+sudo nano /etc/tunnelmesh/peer.yaml
+```
+
+Add:
+```yaml
+allow_exit_traffic: true
+```
+
+Enable IP forwarding and NAT:
+
+```bash
+# Enable IP forwarding
+sudo sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
+
+# Configure NAT (replace 10.99.0.0/16 with your mesh_cidr)
+sudo iptables -t nat -A POSTROUTING -s 10.99.0.0/16 ! -d 10.99.0.0/16 -j MASQUERADE
+```
+
+Restart the peer service:
+```bash
+sudo tunnelmesh service restart
+```
+
+### Configure the Client
+
+On peers that should route through the exit node:
+
+```bash
+sudo nano /etc/tunnelmesh/peer.yaml
+```
+
+Add:
+```yaml
+exit_node: "exit-peer-name"  # Name of your exit node peer
+```
+
+Restart:
+```bash
+sudo tunnelmesh service restart
+```
+
+Internet traffic will now route through the exit node, while mesh traffic stays direct.
