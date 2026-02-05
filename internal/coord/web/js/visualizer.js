@@ -84,46 +84,66 @@ function canNodeReach(source, target) {
 }
 
 // =============================================================================
+// Visual Slot - represents a node's position on one side (left or right)
+// =============================================================================
+
+class VisualSlot {
+    constructor(node, side) {
+        this.node = node;
+        this.side = side;  // 'left', 'center', or 'right'
+        this.x = 0;
+        this.y = 0;
+        this.startX = 0;
+        this.startY = 0;
+        this.targetX = 0;
+        this.targetY = 0;
+        this.visible = true;
+    }
+
+    get id() { return `${this.node.id}_${this.side}`; }
+}
+
+// =============================================================================
 // Layout Algorithm
 // =============================================================================
 
-function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo) {
+function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo, slots) {
     const centerX = canvasWidth / 2;
     const centerY = canvasHeight / 2;
 
     // Dynamic column spacing based on canvas width (adjust to fit)
-    const columnSpacing = Math.min(280, (canvasWidth - CARD_WIDTH * 3) / 2.5);
+    const columnSpacing = Math.min(300, (canvasWidth - CARD_WIDTH * 3) / 2.5);
 
     // Reset stack info
     stackInfo.left = { total: 0, hidden: 0 };
     stackInfo.right = { total: 0, hidden: 0 };
     stackInfo.columnSpacing = columnSpacing;
 
+    // Clear old slots
+    slots.length = 0;
+
     if (!selectedId || !nodes.has(selectedId)) {
-        // No selection - show prompt
         return;
     }
 
     const selectedNode = nodes.get(selectedId);
 
-    // Position selected node at center
-    selectedNode.targetX = centerX;
-    selectedNode.targetY = centerY;
-    selectedNode.visible = true;
+    // Create center slot for selected node
+    const centerSlot = new VisualSlot(selectedNode, 'center');
+    centerSlot.targetX = centerX;
+    centerSlot.targetY = centerY;
+    slots.push(centerSlot);
 
     // Bidirectional mesh visualization:
     // Left: nodes that can reach selected (incoming)
     // Right: nodes that selected can reach (outgoing)
-    // In a healthy mesh, same nodes appear on both sides
-    // Missing node on one side = visual diagnostic flag
-    const incoming = [];  // Can reach selected
-    const outgoing = [];  // Selected can reach
+    const incoming = [];
+    const outgoing = [];
 
     for (const [id, node] of nodes) {
         if (id === selectedId) continue;
-        if (!node.online) continue;  // Skip offline nodes
+        if (!node.online) continue;
 
-        // Check bidirectional reachability
         if (canNodeReach(node, selectedNode)) {
             incoming.push(node);
         }
@@ -132,68 +152,35 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
         }
     }
 
-    // Sort both lists the same way so same nodes are favored on both sides
-    // This makes asymmetry (missing node on one side) immediately visible
+    // Sort consistently
     const sortByName = (a, b) => a.name.localeCompare(b.name);
     incoming.sort(sortByName);
     outgoing.sort(sortByName);
 
-    // Layout columns - spread nodes vertically
-    layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left);
-    layoutColumn(outgoing, centerX + columnSpacing, centerY, stackInfo.right);
+    // Create slots for each column
+    layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left, slots, 'left');
+    layoutColumn(outgoing, centerX + columnSpacing, centerY, stackInfo.right, slots, 'right');
 }
 
-function layoutColumn(nodes, centerX, centerY, stackInfo) {
+function layoutColumn(nodes, centerX, centerY, stackInfo, slots, side) {
     if (nodes.length === 0) return;
 
     stackInfo.total = nodes.length;
 
-    // Nodes already sorted by caller for consistent ordering
-    // Limit visible nodes
     const visibleCount = Math.min(nodes.length, MAX_VISIBLE_NODES);
-    const hiddenCount = nodes.length - visibleCount;
-    stackInfo.hidden = hiddenCount;
+    stackInfo.hidden = nodes.length - visibleCount;
 
-    // Calculate total height for visible nodes
     const totalHeight = (visibleCount - 1) * ROW_SPACING;
     let currentY = centerY - totalHeight / 2;
 
-    // Position each visible node vertically spread
-    for (let i = 0; i < nodes.length; i++) {
+    for (let i = 0; i < visibleCount; i++) {
         const node = nodes[i];
-        node.stackIndex = i;
-        node.stackSize = nodes.length;
-
-        if (i < MAX_VISIBLE_NODES) {
-            node.visible = true;
-            node.targetX = centerX;
-            node.targetY = currentY;
-            currentY += ROW_SPACING;
-        } else {
-            node.visible = false;
-        }
+        const slot = new VisualSlot(node, side);
+        slot.targetX = centerX;
+        slot.targetY = currentY;
+        slots.push(slot);
+        currentY += ROW_SPACING;
     }
-}
-
-// =============================================================================
-// Hit Testing
-// =============================================================================
-
-function hitTest(screenX, screenY, nodes) {
-    // Check visible nodes in reverse order (topmost first)
-    const nodeArray = Array.from(nodes.values()).filter(n => n.visible).reverse();
-
-    for (const node of nodeArray) {
-        const halfWidth = CARD_WIDTH / 2;
-        const halfHeight = CARD_HEIGHT / 2;
-
-        if (screenX >= node.x - halfWidth && screenX <= node.x + halfWidth &&
-            screenY >= node.y - halfHeight - TAB_HEIGHT && screenY <= node.y + halfHeight) {
-            return node;
-        }
-    }
-
-    return null;
 }
 
 // =============================================================================
@@ -207,8 +194,9 @@ class NodeVisualizer {
 
         // Data
         this.nodes = new Map();
+        this.slots = [];  // Visual slots for rendering
         this.selectedNodeId = null;
-        this.hoveredNodeId = null;
+        this.hoveredSlotId = null;
         this.domainSuffix = '.tunnelmesh';
 
         // Stack info for "+ N more" labels
@@ -219,7 +207,8 @@ class NodeVisualizer {
 
         // Animation
         this.animating = false;
-        this.animationProgress = 1;
+        this.animationStart = 0;
+        this.animationDuration = 400;  // ms
 
         // Callbacks
         this.onNodeSelected = null;
@@ -324,7 +313,26 @@ class NodeVisualizer {
 
     recalculateLayout() {
         const rect = this.canvas.getBoundingClientRect();
-        calculateLayout(this.nodes, this.selectedNodeId, rect.width, rect.height, this.stackInfo);
+        const oldSlots = new Map(this.slots.map(s => [s.id, { x: s.x, y: s.y }]));
+
+        calculateLayout(this.nodes, this.selectedNodeId, rect.width, rect.height, this.stackInfo, this.slots);
+
+        // Preserve old positions for animation, or initialize to target
+        for (const slot of this.slots) {
+            const old = oldSlots.get(slot.id);
+            if (old) {
+                slot.startX = old.x;
+                slot.startY = old.y;
+                slot.x = old.x;
+                slot.y = old.y;
+            } else {
+                // New slot - start at target (no animation)
+                slot.startX = slot.targetX;
+                slot.startY = slot.targetY;
+                slot.x = slot.targetX;
+                slot.y = slot.targetY;
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -332,7 +340,13 @@ class NodeVisualizer {
     // -------------------------------------------------------------------------
 
     startAnimation() {
-        this.animationProgress = 0;
+        // Capture start positions
+        for (const slot of this.slots) {
+            slot.startX = slot.x;
+            slot.startY = slot.y;
+        }
+
+        this.animationStart = performance.now();
         if (!this.animating) {
             this.animating = true;
             this.animate();
@@ -340,26 +354,24 @@ class NodeVisualizer {
     }
 
     animate() {
-        this.animationProgress += 0.12;
-
-        if (this.animationProgress >= 1) {
-            this.animationProgress = 1;
-            this.animating = false;
-        }
+        const elapsed = performance.now() - this.animationStart;
+        const progress = Math.min(elapsed / this.animationDuration, 1);
 
         // Ease out cubic
-        const t = 1 - Math.pow(1 - this.animationProgress, 3);
+        const t = 1 - Math.pow(1 - progress, 3);
 
         // Interpolate positions
-        for (const node of this.nodes.values()) {
-            node.x = node.x + (node.targetX - node.x) * t;
-            node.y = node.y + (node.targetY - node.y) * t;
+        for (const slot of this.slots) {
+            slot.x = slot.startX + (slot.targetX - slot.startX) * t;
+            slot.y = slot.startY + (slot.targetY - slot.startY) * t;
         }
 
         this.render();
 
-        if (this.animating) {
+        if (progress < 1) {
             requestAnimationFrame(() => this.animate());
+        } else {
+            this.animating = false;
         }
     }
 
@@ -382,27 +394,18 @@ class NodeVisualizer {
         const y = e.clientY - rect.top;
 
         // Update hover
-        const node = hitTest(x, y, this.nodes);
-        const newHoveredId = node ? node.id : null;
+        const slot = this.hitTestSlots(x, y);
+        const newHoveredId = slot ? slot.id : null;
 
-        if (newHoveredId !== this.hoveredNodeId) {
-            if (this.hoveredNodeId && this.nodes.has(this.hoveredNodeId)) {
-                this.nodes.get(this.hoveredNodeId).hovered = false;
-            }
-            this.hoveredNodeId = newHoveredId;
-            if (newHoveredId && this.nodes.has(newHoveredId)) {
-                this.nodes.get(newHoveredId).hovered = true;
-            }
+        if (newHoveredId !== this.hoveredSlotId) {
+            this.hoveredSlotId = newHoveredId;
             this.canvas.style.cursor = newHoveredId ? 'pointer' : 'default';
             this.render();
         }
     }
 
     onMouseLeave() {
-        if (this.hoveredNodeId && this.nodes.has(this.hoveredNodeId)) {
-            this.nodes.get(this.hoveredNodeId).hovered = false;
-        }
-        this.hoveredNodeId = null;
+        this.hoveredSlotId = null;
         this.canvas.style.cursor = 'default';
         this.render();
     }
@@ -412,10 +415,25 @@ class NodeVisualizer {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        const node = hitTest(x, y, this.nodes);
-        if (node) {
-            this.selectNode(node.id);
+        const slot = this.hitTestSlots(x, y);
+        if (slot && slot.node.id !== this.selectedNodeId) {
+            this.selectNode(slot.node.id);
         }
+    }
+
+    hitTestSlots(screenX, screenY) {
+        // Check slots in reverse order (topmost first)
+        for (let i = this.slots.length - 1; i >= 0; i--) {
+            const slot = this.slots[i];
+            const halfWidth = CARD_WIDTH / 2;
+            const halfHeight = CARD_HEIGHT / 2;
+
+            if (screenX >= slot.x - halfWidth && screenX <= slot.x + halfWidth &&
+                screenY >= slot.y - halfHeight - TAB_HEIGHT && screenY <= slot.y + halfHeight) {
+                return slot;
+            }
+        }
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -433,7 +451,6 @@ class NodeVisualizer {
         ctx.fillRect(0, 0, width, height);
 
         if (this.nodes.size === 0) {
-            // Draw empty state
             ctx.fillStyle = COLORS.textDim;
             ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
             ctx.textAlign = 'center';
@@ -442,7 +459,6 @@ class NodeVisualizer {
         }
 
         if (!this.selectedNodeId) {
-            // Draw prompt to select
             ctx.fillStyle = COLORS.textDim;
             ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
             ctx.textAlign = 'center';
@@ -453,20 +469,16 @@ class NodeVisualizer {
         // Draw connections first (behind nodes)
         this.renderConnections(ctx);
 
-        // Draw visible nodes (sorted so selected is on top)
-        const visibleNodes = Array.from(this.nodes.values())
-            .filter(n => n.visible)
-            .sort((a, b) => {
-                if (a.selected) return 1;
-                if (b.selected) return -1;
-                if (a.hovered) return 1;
-                if (b.hovered) return -1;
-                // Sort by stack index so top cards render last
-                return a.stackIndex - b.stackIndex;
-            });
+        // Draw slots (center slot last so it's on top)
+        const sortedSlots = [...this.slots].sort((a, b) => {
+            if (a.side === 'center') return 1;
+            if (b.side === 'center') return -1;
+            return 0;
+        });
 
-        for (const node of visibleNodes) {
-            this.renderNode(ctx, node);
+        for (const slot of sortedSlots) {
+            const isHovered = slot.id === this.hoveredSlotId;
+            this.renderSlot(ctx, slot, isHovered);
         }
 
         // Draw "+ N more" labels
@@ -474,8 +486,8 @@ class NodeVisualizer {
     }
 
     renderStackLabels(ctx, width, height) {
-        const selected = this.nodes.get(this.selectedNodeId);
-        if (!selected) return;
+        const centerSlot = this.slots.find(s => s.side === 'center');
+        if (!centerSlot) return;
 
         const columnSpacing = this.stackInfo.columnSpacing || 280;
 
@@ -485,7 +497,7 @@ class NodeVisualizer {
         // Left side label
         if (this.stackInfo.left.hidden > 0) {
             ctx.textAlign = 'center';
-            const labelX = selected.x - columnSpacing;
+            const labelX = centerSlot.x - columnSpacing;
             const labelY = height - 20;
             ctx.fillText(`+ ${this.stackInfo.left.hidden} more`, labelX, labelY);
         }
@@ -493,37 +505,30 @@ class NodeVisualizer {
         // Right side label
         if (this.stackInfo.right.hidden > 0) {
             ctx.textAlign = 'center';
-            const labelX = selected.x + columnSpacing;
+            const labelX = centerSlot.x + columnSpacing;
             const labelY = height - 20;
             ctx.fillText(`+ ${this.stackInfo.right.hidden} more`, labelX, labelY);
         }
     }
 
     renderConnections(ctx) {
-        const selected = this.nodes.get(this.selectedNodeId);
-        if (!selected) return;
+        const centerSlot = this.slots.find(s => s.side === 'center');
+        if (!centerSlot) return;
 
-        for (const node of this.nodes.values()) {
-            if (node.id === this.selectedNodeId) continue;
-            if (!node.visible) continue;
+        for (const slot of this.slots) {
+            if (slot.side === 'center') continue;
 
-            const canReach = canNodeReach(node, selected) || canNodeReach(selected, node);
-            if (!canReach) continue;
+            const isLeft = slot.side === 'left';
 
-            // Determine which side
-            const isLeft = node.x < selected.x;
-
-            // Draw curved connection
             ctx.beginPath();
             ctx.strokeStyle = COLORS.connectionHighlight;
             ctx.lineWidth = 2;
 
-            const startX = isLeft ? node.x + CARD_WIDTH / 2 : node.x - CARD_WIDTH / 2;
-            const startY = node.y;
-            const endX = isLeft ? selected.x - CARD_WIDTH / 2 : selected.x + CARD_WIDTH / 2;
-            const endY = selected.y;
+            const startX = isLeft ? slot.x + CARD_WIDTH / 2 : slot.x - CARD_WIDTH / 2;
+            const startY = slot.y;
+            const endX = isLeft ? centerSlot.x - CARD_WIDTH / 2 : centerSlot.x + CARD_WIDTH / 2;
+            const endY = centerSlot.y;
 
-            // Control point for curve
             const midX = (startX + endX) / 2;
 
             ctx.moveTo(startX, startY);
@@ -541,37 +546,36 @@ class NodeVisualizer {
         }
     }
 
-    renderNode(ctx, node) {
-        const x = node.x - CARD_WIDTH / 2;
-        const y = node.y - CARD_HEIGHT / 2;
+    renderSlot(ctx, slot, isHovered) {
+        const node = slot.node;
+        const x = slot.x - CARD_WIDTH / 2;
+        const y = slot.y - CARD_HEIGHT / 2;
 
-        // Draw tab label
         const tabText = node.name;
         ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         const tabWidth = ctx.measureText(tabText).width + 14;
         const tabX = x;
         const tabY = y - TAB_HEIGHT;
 
-        // Draw combined tab + card shape (tab flows into card)
-        ctx.fillStyle = COLORS.cardFill;
-        ctx.strokeStyle = COLORS.cardStroke;
-        ctx.lineWidth = 1;
+        // Draw combined tab + card shape
+        ctx.fillStyle = isHovered ? '#2d333b' : COLORS.cardFill;
+        ctx.strokeStyle = isHovered ? '#58a6ff' : COLORS.cardStroke;
+        ctx.lineWidth = isHovered ? 2 : 1;
 
-        // Draw tab (no separate stroke - part of card)
         ctx.beginPath();
-        ctx.moveTo(tabX, y);  // Start at top-left of card
-        ctx.lineTo(tabX, tabY + 4);  // Go up to tab
-        ctx.arcTo(tabX, tabY, tabX + 4, tabY, 4);  // Top-left corner of tab
-        ctx.lineTo(tabX + tabWidth - 4, tabY);  // Top edge of tab
-        ctx.arcTo(tabX + tabWidth, tabY, tabX + tabWidth, tabY + 4, 4);  // Top-right corner of tab
-        ctx.lineTo(tabX + tabWidth, y);  // Down to card top
-        ctx.lineTo(x + CARD_WIDTH - 6, y);  // Continue along card top
-        ctx.arcTo(x + CARD_WIDTH, y, x + CARD_WIDTH, y + 6, 6);  // Top-right of card
-        ctx.lineTo(x + CARD_WIDTH, y + CARD_HEIGHT - 6);  // Right edge
-        ctx.arcTo(x + CARD_WIDTH, y + CARD_HEIGHT, x + CARD_WIDTH - 6, y + CARD_HEIGHT, 6);  // Bottom-right
-        ctx.lineTo(x + 6, y + CARD_HEIGHT);  // Bottom edge
-        ctx.arcTo(x, y + CARD_HEIGHT, x, y + CARD_HEIGHT - 6, 6);  // Bottom-left
-        ctx.lineTo(x, y);  // Left edge back to start
+        ctx.moveTo(tabX, y);
+        ctx.lineTo(tabX, tabY + 4);
+        ctx.arcTo(tabX, tabY, tabX + 4, tabY, 4);
+        ctx.lineTo(tabX + tabWidth - 4, tabY);
+        ctx.arcTo(tabX + tabWidth, tabY, tabX + tabWidth, tabY + 4, 4);
+        ctx.lineTo(tabX + tabWidth, y);
+        ctx.lineTo(x + CARD_WIDTH - 6, y);
+        ctx.arcTo(x + CARD_WIDTH, y, x + CARD_WIDTH, y + 6, 6);
+        ctx.lineTo(x + CARD_WIDTH, y + CARD_HEIGHT - 6);
+        ctx.arcTo(x + CARD_WIDTH, y + CARD_HEIGHT, x + CARD_WIDTH - 6, y + CARD_HEIGHT, 6);
+        ctx.lineTo(x + 6, y + CARD_HEIGHT);
+        ctx.arcTo(x, y + CARD_HEIGHT, x, y + CARD_HEIGHT - 6, 6);
+        ctx.lineTo(x, y);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
@@ -582,18 +586,16 @@ class NodeVisualizer {
         ctx.textBaseline = 'middle';
         ctx.fillText(tabText, tabX + 7, tabY + TAB_HEIGHT / 2);
 
-        // Content padding
+        // Content
         const contentX = x + 10;
         const contentY = y + 14;
         const lineHeight = 16;
 
-        // Line 1: Mesh IP + version
         ctx.fillStyle = COLORS.text;
         ctx.font = '12px monospace';
         ctx.textAlign = 'left';
         ctx.fillText(node.meshIP, contentX, contentY + 4);
 
-        // Version (right aligned)
         if (node.version) {
             ctx.fillStyle = COLORS.textDim;
             ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
@@ -601,7 +603,6 @@ class NodeVisualizer {
             ctx.fillText(node.version, x + CARD_WIDTH - 10, contentY + 4);
         }
 
-        // Line 2: Tunnel count
         ctx.fillStyle = COLORS.textDim;
         ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         ctx.textAlign = 'left';
