@@ -59,7 +59,7 @@ admin:
 %{ if peer_enabled ~}
   port: 443  # Mesh-internal admin on port 443 (nginx uses 8443 for external API)
 %{ endif ~}
-  # Admin accessible at https://this.tunnelmesh/admin/ from mesh peers
+  # Admin accessible at https://this.tunnelmesh/ from mesh peers
 
 relay:
   enabled: ${relay_enabled}
@@ -144,7 +144,7 @@ server {
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
     ssl_prefer_server_ciphers off;
 
-    # External coordination API - admin is mesh-internal at https://this.tunnelmesh/admin/
+    # External coordination API - admin is mesh-internal at https://this.tunnelmesh/
     location / {
         proxy_pass http://127.0.0.1:${coordinator_port};
         proxy_http_version 1.1;
