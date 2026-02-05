@@ -62,10 +62,11 @@ class NodeMap {
         this.onlinePeersWithLocation.clear();
 
         // Group peers by location to detect co-located nodes
+        // Only include peers with confirmed location (has source = "manual" or "ip")
         const locationGroups = new Map(); // "lat,lng" -> [peer, ...]
         peers.forEach(peer => {
-            if (!peer.location || peer.location.latitude === 0 && peer.location.longitude === 0) {
-                return;
+            if (!peer.location || !peer.location.source) {
+                return; // No location or location not yet determined
             }
             const key = `${peer.location.latitude},${peer.location.longitude}`;
             if (!locationGroups.has(key)) {
@@ -91,8 +92,8 @@ class NodeMap {
         });
 
         peers.forEach(peer => {
-            if (!peer.location || peer.location.latitude === 0 && peer.location.longitude === 0) {
-                // No valid location - remove marker if exists
+            if (!peer.location || !peer.location.source) {
+                // No location or location not yet determined - remove marker if exists
                 if (this.markers.has(peer.name)) {
                     this.removeMarker(peer.name);
                 }
