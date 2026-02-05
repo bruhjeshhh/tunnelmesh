@@ -618,6 +618,10 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			peer.stats = &stats
 			peer.lastStatsTime = now
 			peer.heartbeatCount++
+			// Update location from heartbeat (keeps map positions after coordinator restart)
+			if s.cfg.Locations && stats.Location != nil && stats.Location.IsSet() {
+				peer.peer.Location = stats.Location
+			}
 		}
 		atomic.AddUint64(&s.serverStats.totalHeartbeats, 1)
 		s.peersMu.Unlock()

@@ -272,3 +272,221 @@ func TestPeerConfig_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadPeerConfig_WithGeolocation(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "geonode"
+server: "http://localhost:8080"
+auth_token: "token"
+geolocation:
+  latitude: 51.5074
+  longitude: -0.1278
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, 51.5074, cfg.Geolocation.Latitude)
+	assert.Equal(t, -0.1278, cfg.Geolocation.Longitude)
+}
+
+func TestGeolocationConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		geo     GeolocationConfig
+		wantErr bool
+	}{
+		{
+			name: "valid location",
+			geo: GeolocationConfig{
+				Latitude:  40.7128,
+				Longitude: -74.0060,
+			},
+			wantErr: false,
+		},
+		{
+			name: "zero location (null island)",
+			geo: GeolocationConfig{
+				Latitude:  0,
+				Longitude: 0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "latitude too high",
+			geo: GeolocationConfig{
+				Latitude:  91.0,
+				Longitude: 0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "latitude too low",
+			geo: GeolocationConfig{
+				Latitude:  -91.0,
+				Longitude: 0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "longitude too high",
+			geo: GeolocationConfig{
+				Latitude:  0,
+				Longitude: 181.0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "longitude too low",
+			geo: GeolocationConfig{
+				Latitude:  0,
+				Longitude: -181.0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "edge case: max valid",
+			geo: GeolocationConfig{
+				Latitude:  90.0,
+				Longitude: 180.0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "edge case: min valid",
+			geo: GeolocationConfig{
+				Latitude:  -90.0,
+				Longitude: -180.0,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.geo.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGeolocationConfig_IsSet(t *testing.T) {
+	tests := []struct {
+		name   string
+		geo    GeolocationConfig
+		expect bool
+	}{
+		{
+			name:   "not set (zero values)",
+			geo:    GeolocationConfig{},
+			expect: false,
+		},
+		{
+			name: "only latitude",
+			geo: GeolocationConfig{
+				Latitude: 51.5074,
+			},
+			expect: false,
+		},
+		{
+			name: "only longitude",
+			geo: GeolocationConfig{
+				Longitude: -0.1278,
+			},
+			expect: false,
+		},
+		{
+			name: "both set",
+			geo: GeolocationConfig{
+				Latitude:  51.5074,
+				Longitude: -0.1278,
+			},
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expect, tt.geo.IsSet())
+		})
+	}
+}
+
+func TestPeerConfig_ValidateGeolocation(t *testing.T) {
+	validConfig := func() PeerConfig {
+		return PeerConfig{
+			Name:       "testnode",
+			Server:     "http://localhost:8080",
+			AuthToken:  "token",
+			SSHPort:    2222,
+			PrivateKey: "/path/to/key",
+			TUN: TUNConfig{
+				Name: "tun-mesh0",
+				MTU:  1400,
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		modify  func(*PeerConfig)
+		wantErr bool
+	}{
+		{
+			name:    "valid without geolocation",
+			modify:  func(c *PeerConfig) {},
+			wantErr: false,
+		},
+		{
+			name: "valid with geolocation",
+			modify: func(c *PeerConfig) {
+				c.Geolocation = GeolocationConfig{
+					Latitude:  40.7128,
+					Longitude: -74.0060,
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid geolocation latitude",
+			modify: func(c *PeerConfig) {
+				c.Geolocation = GeolocationConfig{
+					Latitude:  91.0,
+					Longitude: 0,
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid geolocation longitude",
+			modify: func(c *PeerConfig) {
+				c.Geolocation = GeolocationConfig{
+					Latitude:  0,
+					Longitude: 181.0,
+				}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.modify(&cfg)
+			err := cfg.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

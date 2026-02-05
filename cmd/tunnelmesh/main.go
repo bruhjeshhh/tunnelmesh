@@ -77,6 +77,14 @@ var (
 	// WireGuard concentrator flag
 	wireguardEnabled bool
 
+	// Geolocation flags
+	latitude  float64
+	longitude float64
+	city      string
+
+	// Server feature flags
+	locationsEnabled bool
+
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
 	serviceRunMode string
@@ -118,6 +126,7 @@ The server manages peer registration, discovery, and DNS records.
 It does not route traffic - peers connect directly to each other.`,
 		RunE: runServe,
 	}
+	serveCmd.Flags().BoolVar(&locationsEnabled, "locations", false, "enable node location tracking (uses external IP geolocation API)")
 	rootCmd.AddCommand(serveCmd)
 
 	// Join command
@@ -131,6 +140,9 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().StringVarP(&nodeName, "name", "n", "", "node name")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
+	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
+	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
+	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -392,6 +404,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Apply command-line flag overrides
+	if locationsEnabled {
+		cfg.Locations = true
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -512,6 +529,13 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
+	if latitude != 0 || longitude != 0 {
+		cfg.Geolocation.Latitude = latitude
+		cfg.Geolocation.Longitude = longitude
+	}
+	if city != "" {
+		cfg.Geolocation.City = city
+	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
@@ -565,8 +589,24 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// UDP port is SSH port + 1
 	udpPort := cfg.SSHPort + 1
 
+	// Build location from config if set
+	var location *proto.GeoLocation
+	if cfg.Geolocation.IsSet() {
+		location = &proto.GeoLocation{
+			Latitude:  cfg.Geolocation.Latitude,
+			Longitude: cfg.Geolocation.Longitude,
+			City:      cfg.Geolocation.City,
+			Source:    "manual",
+		}
+		log.Info().
+			Float64("latitude", location.Latitude).
+			Float64("longitude", location.Longitude).
+			Str("city", location.City).
+			Msg("geolocation configured")
+	}
+
 	// Register with retry and exponential backoff
-	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, coord.DefaultRetryConfig())
+	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, coord.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -604,6 +644,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
+	identity.Location = location // Set location for heartbeat reporting
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router

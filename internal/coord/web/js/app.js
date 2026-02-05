@@ -13,6 +13,22 @@ const QUANTIZE_INTERVAL_MS = 10000;     // Timestamp quantization interval
 // Cached DOM elements (populated on DOMContentLoaded)
 const dom = {};
 
+// Simple event bus for cross-component communication
+const events = {
+    listeners: {},
+    on(event, fn) {
+        (this.listeners[event] ||= []).push(fn);
+    },
+    off(event, fn) {
+        if (this.listeners[event]) {
+            this.listeners[event] = this.listeners[event].filter(f => f !== fn);
+        }
+    },
+    emit(event, data) {
+        this.listeners[event]?.forEach(fn => fn(data));
+    }
+};
+
 // Dashboard state - track history per peer
 const state = {
     peerHistory: {}, // { peerName: { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] } }
@@ -20,6 +36,7 @@ const state = {
     wgEnabled: false,
     currentWGConfig: null,
     eventSource: null, // Store EventSource for cleanup
+    selectedNodeId: null, // Centralized selection state
     // Chart state
     charts: {
         throughput: null,
@@ -33,6 +50,9 @@ const state = {
     },
     // Visualizer state
     visualizer: null,
+    // Map state
+    nodeMap: null,
+    locationsEnabled: false, // Server-side locations feature flag
     domainSuffix: '.tunnelmesh',
     // Pagination state
     peersVisibleCount: ROWS_PER_PAGE,
@@ -186,6 +206,9 @@ function cleanup() {
     if (state.visualizer) {
         state.visualizer.destroy();
     }
+    if (state.nodeMap) {
+        state.nodeMap.destroy();
+    }
 }
 
 function showAuthError() {
@@ -219,12 +242,26 @@ function updateDashboard(data, loadHistory = false) {
     // Store domain suffix for visualizer
     state.domainSuffix = data.domain_suffix || '.tunnelmesh';
 
+    // Track if locations feature is enabled
+    state.locationsEnabled = data.locations_enabled || false;
+
     // Update visualizer with peer data
     if (state.visualizer) {
         state.visualizer.setDomainSuffix(state.domainSuffix);
         // TODO: Detect which peer is the WG concentrator (for now, null)
         state.visualizer.syncNodes(data.peers, null);
         state.visualizer.render();
+    }
+
+    // Update map with peer locations (only if locations feature is enabled)
+    const mapSection = document.getElementById('map-section');
+    if (state.locationsEnabled) {
+        if (state.nodeMap) {
+            state.nodeMap.updatePeers(data.peers);
+        }
+    } else if (mapSection) {
+        // Hide map section entirely when locations is disabled
+        mapSection.style.display = 'none';
     }
 
     // Update charts with new data during polling (not on initial history load)
@@ -882,7 +919,7 @@ function rebuildChartDatasets() {
         // Check if this peer is highlighted (selected in visualizer)
         const isHighlighted = peerName === state.charts.highlightedPeer;
         const lineColor = isHighlighted ? '#58a6ff' : baseColor;
-        const lineWidth = isHighlighted ? 3 : 1.5;
+        const lineWidth = isHighlighted ? 2 : 1.5;
 
         return {
             label: peerName,
@@ -1220,11 +1257,19 @@ async function deleteWGClient(id, name) {
     }
 }
 
-// Highlight peer on charts when selected in visualizer
+// Highlight peer on charts when selected
 function highlightPeerOnCharts(peerName) {
     state.charts.highlightedPeer = peerName;
     rebuildChartDatasets();
 }
+
+// Central function to select a node - emits event for all listeners
+// Exposed globally so it can be called from HTML onclick handlers
+function selectNode(nodeId) {
+    state.selectedNodeId = nodeId;
+    events.emit('nodeSelected', nodeId);
+}
+window.selectNode = selectNode;
 
 // Initialize visualizer
 function initVisualizer() {
@@ -1234,10 +1279,36 @@ function initVisualizer() {
     state.visualizer = new NodeVisualizer(canvas);
     state.visualizer.setDomainSuffix(state.domainSuffix);
 
-    // Wire up node selection to chart highlighting
+    // Wire up visualizer selection to central event system
     state.visualizer.onNodeSelected = (nodeId) => {
-        highlightPeerOnCharts(nodeId);
+        selectNode(nodeId);
     };
+
+    // Subscribe visualizer to selection events (for external selection changes)
+    events.on('nodeSelected', (nodeId) => {
+        if (state.visualizer) {
+            state.visualizer.setSelection(nodeId);
+        }
+    });
+
+    // Subscribe charts to selection events
+    events.on('nodeSelected', highlightPeerOnCharts);
+}
+
+// Initialize map
+function initMap() {
+    const container = document.getElementById('node-map');
+    if (!container) return;
+
+    state.nodeMap = new NodeMap('node-map');
+    // Map is initialized lazily when first peer with location is added
+
+    // Subscribe map to selection events
+    events.on('nodeSelected', (nodeId) => {
+        if (state.nodeMap) {
+            state.nodeMap.setSelectedPeer(nodeId);
+        }
+    });
 }
 
 // Initialize
@@ -1247,6 +1318,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize visualizer
     initVisualizer();
+
+    // Initialize map (for geolocation display)
+    initMap();
 
     // Initialize charts
     initCharts();

@@ -48,6 +48,7 @@ type ServerConfig struct {
 	DomainSuffix      string                `yaml:"domain_suffix"`
 	DataDir           string                `yaml:"data_dir"`            // Data directory for persistence (default: /var/lib/tunnelmesh)
 	HeartbeatInterval string                `yaml:"heartbeat_interval"`  // Heartbeat interval (default: 10s)
+	Locations         bool                  `yaml:"locations"`           // Enable node location tracking (requires external IP geolocation API)
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
@@ -65,6 +66,7 @@ type PeerConfig struct {
 	TUN               TUNConfig           `yaml:"tun"`
 	DNS               DNSConfig           `yaml:"dns"`
 	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
+	Geolocation       GeolocationConfig   `yaml:"geolocation"` // Manual geolocation coordinates
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -78,6 +80,29 @@ type DNSConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Listen   string `yaml:"listen"`
 	CacheTTL int    `yaml:"cache_ttl"`
+}
+
+// GeolocationConfig holds manual geolocation coordinates for a peer.
+type GeolocationConfig struct {
+	Latitude  float64 `yaml:"latitude"`  // Manual latitude (-90 to 90)
+	Longitude float64 `yaml:"longitude"` // Manual longitude (-180 to 180)
+	City      string  `yaml:"city"`      // Optional city name for display
+}
+
+// Validate checks if the geolocation coordinates are within valid ranges.
+func (g *GeolocationConfig) Validate() error {
+	if g.Latitude < -90 || g.Latitude > 90 {
+		return fmt.Errorf("geolocation.latitude must be between -90 and 90, got %f", g.Latitude)
+	}
+	if g.Longitude < -180 || g.Longitude > 180 {
+		return fmt.Errorf("geolocation.longitude must be between -180 and 180, got %f", g.Longitude)
+	}
+	return nil
+}
+
+// IsSet returns true if both latitude and longitude are configured (non-zero).
+func (g *GeolocationConfig) IsSet() bool {
+	return g.Latitude != 0 && g.Longitude != 0
 }
 
 // LoadServerConfig loads server configuration from a YAML file.
@@ -262,6 +287,12 @@ func (c *PeerConfig) Validate() error {
 	}
 	if c.TUN.MTU < 576 || c.TUN.MTU > 65535 {
 		return fmt.Errorf("tun.mtu must be between 576 and 65535")
+	}
+	// Validate geolocation if any coordinate is set
+	if c.Geolocation.Latitude != 0 || c.Geolocation.Longitude != 0 {
+		if err := c.Geolocation.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

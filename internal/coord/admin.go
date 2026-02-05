@@ -19,39 +19,41 @@ import (
 
 // AdminOverview is the response for the admin overview endpoint.
 type AdminOverview struct {
-	ServerUptime    string          `json:"server_uptime"`
-	ServerVersion   string          `json:"server_version"`
-	TotalPeers      int             `json:"total_peers"`
-	OnlinePeers     int             `json:"online_peers"`
-	TotalHeartbeats uint64          `json:"total_heartbeats"`
-	MeshCIDR        string          `json:"mesh_cidr"`
-	DomainSuffix    string          `json:"domain_suffix"`
-	Peers           []AdminPeerInfo `json:"peers"`
+	ServerUptime     string          `json:"server_uptime"`
+	ServerVersion    string          `json:"server_version"`
+	TotalPeers       int             `json:"total_peers"`
+	OnlinePeers      int             `json:"online_peers"`
+	TotalHeartbeats  uint64          `json:"total_heartbeats"`
+	MeshCIDR         string          `json:"mesh_cidr"`
+	DomainSuffix     string          `json:"domain_suffix"`
+	LocationsEnabled bool            `json:"locations_enabled"` // Whether node location tracking is enabled
+	Peers            []AdminPeerInfo `json:"peers"`
 }
 
 // AdminPeerInfo contains peer information for the admin UI.
 type AdminPeerInfo struct {
-	Name                string           `json:"name"`
-	MeshIP              string           `json:"mesh_ip"`
-	PublicIPs           []string         `json:"public_ips"`
-	PrivateIPs          []string         `json:"private_ips"`
-	SSHPort             int              `json:"ssh_port"`
-	UDPPort             int              `json:"udp_port"`
-	UDPExternalAddr4    string           `json:"udp_external_addr4,omitempty"`
-	UDPExternalAddr6    string           `json:"udp_external_addr6,omitempty"`
-	LastSeen            time.Time        `json:"last_seen"`
-	Online              bool             `json:"online"`
-	Connectable         bool             `json:"connectable"`
-	BehindNAT           bool             `json:"behind_nat"`
-	RegisteredAt        time.Time        `json:"registered_at"`
-	HeartbeatCount      uint64           `json:"heartbeat_count"`
-	Stats               *proto.PeerStats `json:"stats,omitempty"`
-	BytesSentRate       float64          `json:"bytes_sent_rate"`
-	BytesReceivedRate   float64          `json:"bytes_received_rate"`
-	PacketsSentRate     float64          `json:"packets_sent_rate"`
-	PacketsReceivedRate float64          `json:"packets_received_rate"`
-	Version             string           `json:"version,omitempty"`
-	History             []StatsDataPoint `json:"history,omitempty"`
+	Name                string              `json:"name"`
+	MeshIP              string              `json:"mesh_ip"`
+	PublicIPs           []string            `json:"public_ips"`
+	PrivateIPs          []string            `json:"private_ips"`
+	SSHPort             int                 `json:"ssh_port"`
+	UDPPort             int                 `json:"udp_port"`
+	UDPExternalAddr4    string              `json:"udp_external_addr4,omitempty"`
+	UDPExternalAddr6    string              `json:"udp_external_addr6,omitempty"`
+	LastSeen            time.Time           `json:"last_seen"`
+	Online              bool                `json:"online"`
+	Connectable         bool                `json:"connectable"`
+	BehindNAT           bool                `json:"behind_nat"`
+	RegisteredAt        time.Time           `json:"registered_at"`
+	HeartbeatCount      uint64              `json:"heartbeat_count"`
+	Stats               *proto.PeerStats    `json:"stats,omitempty"`
+	BytesSentRate       float64             `json:"bytes_sent_rate"`
+	BytesReceivedRate   float64             `json:"bytes_received_rate"`
+	PacketsSentRate     float64             `json:"packets_sent_rate"`
+	PacketsReceivedRate float64             `json:"packets_received_rate"`
+	Version             string              `json:"version,omitempty"`
+	Location            *proto.GeoLocation  `json:"location,omitempty"`
+	History             []StatsDataPoint    `json:"history,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -96,13 +98,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	onlineThreshold := 2 * time.Minute
 
 	overview := AdminOverview{
-		ServerUptime:    time.Since(s.serverStats.startTime).Round(time.Second).String(),
-		ServerVersion:   s.version,
-		TotalPeers:      len(s.peers),
-		TotalHeartbeats: s.serverStats.totalHeartbeats,
-		MeshCIDR:        s.cfg.MeshCIDR,
-		DomainSuffix:    s.cfg.DomainSuffix,
-		Peers:           make([]AdminPeerInfo, 0, len(s.peers)),
+		ServerUptime:     time.Since(s.serverStats.startTime).Round(time.Second).String(),
+		ServerVersion:    s.version,
+		TotalPeers:       len(s.peers),
+		TotalHeartbeats:  s.serverStats.totalHeartbeats,
+		MeshCIDR:         s.cfg.MeshCIDR,
+		DomainSuffix:     s.cfg.DomainSuffix,
+		LocationsEnabled: s.cfg.Locations,
+		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
 	}
 
 	for _, info := range s.peers {
@@ -126,6 +129,11 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			HeartbeatCount: info.heartbeatCount,
 			Stats:          info.stats,
 			Version:        info.peer.Version,
+		}
+
+		// Only include location if the feature is enabled
+		if s.cfg.Locations {
+			peerInfo.Location = info.peer.Location
 		}
 
 		// Get UDP endpoint addresses if available

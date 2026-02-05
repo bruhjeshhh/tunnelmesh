@@ -226,6 +226,7 @@ func (m *MeshNode) IPsChanged(publicIPs, privateIPs []string, behindNAT bool) bo
 func (m *MeshNode) CollectStats() *proto.PeerStats {
 	stats := &proto.PeerStats{
 		ActiveTunnels: m.tunnelMgr.CountHealthy(),
+		Location:      m.identity.Location, // Include location in every heartbeat
 	}
 
 	if m.Forwarder != nil {
@@ -376,7 +377,7 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
 			if _, regErr := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
-				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
 			); regErr != nil {
 				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
 			} else {

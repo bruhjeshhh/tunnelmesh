@@ -56,6 +56,9 @@ class VisualizerNode {
         this.bytesSentRate = peer.bytes_sent_rate || 0;
         this.bytesReceivedRate = peer.bytes_received_rate || 0;
 
+        // Location info (region/city) - use shortest available
+        this.region = extractRegion(peer);
+
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
         this.dnsName = fullDns.length > 25 ? fullDns.substring(0, 22) + '...' : fullDns;
@@ -89,6 +92,17 @@ function formatBytesCompact(bytes) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
     if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+}
+
+// Extract region/city from peer location data
+function extractRegion(peer) {
+    if (!peer.location) return null;
+    // Prefer city, fall back to region, then country
+    let region = peer.location.city || peer.location.region || peer.location.country || null;
+    if (region && region.length > 20) {
+        region = region.substring(0, 18) + '…';
+    }
+    return region;
 }
 
 // Check if source node can reach target node
@@ -310,6 +324,7 @@ class NodeVisualizer {
                 node.nodeType = nodeType;
                 node.bytesSentRate = peer.bytes_sent_rate || 0;
                 node.bytesReceivedRate = peer.bytes_received_rate || 0;
+                node.region = extractRegion(peer);
             } else {
                 // Add new node
                 const node = new VisualizerNode(peer, this.domainSuffix, nodeType);
@@ -364,6 +379,26 @@ class NodeVisualizer {
         if (this.onNodeSelected) {
             this.onNodeSelected(nodeId);
         }
+    }
+
+    // Set selection without triggering callback (for external sync)
+    setSelection(nodeId) {
+        if (this.selectedNodeId === nodeId) return;
+
+        // Deselect previous
+        if (this.selectedNodeId && this.nodes.has(this.selectedNodeId)) {
+            this.nodes.get(this.selectedNodeId).selected = false;
+        }
+
+        this.selectedNodeId = nodeId;
+
+        // Select new
+        if (nodeId && this.nodes.has(nodeId)) {
+            this.nodes.get(nodeId).selected = true;
+        }
+
+        this.recalculateLayout();
+        this.startAnimation();
     }
 
     resize() {
@@ -687,10 +722,10 @@ class NodeVisualizer {
         const centerSlot = this.slots.find(s => s.side === 'center');
         if (!centerSlot || this.nodes.size <= 1) return;
 
-        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 20;
-        const arrowSpacing = 30;
+        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 30;
+        const arrowSpacing = 40;
 
-        ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        ctx.font = '36px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
 
         // Left arrow
         ctx.fillStyle = this.hoveredArrow === 'left' ? COLORS.text : COLORS.textDim;
@@ -712,7 +747,7 @@ class NodeVisualizer {
     hitTestNavArrows(contentX, contentY) {
         if (!this.navArrows || this.nodes.size <= 1) return null;
 
-        const hitRadius = 15;
+        const hitRadius = 24;
         const { y, leftX, rightX } = this.navArrows;
 
         if (Math.abs(contentX - leftX) < hitRadius && Math.abs(contentY - y) < hitRadius) {
@@ -870,6 +905,14 @@ class NodeVisualizer {
         const throughputText = `↑${formatBytesCompact(node.bytesSentRate)} ↓${formatBytesCompact(node.bytesReceivedRate)}`;
         ctx.textAlign = 'right';
         ctx.fillText(throughputText, x + CARD_WIDTH - 10, contentY + lineHeight + 6);
+
+        // Region (bottom left corner of card)
+        if (node.region) {
+            ctx.fillStyle = COLORS.textDim;
+            ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(node.region, contentX, contentY + lineHeight * 2 + 8);
+        }
     }
 
 }
