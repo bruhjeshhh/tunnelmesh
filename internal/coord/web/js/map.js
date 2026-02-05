@@ -102,7 +102,8 @@ class NodeMap {
         });
 
         // Remove markers for peers no longer present
-        this.markers.forEach((_, peerName) => {
+        // Note: iterate over a copy of keys since removeMarker modifies the Map
+        [...this.markers.keys()].forEach(peerName => {
             if (!seenPeers.has(peerName)) {
                 this.removeMarker(peerName);
             }
@@ -184,7 +185,8 @@ class NodeMap {
         }
 
         // Remove connections that no longer exist
-        this.connections.forEach((_, key) => {
+        // Note: iterate over a copy of keys since removeConnection modifies the Map
+        [...this.connections.keys()].forEach(key => {
             if (!expectedConnections.has(key)) {
                 this.removeConnection(key);
             }
