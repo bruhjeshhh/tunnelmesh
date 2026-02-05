@@ -108,13 +108,6 @@ func (pc *PeerConnection) TransportType() string {
 	return pc.transportType
 }
 
-// IsRelayTunnel returns true if the current tunnel is using relay transport.
-func (pc *PeerConnection) IsRelayTunnel() bool {
-	pc.mu.RLock()
-	defer pc.mu.RUnlock()
-	return pc.tunnel != nil && pc.transportType == "relay"
-}
-
 // ConnectedSince returns when the connection was established.
 // Returns zero time if not currently connected.
 func (pc *PeerConnection) ConnectedSince() time.Time {

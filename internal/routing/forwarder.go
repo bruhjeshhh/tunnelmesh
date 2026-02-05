@@ -21,6 +21,8 @@ var (
 	ErrNoRoute = errors.New("no route")
 	// ErrNoTunnel is returned when no tunnel or relay is available for the peer.
 	ErrNoTunnel = errors.New("no tunnel or relay")
+	// ErrReadTimeout is returned when a tunnel read times out due to inactivity.
+	ErrReadTimeout = errors.New("tunnel read timeout")
 )
 
 const (
@@ -30,6 +32,9 @@ const (
 	DefaultMTU = 1400
 	// FrameHeaderSize is the size of the frame header.
 	FrameHeaderSize = 3
+	// TunnelReadTimeout is the maximum time to wait for data from a tunnel.
+	// After this timeout, the tunnel is considered dead and will be closed.
+	TunnelReadTimeout = 90 * time.Second
 )
 
 // TunnelProvider provides access to tunnels by peer name.
@@ -610,6 +615,13 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 	buf := f.bufPool.Get()
 	defer f.bufPool.Put(buf)
 
+	// Create a channel for read results to enable timeout detection
+	type readResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -617,23 +629,41 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 		default:
 		}
 
-		// Read frame from tunnel into pooled buffer
-		n, err := f.readFrame(tunnel, buf.Data())
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if err == io.EOF {
-				log.Info().Str("peer", peerName).Msg("tunnel closed")
-				return
-			}
-			log.Error().Err(err).Str("peer", peerName).Msg("tunnel read error")
-			return
-		}
+		// Start a goroutine to do the blocking read
+		go func() {
+			n, err := f.readFrame(tunnel, buf.Data())
+			resultCh <- readResult{n, err}
+		}()
 
-		// Write to TUN (use slice of buffer, no copy needed)
-		if err := f.ReceivePacket(buf.Data()[:n]); err != nil {
-			log.Debug().Err(err).Msg("receive packet failed")
+		// Wait for read result with timeout
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-time.After(TunnelReadTimeout):
+			// No data received within timeout - tunnel is stale
+			log.Warn().Str("peer", peerName).Dur("timeout", TunnelReadTimeout).Msg("tunnel read timeout, closing")
+			f.triggerDeadTunnel(peerName)
+			return
+
+		case result := <-resultCh:
+			if result.err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if result.err == io.EOF {
+					log.Info().Str("peer", peerName).Msg("tunnel closed")
+					return
+				}
+				log.Error().Err(result.err).Str("peer", peerName).Msg("tunnel read error")
+				f.triggerDeadTunnel(peerName)
+				return
+			}
+
+			// Write to TUN (use slice of buffer, no copy needed)
+			if err := f.ReceivePacket(buf.Data()[:result.n]); err != nil {
+				log.Debug().Err(err).Msg("receive packet failed")
+			}
 		}
 	}
 }
