@@ -295,28 +295,15 @@ class NodeMap {
             fillOpacity: 0.8
         }).addTo(this.map);
 
-        // Create accuracy circle for IP geolocation (only if accuracy > 1000m)
-        let circle = null;
-        if (loc.source === 'ip' && loc.accuracy > 1000 && peer.online) {
-            circle = L.circle([lat, lng], {
-                radius: loc.accuracy,
-                fillColor: color,
-                color: color,
-                weight: 1,
-                opacity: 0.3,
-                fillOpacity: 0.1,
-                dashArray: '5, 5'
-            }).addTo(this.map);
-        }
-
-        this.markers.set(name, { marker, circle });
+        // Store location info for accuracy circle (only shown for selected node)
+        this.markers.set(name, { marker, circle: null, loc, peer });
     }
 
     updateMarker(name, lat, lng, color, peer, loc) {
         const entry = this.markers.get(name);
         if (!entry) return;
 
-        const { marker, circle } = entry;
+        const { marker } = entry;
 
         // Update position
         marker.setLatLng([lat, lng]);
@@ -327,29 +314,17 @@ class NodeMap {
             color: color
         });
 
-        // Update or remove accuracy circle
-        if (loc.source === 'ip' && loc.accuracy > 1000 && peer.online) {
-            if (circle) {
-                circle.setLatLng([lat, lng]);
-                circle.setRadius(loc.accuracy);
-                circle.setStyle({ fillColor: color, color: color });
-            } else {
-                // Create new circle
-                const newCircle = L.circle([lat, lng], {
-                    radius: loc.accuracy,
-                    fillColor: color,
-                    color: color,
-                    weight: 1,
-                    opacity: 0.3,
-                    fillOpacity: 0.1,
-                    dashArray: '5, 5'
-                }).addTo(this.map);
-                entry.circle = newCircle;
+        // Store updated location info
+        entry.loc = loc;
+        entry.peer = peer;
+
+        // Update accuracy circle position if it exists (for selected node)
+        if (entry.circle) {
+            entry.circle.setLatLng([lat, lng]);
+            if (loc.accuracy) {
+                entry.circle.setRadius(loc.accuracy);
             }
-        } else if (circle) {
-            // Remove circle if no longer needed
-            this.map.removeLayer(circle);
-            entry.circle = null;
+            entry.circle.setStyle({ fillColor: color, color: color });
         }
     }
 
@@ -379,28 +354,43 @@ class NodeMap {
         const previousSelected = this.selectedPeer;
         this.selectedPeer = peerName;
 
-        // Update previous selected marker back to normal color
+        // Update previous selected marker back to normal color and remove its accuracy circle
         if (previousSelected && this.markers.has(previousSelected)) {
             const entry = this.markers.get(previousSelected);
             const color = '#3fb950'; // green for online (assume online if marker exists)
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
             }
+            // Remove accuracy circle from previously selected
             if (entry.circle) {
-                entry.circle.setStyle({ fillColor: color, color: color });
+                this.map.removeLayer(entry.circle);
+                entry.circle = null;
             }
         }
 
-        // Update newly selected marker to blue
+        // Update newly selected marker to blue and show its accuracy circle
         if (peerName && this.markers.has(peerName)) {
             const entry = this.markers.get(peerName);
             const color = '#58a6ff'; // blue for selected
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
             }
-            if (entry.circle) {
-                entry.circle.setStyle({ fillColor: color, color: color });
+            // Show accuracy circle for selected node (only for IP geolocation)
+            if (entry.loc && entry.loc.source === 'ip' && entry.loc.accuracy > 1000 && entry.peer && entry.peer.online) {
+                if (!entry.circle) {
+                    entry.circle = L.circle([entry.loc.latitude, entry.loc.longitude], {
+                        radius: entry.loc.accuracy,
+                        fillColor: color,
+                        color: color,
+                        weight: 1,
+                        opacity: 0.3,
+                        fillOpacity: 0.1,
+                        dashArray: '5, 5'
+                    }).addTo(this.map);
+                }
             }
+            // Bring marker to front
+            if (entry.marker) entry.marker.bringToFront();
         }
 
         // Update connections to show only from selected peer
