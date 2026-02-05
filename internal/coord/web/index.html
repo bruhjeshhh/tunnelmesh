@@ -102,6 +102,9 @@
                 </thead>
                 <tbody id="wg-clients-body"></tbody>
             </table>
+            <div id="wg-pagination" class="show-more-container" style="display: none;">
+                <span id="wg-show-more"><button class="show-more-link" onclick="showMoreWg()">show more (<span id="wg-shown-count">0</span> / <span id="wg-total-count">0</span>)</button></span><span id="wg-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessWg()">show less</button></span>
+            </div>
             <div id="no-wg-clients" class="empty-state" style="display: none;">
                 No WireGuard peers yet. Add a peer to generate a QR code.
             </div>

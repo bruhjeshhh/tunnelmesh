@@ -23,6 +23,7 @@ const state = {
     // Pagination state
     peersVisibleCount: 7,
     dnsVisibleCount: 7,
+    wgVisibleCount: 7,
     currentPeers: [],  // Store current peers data for pagination
     rowsPerPage: 7
 };
@@ -269,6 +270,16 @@ function showMoreDns() {
 function showLessDns() {
     state.dnsVisibleCount = state.rowsPerPage;
     renderDnsTable();
+}
+
+function showMoreWg() {
+    state.wgVisibleCount += state.rowsPerPage;
+    updateWGClientsTable();
+}
+
+function showLessWg() {
+    state.wgVisibleCount = state.rowsPerPage;
+    updateWGClientsTable();
 }
 
 function renderPeersTable() {
@@ -941,12 +952,16 @@ function updateWGClientsTable() {
     const tbody = document.getElementById('wg-clients-body');
     const noClients = document.getElementById('no-wg-clients');
     const addBtn = document.getElementById('add-wg-client-btn');
+    const wgPagination = document.getElementById('wg-pagination');
+    const wgShowMore = document.getElementById('wg-show-more');
+    const wgShowLess = document.getElementById('wg-show-less');
 
     // Check if concentrator is connected
     if (!state.wgConcentratorConnected) {
         tbody.innerHTML = '';
         noClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
         noClients.style.display = 'block';
+        if (wgPagination) wgPagination.style.display = 'none';
         if (addBtn) addBtn.disabled = true;
         return;
     }
@@ -957,11 +972,13 @@ function updateWGClientsTable() {
         tbody.innerHTML = '';
         noClients.textContent = 'No WireGuard peers yet. Add a peer to generate a QR code.';
         noClients.style.display = 'block';
+        if (wgPagination) wgPagination.style.display = 'none';
         return;
     }
 
     noClients.style.display = 'none';
-    tbody.innerHTML = state.wgClients.map(client => {
+    const visibleClients = state.wgClients.slice(0, state.wgVisibleCount);
+    tbody.innerHTML = visibleClients.map(client => {
         const statusClass = client.enabled ? 'online' : 'offline';
         const statusText = client.enabled ? 'Enabled' : 'Disabled';
         const lastSeen = client.last_seen ? formatLastSeen(client.last_seen) : 'Never';
@@ -982,6 +999,24 @@ function updateWGClientsTable() {
             </tr>
         `;
     }).join('');
+
+    // Show/hide pagination links
+    if (wgPagination) {
+        const hasMore = state.wgClients.length > state.wgVisibleCount;
+        const canShowLess = state.wgVisibleCount > state.rowsPerPage;
+
+        if (hasMore || canShowLess) {
+            wgPagination.style.display = 'block';
+            wgShowMore.style.display = hasMore ? 'inline' : 'none';
+            wgShowLess.style.display = canShowLess ? 'inline' : 'none';
+            if (hasMore) {
+                document.getElementById('wg-shown-count').textContent = state.wgVisibleCount;
+                document.getElementById('wg-total-count').textContent = state.wgClients.length;
+            }
+        } else {
+            wgPagination.style.display = 'none';
+        }
+    }
 }
 
 function formatLastSeen(timestamp) {
