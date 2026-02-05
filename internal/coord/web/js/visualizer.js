@@ -11,11 +11,11 @@ const NodeType = {
     EXIT_NODE: 'exit_node'
 };
 
-const CARD_WIDTH = 180;
-const CARD_HEIGHT = 70;
-const TAB_HEIGHT = 20;
-const ROW_SPACING = 100;  // Vertical spacing between spread nodes
-const CONNECTION_DOT_RADIUS = 4;
+const CARD_WIDTH = 210;
+const CARD_HEIGHT = 80;
+const TAB_HEIGHT = 22;
+const ROW_SPACING = 110;  // Vertical spacing between spread nodes
+const CONNECTION_DOT_RADIUS = 5;
 const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
 // Colors matching dashboard theme - simplified uniform styling
@@ -111,24 +111,32 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     selectedNode.targetY = centerY;
     selectedNode.visible = true;
 
-    // Classify other nodes by connectivity type:
-    // Left (incoming): NAT nodes that must connect TO the network
-    // Right (outgoing): Connectable nodes that can be reached directly
-    const incoming = [];  // NAT nodes
-    const outgoing = [];  // Connectable nodes
+    // Bidirectional mesh visualization:
+    // Left: nodes that can reach selected (incoming)
+    // Right: nodes that selected can reach (outgoing)
+    // In a healthy mesh, same nodes appear on both sides
+    // Missing node on one side = visual diagnostic flag
+    const incoming = [];  // Can reach selected
+    const outgoing = [];  // Selected can reach
 
     for (const [id, node] of nodes) {
         if (id === selectedId) continue;
         if (!node.online) continue;  // Skip offline nodes
 
-        if (node.connectable) {
-            // Connectable nodes go on right (outgoing targets)
-            outgoing.push(node);
-        } else {
-            // NAT nodes go on left (incoming connections)
+        // Check bidirectional reachability
+        if (canNodeReach(node, selectedNode)) {
             incoming.push(node);
         }
+        if (canNodeReach(selectedNode, node)) {
+            outgoing.push(node);
+        }
     }
+
+    // Sort both lists the same way so same nodes are favored on both sides
+    // This makes asymmetry (missing node on one side) immediately visible
+    const sortByName = (a, b) => a.name.localeCompare(b.name);
+    incoming.sort(sortByName);
+    outgoing.sort(sortByName);
 
     // Layout columns - spread nodes vertically
     layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left);
@@ -140,9 +148,7 @@ function layoutColumn(nodes, centerX, centerY, stackInfo) {
 
     stackInfo.total = nodes.length;
 
-    // Sort nodes for consistent ordering (by name)
-    nodes.sort((a, b) => a.name.localeCompare(b.name));
-
+    // Nodes already sorted by caller for consistent ordering
     // Limit visible nodes
     const visibleCount = Math.min(nodes.length, MAX_VISIBLE_NODES);
     const hiddenCount = nodes.length - visibleCount;

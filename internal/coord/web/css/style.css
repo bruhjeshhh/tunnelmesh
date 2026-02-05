@@ -168,7 +168,7 @@ header h1 {
 
 .visualizer-container {
     position: relative;
-    height: 600px;
+    height: 420px;
     background: #0d1117;
     border-radius: 0 0 6px 6px;
 }
@@ -186,7 +186,7 @@ header h1 {
     }
 
     .visualizer-container {
-        height: 500px;
+        height: 350px;
     }
 }
 
