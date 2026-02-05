@@ -599,8 +599,8 @@ function updateChartsWithNewData(peers) {
         state.charts.lastSeenTimes = {};
     }
 
-    // Build set of currently online peers (present in API response)
-    const onlinePeers = new Set(peers.map(p => p.name));
+    // Build set of currently online peers (present in API response AND online)
+    const onlinePeers = new Set(peers.filter(p => p.online).map(p => p.name));
 
     // Collect new data points with their timestamps
     const newPoints = [];
