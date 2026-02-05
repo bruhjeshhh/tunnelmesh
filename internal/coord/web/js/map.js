@@ -15,6 +15,7 @@ class NodeMap {
         this.selectedPeer = null;
         this.onlinePeersWithLocation = new Map(); // peerName -> {lat, lng}
         this.pendingFitToConnections = false; // Flag to fit after first updatePeers
+        this.skipNextZoom = false; // Flag to skip zoom on next selection (for map clicks)
     }
 
     // Initialize the Leaflet map with dark theme tiles
@@ -343,9 +344,10 @@ class NodeMap {
             fillOpacity: 0.8
         }).addTo(this.map);
 
-        // Click to select this node
+        // Click to select this node (without zooming since user already sees it)
         marker.on('click', () => {
             if (typeof selectNode === 'function') {
+                this.skipNextZoom = true;
                 selectNode(name);
             }
         });
@@ -442,12 +444,17 @@ class NodeMap {
         // Update connections to show only from selected peer
         this.updateConnections();
 
-        // Zoom to fit selected peer and all its connections
-        // If map has no data yet, defer until updatePeers populates it
-        if (this.onlinePeersWithLocation.size === 0) {
-            this.pendingFitToConnections = true;
+        // Zoom to fit selected peer and all its connections (unless skip flag is set)
+        // Skip flag is set when user clicks on map marker (they already see it)
+        if (this.skipNextZoom) {
+            this.skipNextZoom = false;
         } else {
-            this.fitToConnections();
+            // If map has no data yet, defer until updatePeers populates it
+            if (this.onlinePeersWithLocation.size === 0) {
+                this.pendingFitToConnections = true;
+            } else {
+                this.fitToConnections();
+            }
         }
     }
 
