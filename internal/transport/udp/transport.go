@@ -434,7 +434,10 @@ func (t *Transport) receiveLoop(conn *net.UDPConn) {
 			continue
 		}
 
-		if n < MinPacketSize {
+		// Minimum 1 byte needed to check packet type
+		// Individual handlers validate their specific size requirements
+		// Note: RekeyRequired packets are only 5 bytes, smaller than data packets
+		if n < 1 {
 			continue // Too short
 		}
 
