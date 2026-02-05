@@ -324,6 +324,9 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 		// Callback to start admin HTTPS server after joining mesh
 		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+			srv.SetCoordMeshIP(meshIP)
+
 			if cfg.Admin.Enabled && tlsMgr != nil {
 				// Load TLS cert for admin HTTPS
 				tlsCert, err := tlsMgr.LoadCert()
@@ -487,6 +490,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 		// Callback to start admin HTTPS server after joining mesh
 		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+			srv.SetCoordMeshIP(meshIP)
+
 			if cfg.Admin.Enabled && tlsMgr != nil {
 				// Load TLS cert for admin HTTPS
 				tlsCert, err := tlsMgr.LoadCert()
@@ -1118,7 +1124,10 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	var dnsConfigured bool
 	if cfg.DNS.Enabled {
 		resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
-		resolver.SetLocalMeshIP(resp.MeshIP) // Enable "this.tunnelmesh" resolution
+		// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+		if resp.CoordMeshIP != "" {
+			resolver.SetCoordMeshIP(resp.CoordMeshIP)
+		}
 		node.Resolver = resolver
 
 		// Initial DNS sync
