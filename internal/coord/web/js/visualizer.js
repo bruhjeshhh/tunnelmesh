@@ -57,15 +57,7 @@ class VisualizerNode {
         this.bytesReceivedRate = peer.bytes_received_rate || 0;
 
         // Location info (region/city) - use shortest available
-        this.region = null;
-        if (peer.location && peer.location.source) {
-            // Prefer city, fall back to region, then country
-            this.region = peer.location.city || peer.location.region || peer.location.country || null;
-            // Truncate if too long
-            if (this.region && this.region.length > 20) {
-                this.region = this.region.substring(0, 18) + '…';
-            }
-        }
+        this.region = extractRegion(peer);
 
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
@@ -100,6 +92,17 @@ function formatBytesCompact(bytes) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
     if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+}
+
+// Extract region/city from peer location data
+function extractRegion(peer) {
+    if (!peer.location) return null;
+    // Prefer city, fall back to region, then country
+    let region = peer.location.city || peer.location.region || peer.location.country || null;
+    if (region && region.length > 20) {
+        region = region.substring(0, 18) + '…';
+    }
+    return region;
 }
 
 // Check if source node can reach target node
@@ -321,16 +324,7 @@ class NodeVisualizer {
                 node.nodeType = nodeType;
                 node.bytesSentRate = peer.bytes_sent_rate || 0;
                 node.bytesReceivedRate = peer.bytes_received_rate || 0;
-                // Update region from location data
-                if (peer.location && peer.location.source) {
-                    let region = peer.location.city || peer.location.region || peer.location.country || null;
-                    if (region && region.length > 20) {
-                        region = region.substring(0, 18) + '…';
-                    }
-                    node.region = region;
-                } else {
-                    node.region = null;
-                }
+                node.region = extractRegion(peer);
             } else {
                 // Add new node
                 const node = new VisualizerNode(peer, this.domainSuffix, nodeType);
@@ -907,20 +901,18 @@ class NodeVisualizer {
         const tunnelText = `${node.activeTunnels}t`;
         ctx.fillText(tunnelText, contentX, contentY + lineHeight + 6);
 
-        // Region (after tunnel count, if available)
-        if (node.region) {
-            const tunnelWidth = ctx.measureText(tunnelText).width;
-            ctx.fillStyle = '#6e7681'; // Even dimmer than textDim
-            ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-            ctx.fillText(node.region, contentX + tunnelWidth + 8, contentY + lineHeight + 6);
-        }
-
         // Throughput (right side of line 2)
-        ctx.fillStyle = COLORS.textDim;
-        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         const throughputText = `↑${formatBytesCompact(node.bytesSentRate)} ↓${formatBytesCompact(node.bytesReceivedRate)}`;
         ctx.textAlign = 'right';
         ctx.fillText(throughputText, x + CARD_WIDTH - 10, contentY + lineHeight + 6);
+
+        // Region (bottom left corner of card)
+        if (node.region) {
+            ctx.fillStyle = COLORS.textDim;
+            ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(node.region, contentX, contentY + lineHeight * 2 + 8);
+        }
     }
 
 }
