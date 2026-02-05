@@ -59,7 +59,9 @@ type AdminPeerInfo struct {
 	ExitNode          string            `json:"exit_node,omitempty"`
 	ExitClients       []string          `json:"exit_clients,omitempty"`
 	// Connection info (peer -> transport type)
-	Connections       map[string]string `json:"connections,omitempty"`
+	Connections map[string]string `json:"connections,omitempty"`
+	// DNS aliases for this peer
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -145,6 +147,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			Version:           info.peer.Version,
 			AllowsExitTraffic: info.peer.AllowsExitTraffic,
 			ExitNode:          info.peer.ExitNode,
+			Aliases:           info.aliases,
 		}
 
 		// Include exit clients if this peer allows exit traffic
