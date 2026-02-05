@@ -1,0 +1,262 @@
+// NodeMap - Displays peer locations on a Leaflet map with dark theme
+// Location data comes from peer.location object which contains:
+// - latitude, longitude: coordinates
+// - source: "manual" (user configured) or "ip" (IP geolocation)
+// - accuracy: meters (~0 for manual, ~50000 for IP)
+// - city, region, country: location details
+class NodeMap {
+    constructor(containerId) {
+        this.containerId = containerId;
+        this.map = null;
+        this.markers = new Map(); // peerName -> { marker, circle }
+        this.bounds = null;
+        this.initialized = false;
+    }
+
+    // Initialize the Leaflet map with dark theme tiles
+    init() {
+        if (this.initialized) return;
+
+        const container = document.getElementById(this.containerId);
+        if (!container) {
+            console.error('Map container not found:', this.containerId);
+            return;
+        }
+
+        // Initialize map centered on (0, 0) with zoom 2
+        this.map = L.map(this.containerId, {
+            center: [20, 0],
+            zoom: 2,
+            scrollWheelZoom: true,
+            attributionControl: true
+        });
+
+        // Use CartoDB Dark Matter tiles for dark theme
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 19
+        }).addTo(this.map);
+
+        this.initialized = true;
+    }
+
+    // Update markers from peer data
+    updatePeers(peers) {
+        if (!this.initialized) {
+            this.init();
+        }
+
+        if (!this.map) return;
+
+        // Track which peers we've processed
+        const seenPeers = new Set();
+        let hasLocations = false;
+        const boundsArray = [];
+
+        peers.forEach(peer => {
+            if (!peer.location || peer.location.latitude === 0 && peer.location.longitude === 0) {
+                // No valid location - remove marker if exists
+                if (this.markers.has(peer.name)) {
+                    this.removeMarker(peer.name);
+                }
+                return;
+            }
+
+            hasLocations = true;
+            seenPeers.add(peer.name);
+
+            const loc = peer.location;
+            const lat = loc.latitude;
+            const lng = loc.longitude;
+            boundsArray.push([lat, lng]);
+
+            // Determine marker color based on online status and source
+            let color;
+            if (!peer.online) {
+                color = '#6b7280'; // grey for offline
+            } else if (loc.source === 'manual') {
+                color = '#3fb950'; // green for manual config
+            } else {
+                color = '#58a6ff'; // blue for IP geolocation
+            }
+
+            // Create or update marker
+            if (this.markers.has(peer.name)) {
+                this.updateMarker(peer.name, lat, lng, color, peer, loc);
+            } else {
+                this.createMarker(peer.name, lat, lng, color, peer, loc);
+            }
+        });
+
+        // Remove markers for peers no longer present
+        this.markers.forEach((_, peerName) => {
+            if (!seenPeers.has(peerName)) {
+                this.removeMarker(peerName);
+            }
+        });
+
+        // Show/hide map section based on whether any peers have locations
+        const mapSection = document.getElementById('map-section');
+        if (mapSection) {
+            mapSection.style.display = hasLocations ? 'block' : 'none';
+        }
+
+        // Fit map to show all markers
+        if (boundsArray.length > 0 && this.map) {
+            const bounds = L.latLngBounds(boundsArray);
+            // Only fit bounds if they've changed significantly
+            if (!this.bounds || !this.bounds.equals(bounds)) {
+                this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+                this.bounds = bounds;
+            }
+        }
+    }
+
+    createMarker(name, lat, lng, color, peer, loc) {
+        // Create circular marker
+        const marker = L.circleMarker([lat, lng], {
+            radius: 8,
+            fillColor: color,
+            color: color,
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.8
+        }).addTo(this.map);
+
+        // Create accuracy circle for IP geolocation (only if accuracy > 1000m)
+        let circle = null;
+        if (loc.source === 'ip' && loc.accuracy > 1000 && peer.online) {
+            circle = L.circle([lat, lng], {
+                radius: loc.accuracy,
+                fillColor: color,
+                color: color,
+                weight: 1,
+                opacity: 0.3,
+                fillOpacity: 0.1,
+                dashArray: '5, 5'
+            }).addTo(this.map);
+        }
+
+        // Bind popup
+        marker.bindPopup(this.createPopupContent(peer, loc));
+
+        this.markers.set(name, { marker, circle });
+    }
+
+    updateMarker(name, lat, lng, color, peer, loc) {
+        const entry = this.markers.get(name);
+        if (!entry) return;
+
+        const { marker, circle } = entry;
+
+        // Update position
+        marker.setLatLng([lat, lng]);
+
+        // Update style
+        marker.setStyle({
+            fillColor: color,
+            color: color
+        });
+
+        // Update popup
+        marker.setPopupContent(this.createPopupContent(peer, loc));
+
+        // Update or remove accuracy circle
+        if (loc.source === 'ip' && loc.accuracy > 1000 && peer.online) {
+            if (circle) {
+                circle.setLatLng([lat, lng]);
+                circle.setRadius(loc.accuracy);
+                circle.setStyle({ fillColor: color, color: color });
+            } else {
+                // Create new circle
+                const newCircle = L.circle([lat, lng], {
+                    radius: loc.accuracy,
+                    fillColor: color,
+                    color: color,
+                    weight: 1,
+                    opacity: 0.3,
+                    fillOpacity: 0.1,
+                    dashArray: '5, 5'
+                }).addTo(this.map);
+                entry.circle = newCircle;
+            }
+        } else if (circle) {
+            // Remove circle if no longer needed
+            this.map.removeLayer(circle);
+            entry.circle = null;
+        }
+    }
+
+    removeMarker(name) {
+        const entry = this.markers.get(name);
+        if (!entry) return;
+
+        if (entry.marker) this.map.removeLayer(entry.marker);
+        if (entry.circle) this.map.removeLayer(entry.circle);
+
+        this.markers.delete(name);
+    }
+
+    createPopupContent(peer, loc) {
+        const statusClass = peer.online ? 'online' : 'offline';
+        const statusText = peer.online ? 'Online' : 'Offline';
+
+        // Build location string
+        const locationParts = [];
+        if (loc.city) locationParts.push(loc.city);
+        if (loc.region && loc.region !== loc.city) locationParts.push(loc.region);
+        if (loc.country) locationParts.push(loc.country);
+        const locationStr = locationParts.join(', ') || 'Unknown';
+
+        // Source label
+        const sourceLabel = loc.source === 'manual' ? 'Manual config' : 'IP geolocation';
+        const sourceAccuracy = loc.source === 'ip' ? ` (~${Math.round(loc.accuracy / 1000)}km)` : '';
+
+        return `
+            <div class="map-popup">
+                <div class="popup-header">
+                    <strong>${this.escapeHtml(peer.name)}</strong>
+                    <span class="status-badge ${statusClass}">${statusText}</span>
+                </div>
+                <div class="popup-content">
+                    <div class="popup-row">
+                        <span class="popup-label">Mesh IP:</span>
+                        <code>${peer.mesh_ip}</code>
+                    </div>
+                    <div class="popup-row">
+                        <span class="popup-label">Location:</span>
+                        <span>${locationStr}</span>
+                    </div>
+                    <div class="popup-row">
+                        <span class="popup-label">Source:</span>
+                        <span>${sourceLabel}${sourceAccuracy}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Force map to recalculate size (call after container becomes visible)
+    invalidateSize() {
+        if (this.map) {
+            this.map.invalidateSize();
+        }
+    }
+
+    // Cleanup
+    destroy() {
+        if (this.map) {
+            this.map.remove();
+            this.map = null;
+        }
+        this.markers.clear();
+        this.initialized = false;
+    }
+}

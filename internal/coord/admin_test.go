@@ -1,8 +1,16 @@
 package coord
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 func TestDownsampleHistory(t *testing.T) {
@@ -80,6 +88,56 @@ func TestDownsampleHistory(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAdminOverview_IncludesLocation(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Admin: config.AdminConfig{
+			Enabled: true,
+		},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Register a peer with location
+	client := NewClient(ts.URL, "test-token")
+	location := &proto.GeoLocation{
+		Latitude:  51.5074,
+		Longitude: -0.1278,
+		Accuracy:  100,
+		Source:    "manual",
+		City:      "London",
+		Country:   "United Kingdom",
+	}
+	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location)
+	require.NoError(t, err)
+
+	// Fetch admin overview
+	resp, err := http.Get(ts.URL + "/admin/api/overview")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var overview AdminOverview
+	err = json.NewDecoder(resp.Body).Decode(&overview)
+	require.NoError(t, err)
+
+	// Verify location is included in peer info
+	require.Len(t, overview.Peers, 1)
+	require.NotNil(t, overview.Peers[0].Location)
+	assert.Equal(t, 51.5074, overview.Peers[0].Location.Latitude)
+	assert.Equal(t, -0.1278, overview.Peers[0].Location.Longitude)
+	assert.Equal(t, "manual", overview.Peers[0].Location.Source)
+	assert.Equal(t, "London", overview.Peers[0].Location.City)
+	assert.Equal(t, "United Kingdom", overview.Peers[0].Location.Country)
 }
 
 func TestDownsampleHistory_Uniformity(t *testing.T) {

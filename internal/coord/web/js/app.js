@@ -33,6 +33,8 @@ const state = {
     },
     // Visualizer state
     visualizer: null,
+    // Map state
+    nodeMap: null,
     domainSuffix: '.tunnelmesh',
     // Pagination state
     peersVisibleCount: ROWS_PER_PAGE,
@@ -186,6 +188,9 @@ function cleanup() {
     if (state.visualizer) {
         state.visualizer.destroy();
     }
+    if (state.nodeMap) {
+        state.nodeMap.destroy();
+    }
 }
 
 function showAuthError() {
@@ -225,6 +230,11 @@ function updateDashboard(data, loadHistory = false) {
         // TODO: Detect which peer is the WG concentrator (for now, null)
         state.visualizer.syncNodes(data.peers, null);
         state.visualizer.render();
+    }
+
+    // Update map with peer locations
+    if (state.nodeMap) {
+        state.nodeMap.updatePeers(data.peers);
     }
 
     // Update charts with new data during polling (not on initial history load)
@@ -1240,6 +1250,15 @@ function initVisualizer() {
     };
 }
 
+// Initialize map
+function initMap() {
+    const container = document.getElementById('node-map');
+    if (!container) return;
+
+    state.nodeMap = new NodeMap('node-map');
+    // Map is initialized lazily when first peer with location is added
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     // Cache DOM elements first
@@ -1247,6 +1266,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize visualizer
     initVisualizer();
+
+    // Initialize map (for geolocation display)
+    initMap();
 
     // Initialize charts
     initCharts();

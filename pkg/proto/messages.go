@@ -2,6 +2,7 @@
 package proto
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -9,33 +10,68 @@ import (
 	"time"
 )
 
+// GeoLocation represents geographic coordinates with source metadata.
+type GeoLocation struct {
+	Latitude  float64   `json:"latitude,omitempty"`
+	Longitude float64   `json:"longitude,omitempty"`
+	Accuracy  float64   `json:"accuracy,omitempty"`   // Accuracy in meters (IP ~50000, manual ~0)
+	Source    string    `json:"source,omitempty"`     // "manual" or "ip"
+	City      string    `json:"city,omitempty"`       // From IP lookup
+	Region    string    `json:"region,omitempty"`     // From IP lookup
+	Country   string    `json:"country,omitempty"`    // From IP lookup
+	UpdatedAt time.Time `json:"updated_at,omitempty"` // When location was last updated
+}
+
+// Validate checks if the geolocation coordinates are within valid ranges.
+func (g *GeoLocation) Validate() error {
+	if g.Latitude < -90 || g.Latitude > 90 {
+		return fmt.Errorf("latitude must be between -90 and 90, got %f", g.Latitude)
+	}
+	if g.Longitude < -180 || g.Longitude > 180 {
+		return fmt.Errorf("longitude must be between -180 and 180, got %f", g.Longitude)
+	}
+	return nil
+}
+
+// IsSet returns true if the location has valid coordinates set.
+// A location is considered set if it has a source (to distinguish 0,0 from unset).
+func (g *GeoLocation) IsSet() bool {
+	if g.Source != "" {
+		return true
+	}
+	// If no source but both lat/long are non-zero, consider it set
+	return g.Latitude != 0 && g.Longitude != 0
+}
+
 // Peer represents a node in the mesh network.
 type Peer struct {
-	Name             string    `json:"name"`
-	PublicKey        string    `json:"public_key"`                  // SSH public key (base64 encoded wire format)
-	PublicIPs        []string  `json:"public_ips"`                  // Externally reachable IPs
-	PrivateIPs       []string  `json:"private_ips"`                 // Internal network IPs
-	SSHPort          int       `json:"ssh_port"`                    // SSH server port
-	UDPPort          int       `json:"udp_port,omitempty"`          // UDP transport port
-	MeshIP           string    `json:"mesh_ip"`                     // Assigned mesh network IP (10.99.x.x)
-	LastSeen         time.Time `json:"last_seen"`                   // Last heartbeat time
-	Connectable      bool      `json:"connectable"`                 // Can accept incoming connections
-	BehindNAT        bool      `json:"behind_nat"`                  // Public IP was fetched externally (behind NAT)
-	ExternalEndpoint string    `json:"external_endpoint,omitempty"` // STUN-discovered external address for UDP
-	Version          string    `json:"version,omitempty"`           // Application version
-	PCPMapped        bool      `json:"pcp_mapped,omitempty"`        // Whether peer has PCP/NAT-PMP port mapping
+	Name             string       `json:"name"`
+	PublicKey        string       `json:"public_key"`                  // SSH public key (base64 encoded wire format)
+	PublicIPs        []string     `json:"public_ips"`                  // Externally reachable IPs
+	PrivateIPs       []string     `json:"private_ips"`                 // Internal network IPs
+	SSHPort          int          `json:"ssh_port"`                    // SSH server port
+	UDPPort          int          `json:"udp_port,omitempty"`          // UDP transport port
+	MeshIP           string       `json:"mesh_ip"`                     // Assigned mesh network IP (10.99.x.x)
+	LastSeen         time.Time    `json:"last_seen"`                   // Last heartbeat time
+	Connectable      bool         `json:"connectable"`                 // Can accept incoming connections
+	BehindNAT        bool         `json:"behind_nat"`                  // Public IP was fetched externally (behind NAT)
+	ExternalEndpoint string       `json:"external_endpoint,omitempty"` // STUN-discovered external address for UDP
+	Version          string       `json:"version,omitempty"`           // Application version
+	PCPMapped        bool         `json:"pcp_mapped,omitempty"`        // Whether peer has PCP/NAT-PMP port mapping
+	Location         *GeoLocation `json:"location,omitempty"`          // Geographic location
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
 type RegisterRequest struct {
-	Name       string   `json:"name"`
-	PublicKey  string   `json:"public_key"`
-	PublicIPs  []string `json:"public_ips"`
-	PrivateIPs []string `json:"private_ips"`
-	SSHPort    int      `json:"ssh_port"`
-	UDPPort    int      `json:"udp_port,omitempty"` // UDP transport port
-	BehindNAT  bool     `json:"behind_nat"`         // True if public IP was fetched from external service
-	Version    string   `json:"version,omitempty"`  // Application version
+	Name       string       `json:"name"`
+	PublicKey  string       `json:"public_key"`
+	PublicIPs  []string     `json:"public_ips"`
+	PrivateIPs []string     `json:"private_ips"`
+	SSHPort    int          `json:"ssh_port"`
+	UDPPort    int          `json:"udp_port,omitempty"` // UDP transport port
+	BehindNAT  bool         `json:"behind_nat"`         // True if public IP was fetched from external service
+	Version    string       `json:"version,omitempty"`  // Application version
+	Location   *GeoLocation `json:"location,omitempty"` // Geographic location (manual config)
 }
 
 // RegisterResponse is returned after successful registration.

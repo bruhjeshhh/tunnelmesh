@@ -52,6 +52,7 @@ type Server struct {
 	wgStore      *wireguard.Store // WireGuard client storage
 	version      string           // Server version for admin display
 	sseHub       *sseHub          // SSE hub for real-time dashboard updates
+	ipGeoCache   *IPGeoCache      // IP geolocation cache for location fallback
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -158,7 +159,8 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
-		sseHub: newSSEHub(),
+		sseHub:     newSSEHub(),
+		ipGeoCache: NewIPGeoCache(""), // Use default ip-api.com URL
 	}
 
 	// Initialize WireGuard client store if enabled
@@ -324,6 +326,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Preserve existing location if re-registering without new location
+	var location *proto.GeoLocation
+	if req.Location != nil {
+		location = req.Location
+	} else if existing, ok := s.peers[req.Name]; ok && existing.peer.Location != nil {
+		location = existing.peer.Location
+	}
+
 	peer := &proto.Peer{
 		Name:        req.Name,
 		PublicKey:   req.PublicKey,
@@ -336,6 +346,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,
 		BehindNAT:   req.BehindNAT,
 		Version:     req.Version,
+		Location:    location,
 	}
 
 	s.peers[req.Name] = &peerInfo{
@@ -355,6 +366,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Str("name", req.Name).
 		Str("mesh_ip", meshIP).
 		Msg("peer registered")
+
+	// If no location and peer has public IPs, try IP geolocation in background
+	if location == nil && len(req.PublicIPs) > 0 {
+		go s.lookupPeerLocation(req.Name, req.PublicIPs[0])
+	}
 
 	resp := proto.RegisterResponse{
 		MeshIP:   meshIP,
@@ -467,6 +483,36 @@ func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
 		Code:    code,
 		Message: message,
 	})
+}
+
+// lookupPeerLocation performs IP geolocation lookup for a peer and updates their location.
+// This is called in a background goroutine to avoid blocking registration.
+func (s *Server) lookupPeerLocation(peerName, ip string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	location, err := s.ipGeoCache.Lookup(ctx, ip)
+	if err != nil {
+		log.Debug().Err(err).Str("peer", peerName).Str("ip", ip).Msg("IP geolocation lookup failed")
+		return
+	}
+
+	if location == nil {
+		// IP could not be geolocated (e.g., private IP)
+		return
+	}
+
+	// Update peer's location
+	s.peersMu.Lock()
+	if info, ok := s.peers[peerName]; ok && info.peer.Location == nil {
+		info.peer.Location = location
+		log.Info().
+			Str("peer", peerName).
+			Str("city", location.City).
+			Str("country", location.Country).
+			Msg("peer location updated via IP geolocation")
+	}
+	s.peersMu.Unlock()
 }
 
 // ListenAndServe starts the coordination server.

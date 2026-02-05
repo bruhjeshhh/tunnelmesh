@@ -161,6 +161,131 @@ header h1 {
     }
 }
 
+/* Map Section */
+#map-section {
+    max-width: 1400px;
+    margin: 1.5rem auto 0;
+    padding: 0 2rem;
+    width: 100%;
+}
+
+.map-card {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 6px;
+}
+
+.map-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    border-radius: 6px 6px 0 0;
+}
+
+.map-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0;
+}
+
+.map-container {
+    height: 350px;
+    background: var(--color-bg-primary);
+    border-radius: 0 0 6px 6px;
+}
+
+/* Leaflet popup dark theme override */
+.leaflet-popup-content-wrapper {
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.leaflet-popup-tip {
+    background: var(--color-bg-secondary);
+}
+
+.leaflet-popup-content {
+    margin: 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.map-popup {
+    min-width: 180px;
+}
+
+.map-popup .popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--color-border-primary);
+}
+
+.map-popup .popup-content {
+    padding: 0.75rem;
+}
+
+.map-popup .popup-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.map-popup .popup-row:last-child {
+    margin-bottom: 0;
+}
+
+.map-popup .popup-label {
+    color: var(--color-text-secondary);
+}
+
+.map-popup code {
+    background: var(--color-bg-tertiary);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+}
+
+/* Leaflet control styling for dark theme */
+.leaflet-control-zoom a {
+    background: var(--color-bg-secondary) !important;
+    color: var(--color-text-primary) !important;
+    border-color: var(--color-border-primary) !important;
+}
+
+.leaflet-control-zoom a:hover {
+    background: var(--color-bg-tertiary) !important;
+}
+
+.leaflet-control-attribution {
+    background: rgba(13, 17, 23, 0.8) !important;
+    color: var(--color-text-secondary) !important;
+}
+
+.leaflet-control-attribution a {
+    color: var(--color-accent-blue) !important;
+}
+
+@media (max-width: 900px) {
+    #map-section {
+        padding: 0 1rem;
+        margin: 1rem auto 0;
+    }
+
+    .map-container {
+        height: 280px;
+    }
+}
+
 /* Visualizer Section */
 #visualizer-section {
     max-width: 1400px;

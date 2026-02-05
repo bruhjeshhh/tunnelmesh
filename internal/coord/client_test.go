@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 func TestClient_Register(t *testing.T) {
@@ -31,12 +32,50 @@ func TestClient_Register(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register
-	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0")
+	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", nil)
 	require.NoError(t, err)
 
 	assert.Contains(t, resp.MeshIP, "10.99.") // IP is hash-based, just check it's in mesh range
 	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", resp.Domain)
+}
+
+func TestClient_RegisterWithLocation(t *testing.T) {
+	// Create test server
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Create client
+	client := NewClient(ts.URL, "test-token")
+
+	// Register with location
+	location := &proto.GeoLocation{
+		Latitude:  51.5074,
+		Longitude: -0.1278,
+		Source:    "manual",
+	}
+	resp, err := client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", location)
+	require.NoError(t, err)
+
+	assert.Contains(t, resp.MeshIP, "10.99.")
+
+	// Verify the peer has location stored
+	peers, err := client.ListPeers()
+	require.NoError(t, err)
+	require.Len(t, peers, 1)
+	require.NotNil(t, peers[0].Location)
+	assert.Equal(t, 51.5074, peers[0].Location.Latitude)
+	assert.Equal(t, -0.1278, peers[0].Location.Longitude)
+	assert.Equal(t, "manual", peers[0].Location.Source)
 }
 
 func TestClient_ListPeers(t *testing.T) {
@@ -55,7 +94,7 @@ func TestClient_ListPeers(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register a peer
-	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0")
+	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0", nil)
 	require.NoError(t, err)
 
 	// List peers
@@ -86,7 +125,7 @@ func TestClient_Deregister(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register first
-	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0")
+	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0", nil)
 	require.NoError(t, err)
 
 	// Verify registered
@@ -118,9 +157,9 @@ func TestClient_GetDNSRecords(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register peers
-	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0")
+	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0", nil)
 	require.NoError(t, err)
-	_, err = client.Register("node2", "SHA256:key2", nil, nil, 2222, 0, false, "v1.0.0")
+	_, err = client.Register("node2", "SHA256:key2", nil, nil, 2222, 0, false, "v1.0.0", nil)
 	require.NoError(t, err)
 
 	// Get DNS records
@@ -152,7 +191,7 @@ func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 		MaxBackoff:     100 * time.Millisecond,
 	}
 
-	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 2223, false, "v1.0.0", retryCfg)
+	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 2223, false, "v1.0.0", nil, retryCfg)
 	require.NoError(t, err)
 
 	assert.Contains(t, resp.MeshIP, "10.99.")
@@ -191,7 +230,7 @@ func TestClient_RegisterWithRetry_SuccessAfterFailures(t *testing.T) {
 		MaxBackoff:     50 * time.Millisecond,
 	}
 
-	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", retryCfg)
+	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, retryCfg)
 	require.NoError(t, err)
 
 	assert.Equal(t, int32(3), attempts.Load(), "should have taken 3 attempts")
@@ -218,7 +257,7 @@ func TestClient_RegisterWithRetry_MaxRetriesExceeded(t *testing.T) {
 		MaxBackoff:     50 * time.Millisecond,
 	}
 
-	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", retryCfg)
+	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, retryCfg)
 	require.Error(t, err)
 
 	assert.Equal(t, int32(3), attempts.Load(), "should have made exactly 3 attempts")
@@ -251,7 +290,7 @@ func TestClient_RegisterWithRetry_ContextCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", retryCfg)
+	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, retryCfg)
 	require.Error(t, err)
 
 	assert.Equal(t, context.Canceled, err)
@@ -269,7 +308,7 @@ func TestClient_RegisterWithRetry_ConnectionRefused(t *testing.T) {
 		MaxBackoff:     50 * time.Millisecond,
 	}
 
-	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", retryCfg)
+	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, retryCfg)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "after 2 attempts")

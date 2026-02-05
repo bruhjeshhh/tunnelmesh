@@ -376,7 +376,7 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
 			if _, regErr := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
-				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
 			); regErr != nil {
 				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
 			} else {
