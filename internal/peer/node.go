@@ -271,18 +271,8 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 		// Our direct tunnel to them is also likely broken (asymmetric path failure).
 		// However, we apply a grace period after tunnel establishment to avoid
 		// tearing down freshly established tunnels due to stale relay packets.
-		// Also, if our tunnel to this peer is itself a relay tunnel, receiving
-		// relay packets is expected behavior - don't invalidate.
 		if pc := m.Connections.Get(sourcePeer); pc != nil {
 			if pc.HasTunnel() {
-				// If our tunnel to this peer is also a relay tunnel, receiving relay packets
-				// is expected behavior - don't invalidate our relay tunnel
-				if pc.IsRelayTunnel() {
-					log.Debug().
-						Str("peer", sourcePeer).
-						Msg("receiving relay packet on relay tunnel - expected behavior")
-					return
-				}
 				connectedSince := pc.ConnectedSince()
 				tunnelAge := time.Since(connectedSince)
 				if tunnelAge < asymmetricDetectionGracePeriod {

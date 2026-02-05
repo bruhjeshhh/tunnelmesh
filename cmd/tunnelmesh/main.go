@@ -30,7 +30,6 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
-	relaytransport "github.com/tunnelmesh/tunnelmesh/internal/transport/relay"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
 	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
@@ -624,14 +623,14 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}
 	})
 
-	// Create transport registry with default order: UDP -> SSH -> Relay
+	// Create transport registry with default order: UDP -> SSH
 	// UDP is first for better performance (lower latency, no head-of-line blocking)
 	// Falls back to SSH when UDP hole-punching fails or times out
+	// Relay traffic is handled by PersistentRelay separately (DERP-like architecture)
 	transportRegistry := transport.NewRegistry(transport.RegistryConfig{
 		DefaultOrder: []transport.TransportType{
 			transport.TransportUDP,
 			transport.TransportSSH,
-			transport.TransportRelay,
 		},
 	})
 	node.TransportRegistry = transportRegistry
@@ -803,20 +802,8 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}
 	}
 
-	// Create and register relay transport
-	relayTransport, err := relaytransport.New(relaytransport.Config{
-		ServerURL: cfg.Server,
-		JWTToken:  client.JWTToken(), // Will be updated after registration
-	})
-	if err != nil {
-		return fmt.Errorf("create relay transport: %w", err)
-	}
-	if err := transportRegistry.Register(relayTransport); err != nil {
-		return fmt.Errorf("register relay transport: %w", err)
-	}
-	log.Info().Msg("relay transport registered")
-
 	// Create transport negotiator
+	// Note: Relay traffic is handled by PersistentRelay separately (DERP-like architecture)
 	transportNegotiator := transport.NewNegotiator(transportRegistry, transport.NegotiatorConfig{
 		ProbeTimeout:      5 * time.Second,
 		ConnectionTimeout: 30 * time.Second,

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
 
 // RunHeartbeat starts the heartbeat loop that maintains presence with the coordination server.
@@ -124,77 +123,25 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	m.TriggerDiscovery()
 }
 
-// HandleRelayRequests connects to relay for peers that are waiting for us.
+// HandleRelayRequests handles notifications that peers want to communicate via relay.
+// The PersistentRelay already handles packet routing - this just cancels any direct
+// connection attempts since the peer can only reach us via relay.
 func (m *MeshNode) HandleRelayRequests(ctx context.Context, relayRequests []string) {
 	if len(relayRequests) == 0 {
 		return
 	}
 
-	existingTunnels := m.tunnelMgr.List()
-	existingSet := make(map[string]bool)
-	for _, t := range existingTunnels {
-		existingSet[t] = true
-	}
-
 	for _, peerName := range relayRequests {
-		// Skip if we already have a tunnel to this peer
-		if existingSet[peerName] {
-			continue
+		log.Info().Str("peer", peerName).Msg("peer wants to communicate via relay")
+
+		// Cancel any outbound connection attempt to this peer since they can only reach us via relay
+		m.Connections.CancelOutbound(peerName)
+
+		// Ensure route exists for this peer so forwarder can route packets via relay
+		if peer, ok := m.GetCachedPeer(peerName); ok && peer.MeshIP != "" {
+			m.router.AddRoute(peer.MeshIP, peerName)
 		}
-
-		log.Info().Str("peer", peerName).Msg("peer is waiting on relay for us, connecting...")
-
-		jwtToken := m.client.JWTToken()
-		if jwtToken == "" {
-			log.Warn().Str("peer", peerName).Msg("no JWT token available for relay")
-			continue
-		}
-
-		// Connect to relay in a goroutine to not block
-		go m.connectRelay(ctx, peerName, jwtToken)
 	}
-}
-
-// connectRelay connects to a relay for the given peer.
-func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) {
-	// Cancel any outbound connection attempt to this peer (relay is server-mediated inbound)
-	m.Connections.CancelOutbound(peerName)
-
-	relayTunnel, err := tunnel.NewRelayTunnel(ctx, m.client.BaseURL(), peerName, jwtToken)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peerName).Msg("relay connection failed")
-		return
-	}
-
-	// Get mesh IP for this peer from cache (relay connections may not have coord server access)
-	var meshIP string
-	if peer, ok := m.GetCachedPeer(peerName); ok {
-		meshIP = peer.MeshIP
-	}
-
-	// Add route immediately for bidirectional traffic
-	// Discovery will refresh/validate routes on next cycle
-	if meshIP != "" {
-		m.router.AddRoute(meshIP, peerName)
-	}
-
-	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
-	pc := m.Connections.GetOrCreate(peerName, meshIP)
-	if err := pc.Connected(relayTunnel, "relay", "relay notification"); err != nil {
-		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
-		relayTunnel.Close()
-		return
-	}
-
-	log.Info().Str("peer", peerName).Msg("relay tunnel established via notification")
-
-	// Handle incoming packets from this tunnel
-	if m.Forwarder != nil {
-		m.Forwarder.HandleTunnel(ctx, peerName, relayTunnel)
-	}
-
-	// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
-	_ = pc.Disconnect("relay tunnel handler exited", nil)
 }
 
 // syncDNS syncs DNS records from the coordination server.
