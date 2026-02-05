@@ -1,5 +1,5 @@
 // Node Visualizer for TunnelMesh Dashboard
-// Implements a pan/zoomable canvas showing mesh topology
+// Shows mesh topology with selected node centered
 
 // =============================================================================
 // Constants and Types
@@ -15,10 +15,11 @@ const CARD_WIDTH = 200;
 const CARD_HEIGHT = 80;
 const TAB_HEIGHT = 20;
 const COLUMN_SPACING = 280;
-const ROW_SPACING = 100;
-const STACK_OFFSET_X = 10;
-const STACK_OFFSET_Y = 4;
+const ROW_SPACING = 120;
+const STACK_OFFSET_X = 6;
+const STACK_OFFSET_Y = 3;
 const CONNECTION_DOT_RADIUS = 5;
+const MAX_VISIBLE_STACK = 3;  // Show max 3 nodes, then "+ N more"
 
 // Colors matching dashboard theme
 const COLORS = {
@@ -35,7 +36,8 @@ const COLORS = {
     hovered: '#1f6feb',
     hoveredStroke: '#58a6ff',
     connection: '#30363d',
-    connectionHighlight: '#58a6ff'
+    connectionHighlight: '#58a6ff',
+    stackShadow: '#30363d'
 };
 
 // =============================================================================
@@ -70,6 +72,7 @@ class VisualizerNode {
         this.hovered = false;
         this.stackIndex = 0;
         this.stackSize = 1;
+        this.visible = true;  // Whether to render this node
     }
 
     get category() {
@@ -116,33 +119,20 @@ function canNodeReach(source, target) {
     return true;
 }
 
-// Convert screen coordinates to world coordinates
-function screenToWorld(screenX, screenY, transform) {
-    return {
-        x: (screenX - transform.offsetX) / transform.scale,
-        y: (screenY - transform.offsetY) / transform.scale
-    };
-}
-
-// Convert world coordinates to screen coordinates
-function worldToScreen(worldX, worldY, transform) {
-    return {
-        x: worldX * transform.scale + transform.offsetX,
-        y: worldY * transform.scale + transform.offsetY
-    };
-}
-
 // =============================================================================
 // Layout Algorithm
 // =============================================================================
 
-function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight) {
+function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo) {
     const centerX = canvasWidth / 2;
     const centerY = canvasHeight / 2;
 
+    // Reset stack info
+    stackInfo.left = { total: 0, hidden: 0 };
+    stackInfo.right = { total: 0, hidden: 0 };
+
     if (!selectedId || !nodes.has(selectedId)) {
-        // No selection - grid layout
-        layoutGrid(nodes, centerX, centerY);
+        // No selection - show prompt
         return;
     }
 
@@ -151,6 +141,7 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight) {
     // Position selected node at center
     selectedNode.targetX = centerX;
     selectedNode.targetY = centerY;
+    selectedNode.visible = true;
 
     // Classify other nodes
     const incoming = [];  // Can reach selected
@@ -165,10 +156,10 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight) {
         // In a mesh, most nodes are both incoming and outgoing
         // Prioritize by connectable status for visual clarity
         if (node.connectable && !selectedNode.connectable) {
-            // Node is connectable, selected is NAT - show as outgoing (selected reaches them)
+            // Node is connectable, selected is NAT - show as outgoing
             outgoing.push(node);
         } else if (!node.connectable && selectedNode.connectable) {
-            // Node is NAT, selected is connectable - show as incoming (they reach selected)
+            // Node is NAT, selected is connectable - show as incoming
             incoming.push(node);
         } else if (canReachSelected) {
             // Default: show online nodes that can reach selected as incoming
@@ -176,30 +167,15 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight) {
         }
     }
 
-    // Layout columns
-    layoutColumn(incoming, centerX - COLUMN_SPACING, centerY, { stackOffset: STACK_OFFSET_X, rowSpacing: ROW_SPACING });
-    layoutColumn(outgoing, centerX + COLUMN_SPACING, centerY, { stackOffset: STACK_OFFSET_X, rowSpacing: ROW_SPACING });
+    // Layout columns with stacking limit
+    layoutColumn(incoming, centerX - COLUMN_SPACING, centerY, stackInfo.left);
+    layoutColumn(outgoing, centerX + COLUMN_SPACING, centerY, stackInfo.right);
 }
 
-function layoutGrid(nodes, centerX, centerY) {
-    const nodeArray = Array.from(nodes.values());
-    const count = nodeArray.length;
-    if (count === 0) return;
-
-    const cols = Math.ceil(Math.sqrt(count));
-    const rows = Math.ceil(count / cols);
-    const spacing = CARD_WIDTH + 40;
-
-    nodeArray.forEach((node, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        node.targetX = centerX + (col - (cols - 1) / 2) * spacing;
-        node.targetY = centerY + (row - (rows - 1) / 2) * (CARD_HEIGHT + ROW_SPACING);
-    });
-}
-
-function layoutColumn(nodes, centerX, centerY, config) {
+function layoutColumn(nodes, centerX, centerY, stackInfo) {
     if (nodes.length === 0) return;
+
+    stackInfo.total = nodes.length;
 
     // Group by category
     const groups = new Map();
@@ -213,41 +189,53 @@ function layoutColumn(nodes, centerX, centerY, config) {
     const groupArray = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
     // Calculate total height
-    const totalHeight = groupArray.length * config.rowSpacing;
+    const totalHeight = groupArray.length * ROW_SPACING;
     let currentY = centerY - totalHeight / 2;
+
+    let visibleCount = 0;
+    let hiddenCount = 0;
 
     for (const [category, groupNodes] of groupArray) {
         const stackSize = groupNodes.length;
+        const visibleInStack = Math.min(stackSize, MAX_VISIBLE_STACK);
 
         groupNodes.forEach((node, idx) => {
             node.stackIndex = idx;
             node.stackSize = stackSize;
 
-            // Stack horizontally with small offset
-            node.targetX = centerX + (idx - (stackSize - 1) / 2) * config.stackOffset;
-            node.targetY = currentY + idx * STACK_OFFSET_Y;
+            if (idx < MAX_VISIBLE_STACK) {
+                // Visible node - stack with small offset
+                node.visible = true;
+                node.targetX = centerX + (idx - (visibleInStack - 1) / 2) * STACK_OFFSET_X;
+                node.targetY = currentY + idx * STACK_OFFSET_Y;
+                visibleCount++;
+            } else {
+                // Hidden node
+                node.visible = false;
+                hiddenCount++;
+            }
         });
 
-        currentY += config.rowSpacing;
+        currentY += ROW_SPACING;
     }
+
+    stackInfo.hidden = hiddenCount;
 }
 
 // =============================================================================
 // Hit Testing
 // =============================================================================
 
-function hitTest(screenX, screenY, nodes, transform) {
-    const world = screenToWorld(screenX, screenY, transform);
-
-    // Check nodes in reverse order (topmost first)
-    const nodeArray = Array.from(nodes.values()).reverse();
+function hitTest(screenX, screenY, nodes) {
+    // Check visible nodes in reverse order (topmost first)
+    const nodeArray = Array.from(nodes.values()).filter(n => n.visible).reverse();
 
     for (const node of nodeArray) {
         const halfWidth = CARD_WIDTH / 2;
         const halfHeight = CARD_HEIGHT / 2;
 
-        if (world.x >= node.x - halfWidth && world.x <= node.x + halfWidth &&
-            world.y >= node.y - halfHeight - TAB_HEIGHT && world.y <= node.y + halfHeight) {
+        if (screenX >= node.x - halfWidth && screenX <= node.x + halfWidth &&
+            screenY >= node.y - halfHeight - TAB_HEIGHT && screenY <= node.y + halfHeight) {
             return node;
         }
     }
@@ -264,27 +252,21 @@ class NodeVisualizer {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
 
-        // Transform state (pan/zoom)
-        this.transform = {
-            offsetX: 0,
-            offsetY: 0,
-            scale: 1
-        };
-
         // Data
         this.nodes = new Map();
         this.selectedNodeId = null;
         this.hoveredNodeId = null;
         this.domainSuffix = '.tunnelmesh';
 
+        // Stack info for "+ N more" labels
+        this.stackInfo = {
+            left: { total: 0, hidden: 0 },
+            right: { total: 0, hidden: 0 }
+        };
+
         // Animation
         this.animating = false;
         this.animationProgress = 1;
-
-        // Interaction state
-        this.isDragging = false;
-        this.lastMouseX = 0;
-        this.lastMouseY = 0;
 
         // Callbacks
         this.onNodeSelected = null;
@@ -336,8 +318,14 @@ class NodeVisualizer {
             }
         }
 
-        // Recalculate layout
-        this.recalculateLayout();
+        // Auto-select first node if none selected
+        if (!this.selectedNodeId && this.nodes.size > 0) {
+            const firstNode = this.nodes.values().next().value;
+            this.selectNode(firstNode.id);
+        } else {
+            // Recalculate layout
+            this.recalculateLayout();
+        }
     }
 
     selectNode(nodeId) {
@@ -383,7 +371,7 @@ class NodeVisualizer {
 
     recalculateLayout() {
         const rect = this.canvas.getBoundingClientRect();
-        calculateLayout(this.nodes, this.selectedNodeId, rect.width, rect.height);
+        calculateLayout(this.nodes, this.selectedNodeId, rect.width, rect.height, this.stackInfo);
     }
 
     // -------------------------------------------------------------------------
@@ -399,7 +387,7 @@ class NodeVisualizer {
     }
 
     animate() {
-        this.animationProgress += 0.08;
+        this.animationProgress += 0.12;
 
         if (this.animationProgress >= 1) {
             this.animationProgress = 1;
@@ -423,32 +411,16 @@ class NodeVisualizer {
     }
 
     // -------------------------------------------------------------------------
-    // Interaction
+    // Interaction (simplified - no pan/zoom)
     // -------------------------------------------------------------------------
 
     setupInteraction() {
-        // Mouse events
-        this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
         this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
-        this.canvas.addEventListener('mouseup', () => this.onMouseUp());
         this.canvas.addEventListener('mouseleave', () => this.onMouseLeave());
-        this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
         this.canvas.addEventListener('click', (e) => this.onClick(e));
-
-        // Touch events
-        this.canvas.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: false });
-        this.canvas.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
-        this.canvas.addEventListener('touchend', () => this.onTouchEnd());
 
         // Resize
         window.addEventListener('resize', () => this.resize());
-    }
-
-    onMouseDown(e) {
-        this.isDragging = true;
-        this.lastMouseX = e.clientX;
-        this.lastMouseY = e.clientY;
-        this.canvas.style.cursor = 'grabbing';
     }
 
     onMouseMove(e) {
@@ -456,110 +428,41 @@ class NodeVisualizer {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        if (this.isDragging) {
-            const dx = e.clientX - this.lastMouseX;
-            const dy = e.clientY - this.lastMouseY;
-            this.transform.offsetX += dx;
-            this.transform.offsetY += dy;
-            this.lastMouseX = e.clientX;
-            this.lastMouseY = e.clientY;
-            this.render();
-        } else {
-            // Update hover
-            const node = hitTest(x, y, this.nodes, this.transform);
-            const newHoveredId = node ? node.id : null;
+        // Update hover
+        const node = hitTest(x, y, this.nodes);
+        const newHoveredId = node ? node.id : null;
 
-            if (newHoveredId !== this.hoveredNodeId) {
-                if (this.hoveredNodeId && this.nodes.has(this.hoveredNodeId)) {
-                    this.nodes.get(this.hoveredNodeId).hovered = false;
-                }
-                this.hoveredNodeId = newHoveredId;
-                if (newHoveredId && this.nodes.has(newHoveredId)) {
-                    this.nodes.get(newHoveredId).hovered = true;
-                }
-                this.canvas.style.cursor = newHoveredId ? 'pointer' : 'grab';
-                this.render();
+        if (newHoveredId !== this.hoveredNodeId) {
+            if (this.hoveredNodeId && this.nodes.has(this.hoveredNodeId)) {
+                this.nodes.get(this.hoveredNodeId).hovered = false;
             }
+            this.hoveredNodeId = newHoveredId;
+            if (newHoveredId && this.nodes.has(newHoveredId)) {
+                this.nodes.get(newHoveredId).hovered = true;
+            }
+            this.canvas.style.cursor = newHoveredId ? 'pointer' : 'default';
+            this.render();
         }
     }
 
-    onMouseUp() {
-        this.isDragging = false;
-        this.canvas.style.cursor = this.hoveredNodeId ? 'pointer' : 'grab';
-    }
-
     onMouseLeave() {
-        this.isDragging = false;
         if (this.hoveredNodeId && this.nodes.has(this.hoveredNodeId)) {
             this.nodes.get(this.hoveredNodeId).hovered = false;
         }
         this.hoveredNodeId = null;
-        this.canvas.style.cursor = 'grab';
+        this.canvas.style.cursor = 'default';
         this.render();
     }
 
     onClick(e) {
-        if (this.isDragging) return;
-
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        const node = hitTest(x, y, this.nodes, this.transform);
+        const node = hitTest(x, y, this.nodes);
         if (node) {
-            this.selectNode(node.id === this.selectedNodeId ? null : node.id);
-        } else {
-            this.selectNode(null);
+            this.selectNode(node.id);
         }
-    }
-
-    onWheel(e) {
-        e.preventDefault();
-
-        const rect = this.canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-        const minScale = 0.3;
-        const maxScale = 3;
-
-        const newScale = Math.max(minScale, Math.min(maxScale, this.transform.scale * zoomFactor));
-
-        // Zoom toward mouse position
-        const scaleChange = newScale / this.transform.scale;
-        this.transform.offsetX = mouseX - (mouseX - this.transform.offsetX) * scaleChange;
-        this.transform.offsetY = mouseY - (mouseY - this.transform.offsetY) * scaleChange;
-        this.transform.scale = newScale;
-
-        this.render();
-    }
-
-    // Touch handling
-    onTouchStart(e) {
-        if (e.touches.length === 1) {
-            e.preventDefault();
-            this.isDragging = true;
-            this.lastMouseX = e.touches[0].clientX;
-            this.lastMouseY = e.touches[0].clientY;
-        }
-    }
-
-    onTouchMove(e) {
-        if (e.touches.length === 1 && this.isDragging) {
-            e.preventDefault();
-            const dx = e.touches[0].clientX - this.lastMouseX;
-            const dy = e.touches[0].clientY - this.lastMouseY;
-            this.transform.offsetX += dx;
-            this.transform.offsetY += dy;
-            this.lastMouseX = e.touches[0].clientX;
-            this.lastMouseY = e.touches[0].clientY;
-            this.render();
-        }
-    }
-
-    onTouchEnd() {
-        this.isDragging = false;
     }
 
     // -------------------------------------------------------------------------
@@ -585,50 +488,132 @@ class NodeVisualizer {
             return;
         }
 
-        // Apply transform
-        ctx.save();
-        ctx.translate(this.transform.offsetX, this.transform.offsetY);
-        ctx.scale(this.transform.scale, this.transform.scale);
+        if (!this.selectedNodeId) {
+            // Draw prompt to select
+            ctx.fillStyle = COLORS.textDim;
+            ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Select a peer to view connections', width / 2, height / 2);
+            return;
+        }
 
-        // Draw connections
+        // Draw connections first (behind nodes)
         this.renderConnections(ctx);
 
-        // Draw nodes (sorted so selected is on top)
-        const sortedNodes = Array.from(this.nodes.values()).sort((a, b) => {
-            if (a.selected) return 1;
-            if (b.selected) return -1;
-            if (a.hovered) return 1;
-            if (b.hovered) return -1;
-            return 0;
-        });
+        // Draw stack shadows (grey cards behind visible ones)
+        this.renderStackShadows(ctx);
 
-        for (const node of sortedNodes) {
+        // Draw visible nodes (sorted so selected is on top)
+        const visibleNodes = Array.from(this.nodes.values())
+            .filter(n => n.visible)
+            .sort((a, b) => {
+                if (a.selected) return 1;
+                if (b.selected) return -1;
+                if (a.hovered) return 1;
+                if (b.hovered) return -1;
+                // Sort by stack index so top cards render last
+                return a.stackIndex - b.stackIndex;
+            });
+
+        for (const node of visibleNodes) {
             this.renderNode(ctx, node);
         }
 
-        ctx.restore();
+        // Draw "+ N more" labels
+        this.renderStackLabels(ctx, width, height);
+    }
+
+    renderStackShadows(ctx) {
+        // Draw grey shadows to indicate hidden nodes in stack
+        const selected = this.nodes.get(this.selectedNodeId);
+        if (!selected) return;
+
+        // Group visible nodes by side and category
+        const leftGroups = new Map();
+        const rightGroups = new Map();
+
+        for (const node of this.nodes.values()) {
+            if (node.id === this.selectedNodeId) continue;
+            if (node.stackSize <= MAX_VISIBLE_STACK) continue;  // No hidden nodes
+
+            const isLeft = node.targetX < selected.targetX;
+            const groups = isLeft ? leftGroups : rightGroups;
+
+            if (!groups.has(node.category)) {
+                groups.set(node.category, node);
+            }
+        }
+
+        // Draw shadow cards for groups with hidden nodes
+        ctx.fillStyle = COLORS.stackShadow;
+        ctx.strokeStyle = COLORS.cardStroke;
+        ctx.lineWidth = 1;
+
+        for (const [groups] of [[leftGroups], [rightGroups]]) {
+            for (const [cat, node] of groups) {
+                const hiddenCount = node.stackSize - MAX_VISIBLE_STACK;
+                // Draw grey shadow cards behind the stack
+                for (let i = 0; i < Math.min(hiddenCount, 3); i++) {
+                    const offsetX = (MAX_VISIBLE_STACK + i) * STACK_OFFSET_X;
+                    const offsetY = (MAX_VISIBLE_STACK + i) * STACK_OFFSET_Y;
+                    const x = node.targetX + offsetX - CARD_WIDTH / 2;
+                    const y = node.targetY + offsetY - CARD_HEIGHT / 2;
+
+                    ctx.beginPath();
+                    ctx.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 6);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+
+    renderStackLabels(ctx, width, height) {
+        const selected = this.nodes.get(this.selectedNodeId);
+        if (!selected) return;
+
+        ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        ctx.fillStyle = COLORS.textDim;
+
+        // Left side label
+        if (this.stackInfo.left.hidden > 0) {
+            ctx.textAlign = 'center';
+            const labelX = selected.x - COLUMN_SPACING;
+            const labelY = height - 20;
+            ctx.fillText(`+ ${this.stackInfo.left.hidden} more connections`, labelX, labelY);
+        }
+
+        // Right side label
+        if (this.stackInfo.right.hidden > 0) {
+            ctx.textAlign = 'center';
+            const labelX = selected.x + COLUMN_SPACING;
+            const labelY = height - 20;
+            ctx.fillText(`+ ${this.stackInfo.right.hidden} more connections`, labelX, labelY);
+        }
     }
 
     renderConnections(ctx) {
-        if (!this.selectedNodeId) return;
-
         const selected = this.nodes.get(this.selectedNodeId);
         if (!selected) return;
 
         for (const node of this.nodes.values()) {
             if (node.id === this.selectedNodeId) continue;
+            if (!node.visible) continue;
 
             const canReach = canNodeReach(node, selected) || canNodeReach(selected, node);
             if (!canReach) continue;
+
+            // Determine which side
+            const isLeft = node.x < selected.x;
 
             // Draw curved connection
             ctx.beginPath();
             ctx.strokeStyle = COLORS.connectionHighlight;
             ctx.lineWidth = 2;
 
-            const startX = node.x + CARD_WIDTH / 2;
+            const startX = isLeft ? node.x + CARD_WIDTH / 2 : node.x - CARD_WIDTH / 2;
             const startY = node.y;
-            const endX = selected.x - CARD_WIDTH / 2;
+            const endX = isLeft ? selected.x - CARD_WIDTH / 2 : selected.x + CARD_WIDTH / 2;
             const endY = selected.y;
 
             // Control point for curve
