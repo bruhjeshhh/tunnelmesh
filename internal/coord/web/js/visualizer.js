@@ -209,6 +209,8 @@ class NodeVisualizer {
         this.slots = [];  // Visual slots for rendering
         this.selectedNodeId = null;
         this.hoveredSlotId = null;
+        this.hoveredArrow = null;  // 'left' or 'right'
+        this.navArrows = null;  // Arrow positions for hit testing
         this.domainSuffix = '.tunnelmesh';
 
         // Stack info for "+ N more" labels
@@ -407,19 +409,31 @@ class NodeVisualizer {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        // Update hover
+        // Check arrows first
+        const arrow = this.hitTestNavArrows(x, y);
+        if (arrow !== this.hoveredArrow) {
+            this.hoveredArrow = arrow;
+            if (arrow) {
+                this.canvas.style.cursor = 'pointer';
+                this.render();
+                return;
+            }
+        }
+
+        // Update slot hover
         const slot = this.hitTestSlots(x, y);
         const newHoveredId = slot ? slot.id : null;
 
-        if (newHoveredId !== this.hoveredSlotId) {
+        if (newHoveredId !== this.hoveredSlotId || !arrow) {
             this.hoveredSlotId = newHoveredId;
-            this.canvas.style.cursor = newHoveredId ? 'pointer' : 'default';
+            this.canvas.style.cursor = (newHoveredId || arrow) ? 'pointer' : 'default';
             this.render();
         }
     }
 
     onMouseLeave() {
         this.hoveredSlotId = null;
+        this.hoveredArrow = null;
         this.canvas.style.cursor = 'default';
         this.render();
     }
@@ -428,6 +442,17 @@ class NodeVisualizer {
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
+
+        // Check arrows first
+        const arrow = this.hitTestNavArrows(x, y);
+        if (arrow === 'left') {
+            this.navigatePrev();
+            return;
+        }
+        if (arrow === 'right') {
+            this.navigateNext();
+            return;
+        }
 
         const slot = this.hitTestSlots(x, y);
         if (slot && slot.node.id !== this.selectedNodeId) {
@@ -497,6 +522,68 @@ class NodeVisualizer {
 
         // Draw "+ N more" labels
         this.renderStackLabels(ctx, width, height);
+
+        // Draw navigation arrows below center node
+        this.renderNavArrows(ctx);
+    }
+
+    renderNavArrows(ctx) {
+        const centerSlot = this.slots.find(s => s.side === 'center');
+        if (!centerSlot || this.nodes.size <= 1) return;
+
+        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 20;
+        const arrowSpacing = 30;
+
+        ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+
+        // Left arrow
+        ctx.fillStyle = this.hoveredArrow === 'left' ? COLORS.text : COLORS.textDim;
+        ctx.textAlign = 'center';
+        ctx.fillText('◀', centerSlot.x - arrowSpacing, arrowY);
+
+        // Right arrow
+        ctx.fillStyle = this.hoveredArrow === 'right' ? COLORS.text : COLORS.textDim;
+        ctx.fillText('▶', centerSlot.x + arrowSpacing, arrowY);
+
+        // Store arrow positions for hit testing
+        this.navArrows = {
+            y: arrowY,
+            leftX: centerSlot.x - arrowSpacing,
+            rightX: centerSlot.x + arrowSpacing
+        };
+    }
+
+    hitTestNavArrows(screenX, screenY) {
+        if (!this.navArrows || this.nodes.size <= 1) return null;
+
+        const hitRadius = 15;
+        const { y, leftX, rightX } = this.navArrows;
+
+        if (Math.abs(screenX - leftX) < hitRadius && Math.abs(screenY - y) < hitRadius) {
+            return 'left';
+        }
+        if (Math.abs(screenX - rightX) < hitRadius && Math.abs(screenY - y) < hitRadius) {
+            return 'right';
+        }
+        return null;
+    }
+
+    getSortedNodeIds() {
+        return Array.from(this.nodes.keys()).sort();
+    }
+
+    navigatePrev() {
+        const ids = this.getSortedNodeIds();
+        const currentIndex = ids.indexOf(this.selectedNodeId);
+        const prevIndex = (currentIndex - 1 + ids.length) % ids.length;
+        this.selectNode(ids[prevIndex]);
+    }
+
+    navigateNext() {
+        const ids = this.getSortedNodeIds();
+        const currentIndex = ids.indexOf(this.selectedNodeId);
+        const nextIndex = (currentIndex + 1) % ids.length;
+        this.selectNode(ids[nextIndex]);
     }
 
     renderStackLabels(ctx, width, height) {
