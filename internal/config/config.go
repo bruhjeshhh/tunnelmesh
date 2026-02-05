@@ -13,8 +13,10 @@ import (
 
 // AdminConfig holds configuration for the admin web interface.
 type AdminConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Token   string `yaml:"token"` // Authentication token for admin access (optional, but recommended)
+	Enabled       bool   `yaml:"enabled"`
+	BindAddress   string `yaml:"bind_address"`     // Bind address for admin server (default: "127.0.0.1" - localhost only)
+	Port          int    `yaml:"port"`             // Port for admin server (default: 8080)
+	MeshOnlyAdmin *bool  `yaml:"mesh_only_admin"`  // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
 }
 
 // RelayConfig holds configuration for the relay server.
@@ -137,8 +139,18 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 			cfg.DataDir = filepath.Join(homeDir, cfg.DataDir[2:])
 		}
 	}
-	// Admin enabled by default
+	// Admin defaults
 	cfg.Admin.Enabled = true
+	if cfg.Admin.BindAddress == "" {
+		cfg.Admin.BindAddress = "127.0.0.1" // Secure by default - localhost only
+	}
+	if cfg.Admin.Port == 0 {
+		if cfg.JoinMesh != nil {
+			cfg.Admin.Port = 443 // Standard HTTPS port for mesh-only admin
+		} else {
+			cfg.Admin.Port = 8080 // HTTP on localhost
+		}
+	}
 	// Relay enabled by default
 	if !cfg.Relay.Enabled {
 		cfg.Relay.Enabled = true
