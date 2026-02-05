@@ -48,7 +48,7 @@ func runTrustCA(cmd *cobra.Command, args []string) error {
 	setupLogging()
 
 	if trustCARemove {
-		return removeCAFromSystem()
+		return removeCA()
 	}
 	return InstallCAFromServer(trustCAServer)
 }
@@ -105,10 +105,6 @@ func InstallCAFromServer(serverURL string) error {
 	return installCAWithName(tmpPath, caName)
 }
 
-func removeCAFromSystem() error {
-	return removeCA("")
-}
-
 func installCAWithName(certPath, caName string) error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -122,7 +118,7 @@ func installCAWithName(certPath, caName string) error {
 	}
 }
 
-func removeCA(certPath string) error {
+func removeCA() error {
 	switch runtime.GOOS {
 	case "darwin":
 		return removeCAMacOS()
@@ -135,6 +131,15 @@ func removeCA(certPath string) error {
 	}
 }
 
+// runCmd executes a command with stdout/stderr/stdin attached.
+func runCmd(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
 // macOS implementation
 func installCAMacOS(certPath, caName string) error {
 	log.Info().Msg("installing CA certificate (requires sudo)")
@@ -143,15 +148,10 @@ func installCAMacOS(certPath, caName string) error {
 	_ = removeCAMacOSByName(caName, false) // Ignore error if not found
 
 	// Add to system keychain
-	cmd := exec.Command("sudo", "security", "add-trusted-cert",
+	if err := runCmd("sudo", "security", "add-trusted-cert",
 		"-d", "-r", "trustRoot",
 		"-k", "/Library/Keychains/System.keychain",
-		certPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	if err := cmd.Run(); err != nil {
+		certPath); err != nil {
 		return fmt.Errorf("security add-trusted-cert failed: %w", err)
 	}
 
@@ -190,99 +190,50 @@ func removeCAMacOSByName(caName string, verbose bool) error {
 	return nil
 }
 
+// Linux distro configuration
+type linuxDistro struct {
+	name       string
+	certPath   string
+	updateCmd  []string
+	detectFile string
+}
+
+var linuxDistros = []linuxDistro{
+	{"Debian/Ubuntu", "/usr/local/share/ca-certificates/tunnelmesh-ca.crt", []string{"update-ca-certificates"}, "/etc/debian_version"},
+	{"RHEL/Fedora", "/etc/pki/ca-trust/source/anchors/tunnelmesh-ca.crt", []string{"update-ca-trust"}, "/etc/redhat-release"},
+	{"Arch Linux", "/etc/ca-certificates/trust-source/anchors/tunnelmesh-ca.crt", []string{"trust", "extract-compat"}, "/etc/arch-release"},
+}
+
+func detectLinuxDistro() *linuxDistro {
+	for i := range linuxDistros {
+		if fileExists(linuxDistros[i].detectFile) {
+			return &linuxDistros[i]
+		}
+	}
+	// Also check for Fedora specifically
+	if fileExists("/etc/fedora-release") {
+		return &linuxDistros[1] // RHEL/Fedora
+	}
+	return nil
+}
+
 // Linux implementation
 func installCALinux(certPath string) error {
-	// Detect distro and use appropriate method
-	if fileExists("/etc/debian_version") {
-		return installCADebian(certPath)
-	}
-	if fileExists("/etc/redhat-release") || fileExists("/etc/fedora-release") {
-		return installCARedHat(certPath)
-	}
-	if fileExists("/etc/arch-release") {
-		return installCAArch(certPath)
+	distro := detectLinuxDistro()
+	if distro == nil {
+		log.Warn().Msg("unknown Linux distribution, trying Debian/Ubuntu method")
+		distro = &linuxDistros[0]
 	}
 
-	// Fallback: try Debian method
-	log.Warn().Msg("unknown Linux distribution, trying Debian/Ubuntu method")
-	return installCADebian(certPath)
-}
+	log.Info().Str("distro", distro.name).Msg("installing CA certificate (requires sudo)")
 
-func installCADebian(certPath string) error {
-	log.Info().Msg("installing CA certificate (Debian/Ubuntu, requires sudo)")
-
-	destPath := "/usr/local/share/ca-certificates/tunnelmesh-ca.crt"
-
-	// Copy cert
-	cmd := exec.Command("sudo", "cp", certPath, destPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
+	if err := runCmd("sudo", "cp", certPath, distro.certPath); err != nil {
 		return fmt.Errorf("copy cert failed: %w", err)
 	}
 
-	// Update CA certificates
-	cmd = exec.Command("sudo", "update-ca-certificates")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("update-ca-certificates failed: %w", err)
-	}
-
-	log.Info().Msg("CA certificate installed successfully")
-	return nil
-}
-
-func installCARedHat(certPath string) error {
-	log.Info().Msg("installing CA certificate (RHEL/Fedora, requires sudo)")
-
-	destPath := "/etc/pki/ca-trust/source/anchors/tunnelmesh-ca.crt"
-
-	// Copy cert
-	cmd := exec.Command("sudo", "cp", certPath, destPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("copy cert failed: %w", err)
-	}
-
-	// Update CA trust
-	cmd = exec.Command("sudo", "update-ca-trust")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("update-ca-trust failed: %w", err)
-	}
-
-	log.Info().Msg("CA certificate installed successfully")
-	return nil
-}
-
-func installCAArch(certPath string) error {
-	log.Info().Msg("installing CA certificate (Arch Linux, requires sudo)")
-
-	destPath := "/etc/ca-certificates/trust-source/anchors/tunnelmesh-ca.crt"
-
-	// Copy cert
-	cmd := exec.Command("sudo", "cp", certPath, destPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("copy cert failed: %w", err)
-	}
-
-	// Update CA trust
-	cmd = exec.Command("sudo", "trust", "extract-compat")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("trust extract-compat failed: %w", err)
+	updateArgs := append([]string{distro.updateCmd[0]}, distro.updateCmd[1:]...)
+	if err := runCmd("sudo", updateArgs...); err != nil {
+		return fmt.Errorf("%s failed: %w", distro.updateCmd[0], err)
 	}
 
 	log.Info().Msg("CA certificate installed successfully")
@@ -290,22 +241,14 @@ func installCAArch(certPath string) error {
 }
 
 func removeCALinux() error {
-	// Try to remove from all known locations
-	paths := []string{
-		"/usr/local/share/ca-certificates/tunnelmesh-ca.crt",
-		"/etc/pki/ca-trust/source/anchors/tunnelmesh-ca.crt",
-		"/etc/ca-certificates/trust-source/anchors/tunnelmesh-ca.crt",
-	}
+	log.Info().Msg("removing CA certificate (requires sudo)")
 
+	// Try to remove from all known locations
 	var removed bool
-	for _, path := range paths {
-		if fileExists(path) {
-			cmd := exec.Command("sudo", "rm", path)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Stdin = os.Stdin
-			if err := cmd.Run(); err != nil {
-				log.Warn().Str("path", path).Err(err).Msg("failed to remove")
+	for _, distro := range linuxDistros {
+		if fileExists(distro.certPath) {
+			if err := runCmd("sudo", "rm", distro.certPath); err != nil {
+				log.Warn().Str("path", distro.certPath).Err(err).Msg("failed to remove")
 			} else {
 				removed = true
 			}
@@ -317,25 +260,10 @@ func removeCALinux() error {
 		return nil
 	}
 
-	// Update CA certificates
-	if fileExists("/etc/debian_version") {
-		cmd := exec.Command("sudo", "update-ca-certificates")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		_ = cmd.Run()
-	} else if fileExists("/etc/redhat-release") || fileExists("/etc/fedora-release") {
-		cmd := exec.Command("sudo", "update-ca-trust")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		_ = cmd.Run()
-	} else if fileExists("/etc/arch-release") {
-		cmd := exec.Command("sudo", "trust", "extract-compat")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		_ = cmd.Run()
+	// Update CA store
+	if distro := detectLinuxDistro(); distro != nil {
+		updateArgs := append([]string{distro.updateCmd[0]}, distro.updateCmd[1:]...)
+		_ = runCmd("sudo", updateArgs...)
 	}
 
 	log.Info().Msg("CA certificate removed successfully")
@@ -356,11 +284,7 @@ func installCAWindows(certPath, caName string) error {
 	}
 
 	// Use certutil to add to root store
-	cmd := exec.Command("certutil", "-addstore", "-f", "ROOT", absPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
+	if err := runCmd("certutil", "-addstore", "-f", "ROOT", absPath); err != nil {
 		return fmt.Errorf("certutil failed (run as Administrator): %w", err)
 	}
 
