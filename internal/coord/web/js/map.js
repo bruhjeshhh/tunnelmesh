@@ -227,18 +227,24 @@ class NodeMap {
         // Update previous selected marker back to normal color
         if (previousSelected && this.markers.has(previousSelected)) {
             const entry = this.markers.get(previousSelected);
-            if (entry && entry.marker) {
-                const color = '#3fb950'; // green for online (assume online if marker exists)
+            const color = '#3fb950'; // green for online (assume online if marker exists)
+            if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
+            }
+            if (entry.circle) {
+                entry.circle.setStyle({ fillColor: color, color: color });
             }
         }
 
         // Update newly selected marker to blue
         if (peerName && this.markers.has(peerName)) {
             const entry = this.markers.get(peerName);
-            if (entry && entry.marker) {
-                const color = '#58a6ff'; // blue for selected
+            const color = '#58a6ff'; // blue for selected
+            if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
+            }
+            if (entry.circle) {
+                entry.circle.setStyle({ fillColor: color, color: color });
             }
         }
     }

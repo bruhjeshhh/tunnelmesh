@@ -313,3 +313,125 @@ func TestClient_RegisterWithRetry_ConnectionRefused(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "after 2 attempts")
 }
+
+func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
+	// Track geolocation API calls
+	var geoLookupCount atomic.Int32
+	var lastLookedUpIP atomic.Value
+
+	// Create mock ip-api.com server
+	geoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		geoLookupCount.Add(1)
+		ip := r.URL.Path[len("/json/"):]
+		lastLookedUpIP.Store(ip)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status": "success",
+			"lat": 51.5074,
+			"lon": -0.1278,
+			"city": "London",
+			"regionName": "England",
+			"country": "United Kingdom"
+		}`))
+	}))
+	defer geoServer.Close()
+
+	// Create test server with custom geolocation cache
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	// Replace the geolocation cache with one pointing to our mock server
+	srv.ipGeoCache = NewIPGeoCache(geoServer.URL + "/json/")
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "test-token")
+
+	// Test 1: First registration should trigger geolocation lookup
+	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil)
+	require.NoError(t, err)
+
+	// Wait for background geolocation to complete
+	time.Sleep(100 * time.Millisecond)
+
+	initialCount := geoLookupCount.Load()
+	assert.Equal(t, int32(1), initialCount, "first registration should trigger one geolocation lookup")
+
+	// Verify location was set
+	peers, err := client.ListPeers()
+	require.NoError(t, err)
+	require.Len(t, peers, 1)
+	require.NotNil(t, peers[0].Location)
+	assert.Equal(t, "ip", peers[0].Location.Source)
+
+	// Test 2: Re-registration with SAME IP should NOT trigger new lookup
+	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil)
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, initialCount, geoLookupCount.Load(), "re-registration with same IP should not trigger new lookup")
+
+	// Test 3: Re-registration with DIFFERENT IP should trigger new lookup
+	_, err = client.Register("node1", "SHA256:key1", []string{"5.6.7.8"}, nil, 2222, 0, false, "v1.0.0", nil)
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, initialCount+1, geoLookupCount.Load(), "re-registration with different IP should trigger new lookup")
+	assert.Equal(t, "5.6.7.8", lastLookedUpIP.Load().(string))
+}
+
+func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "test-token")
+
+	// Register with manual location
+	manualLoc := &proto.GeoLocation{
+		Latitude:  40.7128,
+		Longitude: -74.0060,
+		Source:    "manual",
+		City:      "New York",
+	}
+	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", manualLoc)
+	require.NoError(t, err)
+
+	// Verify location
+	peers, err := client.ListPeers()
+	require.NoError(t, err)
+	require.Len(t, peers, 1)
+	require.NotNil(t, peers[0].Location)
+	assert.Equal(t, "manual", peers[0].Location.Source)
+	assert.Equal(t, 40.7128, peers[0].Location.Latitude)
+
+	// Re-register with different IP but NO location (simulating reconnect)
+	_, err = client.Register("node1", "SHA256:key1", []string{"5.6.7.8"}, nil, 2222, 0, false, "v1.0.0", nil)
+	require.NoError(t, err)
+
+	// Manual location should be preserved
+	peers, err = client.ListPeers()
+	require.NoError(t, err)
+	require.Len(t, peers, 1)
+	require.NotNil(t, peers[0].Location)
+	assert.Equal(t, "manual", peers[0].Location.Source, "manual location should be preserved even when IP changes")
+	assert.Equal(t, 40.7128, peers[0].Location.Latitude)
+}

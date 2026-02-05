@@ -327,11 +327,39 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Preserve existing location if re-registering without new location
+	// Only trigger IP geolocation if peer is new or IP has changed
 	var location *proto.GeoLocation
+	var needsGeoLookup bool
+	var geoLookupIP string
+
+	existing, isExisting := s.peers[req.Name]
+
 	if req.Location != nil {
+		// Manual location provided - use it
 		location = req.Location
-	} else if existing, ok := s.peers[req.Name]; ok && existing.peer.Location != nil {
-		location = existing.peer.Location
+	} else if isExisting && existing.peer.Location != nil {
+		// Existing peer has location - check if we should keep it
+		existingLoc := existing.peer.Location
+		if existingLoc.Source == "manual" {
+			// Always preserve manual locations
+			location = existingLoc
+		} else if existingLoc.Source == "ip" && len(req.PublicIPs) > 0 && len(existing.peer.PublicIPs) > 0 {
+			// IP-based location - keep if IP hasn't changed
+			if req.PublicIPs[0] == existing.peer.PublicIPs[0] {
+				location = existingLoc
+			} else {
+				// IP changed - need new lookup
+				needsGeoLookup = true
+				geoLookupIP = req.PublicIPs[0]
+			}
+		} else {
+			// Keep existing location as fallback
+			location = existingLoc
+		}
+	} else if len(req.PublicIPs) > 0 {
+		// New peer with public IPs - need geolocation lookup
+		needsGeoLookup = true
+		geoLookupIP = req.PublicIPs[0]
 	}
 
 	peer := &proto.Peer{
@@ -349,9 +377,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Location:    location,
 	}
 
+	// Preserve registeredAt for existing peers
+	registeredAt := time.Now()
+	if isExisting {
+		registeredAt = existing.registeredAt
+	}
+
 	s.peers[req.Name] = &peerInfo{
 		peer:         peer,
-		registeredAt: time.Now(),
+		registeredAt: registeredAt,
 	}
 	s.dnsCache[req.Name] = meshIP
 
@@ -367,9 +401,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Str("mesh_ip", meshIP).
 		Msg("peer registered")
 
-	// If no location and peer has public IPs, try IP geolocation in background
-	if location == nil && len(req.PublicIPs) > 0 {
-		go s.lookupPeerLocation(req.Name, req.PublicIPs[0])
+	// Trigger IP geolocation only for new peers or when IP has changed
+	if needsGeoLookup {
+		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
 	resp := proto.RegisterResponse{
