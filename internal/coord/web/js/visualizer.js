@@ -18,6 +18,12 @@ const ROW_SPACING = 110;  // Vertical spacing between spread nodes
 const CONNECTION_DOT_RADIUS = 5;
 const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
+// Content dimension bounds (content size scales with canvas, within these limits)
+const MIN_CONTENT_WIDTH = 1200;
+const MAX_CONTENT_WIDTH = 2200;
+const MIN_CONTENT_HEIGHT = 350;
+const MAX_CONTENT_HEIGHT = 500;
+
 // Colors matching dashboard theme - simplified uniform styling
 const COLORS = {
     background: '#0d1117',
@@ -125,7 +131,7 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
 
     // Dynamic column spacing based on canvas width (adjust to fit)
     // Increased spacing to move nodes further from center
-    const columnSpacing = Math.min(340, (canvasWidth - CARD_WIDTH * 3) / 2);
+    const columnSpacing = Math.min(500, (canvasWidth - CARD_WIDTH * 3) / 2);
 
     // Reset stack info
     stackInfo.left = { total: 0, hidden: 0 };
@@ -239,8 +245,24 @@ class NodeVisualizer {
         this.animationStart = 0;
         this.animationDuration = 400;  // ms
 
+        // Pan state
+        this.panX = 0;
+        this.panY = 0;
+        this.isDragging = false;
+        this.dragStartX = 0;
+        this.dragStartY = 0;
+        this.panStartX = 0;
+        this.panStartY = 0;
+
+        // Dynamic content dimensions (calculated from canvas size)
+        this.contentWidth = MIN_CONTENT_WIDTH;
+        this.contentHeight = MIN_CONTENT_HEIGHT;
+
         // Callbacks
         this.onNodeSelected = null;
+
+        // Bound event handlers (stored for cleanup)
+        this._boundResize = () => this.resize();
 
         // Setup
         this.setupInteraction();
@@ -316,8 +338,9 @@ class NodeVisualizer {
 
             this.selectNode(nodeToSelect);
         } else {
-            // Recalculate layout
+            // Recalculate layout and animate to new positions
             this.recalculateLayout();
+            this.startAnimation();
         }
     }
 
@@ -354,6 +377,10 @@ class NodeVisualizer {
 
         this.ctx.scale(dpr, dpr);
 
+        // Calculate content dimensions based on canvas size (with min/max bounds)
+        this.contentWidth = Math.max(MIN_CONTENT_WIDTH, Math.min(MAX_CONTENT_WIDTH, rect.width * 0.95));
+        this.contentHeight = Math.max(MIN_CONTENT_HEIGHT, Math.min(MAX_CONTENT_HEIGHT, rect.height * 0.9));
+
         this.recalculateLayout();
         this.render();
     }
@@ -363,10 +390,10 @@ class NodeVisualizer {
     // -------------------------------------------------------------------------
 
     recalculateLayout() {
-        const rect = this.canvas.getBoundingClientRect();
         const oldSlots = new Map(this.slots.map(s => [s.id, { x: s.x, y: s.y }]));
 
-        calculateLayout(this.nodes, this.selectedNodeId, rect.width, rect.height, this.stackInfo, this.slots);
+        // Use dynamic content size for layout
+        calculateLayout(this.nodes, this.selectedNodeId, this.contentWidth, this.contentHeight, this.stackInfo, this.slots);
 
         // Preserve old positions for animation, or initialize to target
         for (const slot of this.slots) {
@@ -427,25 +454,96 @@ class NodeVisualizer {
     }
 
     // -------------------------------------------------------------------------
-    // Interaction (simplified - no pan/zoom)
+    // Interaction (with pan support)
     // -------------------------------------------------------------------------
 
     setupInteraction() {
+        this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
         this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+        this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
         this.canvas.addEventListener('mouseleave', () => this.onMouseLeave());
-        this.canvas.addEventListener('click', (e) => this.onClick(e));
 
-        // Resize
-        window.addEventListener('resize', () => this.resize());
+        // Resize - use bound handler for cleanup
+        window.addEventListener('resize', this._boundResize);
+    }
+
+    // Clean up event listeners to prevent memory leaks
+    destroy() {
+        window.removeEventListener('resize', this._boundResize);
+    }
+
+    // Convert screen coordinates to content coordinates (accounting for pan and centering)
+    screenToContent(screenX, screenY) {
+        const rect = this.canvas.getBoundingClientRect();
+        const offsetX = (rect.width - this.contentWidth) / 2 + this.panX;
+        const offsetY = (rect.height - this.contentHeight) / 2 + this.panY;
+        return {
+            x: screenX - offsetX,
+            y: screenY - offsetY
+        };
+    }
+
+    // Constrain pan to bounds (allow panning up to 2x content size)
+    clampPan() {
+        const maxPanX = this.contentWidth / 2;
+        const maxPanY = this.contentHeight / 2;
+        this.panX = Math.max(-maxPanX, Math.min(maxPanX, this.panX));
+        this.panY = Math.max(-maxPanY, Math.min(maxPanY, this.panY));
+    }
+
+    onMouseDown(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+
+        // Check if clicking on interactive element first
+        const content = this.screenToContent(screenX, screenY);
+        const arrow = this.hitTestNavArrows(content.x, content.y);
+        const slot = this.hitTestSlots(content.x, content.y);
+
+        if (arrow) {
+            // Handle arrow click immediately
+            if (arrow === 'left') {
+                this.navigatePrev();
+            } else if (arrow === 'right') {
+                this.navigateNext();
+            }
+            return;
+        }
+
+        if (slot && slot.node.id !== this.selectedNodeId) {
+            // Handle slot click immediately
+            this.selectNode(slot.node.id);
+            return;
+        }
+
+        // Start drag for panning
+        this.isDragging = true;
+        this.dragStartX = e.clientX;
+        this.dragStartY = e.clientY;
+        this.panStartX = this.panX;
+        this.panStartY = this.panY;
+        this.canvas.style.cursor = 'grabbing';
     }
 
     onMouseMove(e) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+
+        if (this.isDragging) {
+            // Update pan offset
+            this.panX = this.panStartX + (e.clientX - this.dragStartX);
+            this.panY = this.panStartY + (e.clientY - this.dragStartY);
+            this.clampPan();
+            this.render();
+            return;
+        }
+
+        const content = this.screenToContent(screenX, screenY);
 
         // Check arrows first
-        const arrow = this.hitTestNavArrows(x, y);
+        const arrow = this.hitTestNavArrows(content.x, content.y);
         if (arrow !== this.hoveredArrow) {
             this.hoveredArrow = arrow;
             if (arrow) {
@@ -456,54 +554,69 @@ class NodeVisualizer {
         }
 
         // Update slot hover
-        const slot = this.hitTestSlots(x, y);
+        const slot = this.hitTestSlots(content.x, content.y);
         const newHoveredId = slot ? slot.id : null;
 
         if (newHoveredId !== this.hoveredSlotId || !arrow) {
             this.hoveredSlotId = newHoveredId;
-            this.canvas.style.cursor = (newHoveredId || arrow) ? 'pointer' : 'default';
+            this.canvas.style.cursor = (newHoveredId || arrow) ? 'pointer' : 'grab';
             this.render();
         }
     }
 
+    onMouseUp(e) {
+        if (this.isDragging) {
+            // Check if it was a click (minimal movement)
+            const dx = Math.abs(e.clientX - this.dragStartX);
+            const dy = Math.abs(e.clientY - this.dragStartY);
+            const wasClick = dx < 5 && dy < 5;
+
+            this.isDragging = false;
+            this.canvas.style.cursor = 'grab';
+
+            if (wasClick) {
+                // Treat as click
+                const rect = this.canvas.getBoundingClientRect();
+                const screenX = e.clientX - rect.left;
+                const screenY = e.clientY - rect.top;
+                const content = this.screenToContent(screenX, screenY);
+
+                const arrow = this.hitTestNavArrows(content.x, content.y);
+                if (arrow === 'left') {
+                    this.navigatePrev();
+                    return;
+                }
+                if (arrow === 'right') {
+                    this.navigateNext();
+                    return;
+                }
+
+                const slot = this.hitTestSlots(content.x, content.y);
+                if (slot && slot.node.id !== this.selectedNodeId) {
+                    this.selectNode(slot.node.id);
+                }
+            }
+        }
+    }
+
     onMouseLeave() {
+        this.isDragging = false;
         this.hoveredSlotId = null;
         this.hoveredArrow = null;
         this.canvas.style.cursor = 'default';
         this.render();
     }
 
-    onClick(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-
-        // Check arrows first
-        const arrow = this.hitTestNavArrows(x, y);
-        if (arrow === 'left') {
-            this.navigatePrev();
-            return;
-        }
-        if (arrow === 'right') {
-            this.navigateNext();
-            return;
-        }
-
-        const slot = this.hitTestSlots(x, y);
-        if (slot && slot.node.id !== this.selectedNodeId) {
-            this.selectNode(slot.node.id);
-        }
-    }
-
-    hitTestSlots(screenX, screenY) {
+    hitTestSlots(contentX, contentY) {
         // Check slots in reverse order (topmost first)
+        // contentX/contentY are already in content coordinates
         for (let i = this.slots.length - 1; i >= 0; i--) {
             const slot = this.slots[i];
             const halfWidth = CARD_WIDTH / 2;
             const halfHeight = CARD_HEIGHT / 2;
 
-            if (screenX >= slot.x - halfWidth && screenX <= slot.x + halfWidth &&
-                screenY >= slot.y - halfHeight - TAB_HEIGHT && screenY <= slot.y + halfHeight) {
+            if (contentX >= slot.x - halfWidth && contentX <= slot.x + halfWidth &&
+                contentY >= slot.y - halfHeight - TAB_HEIGHT && contentY <= slot.y + halfHeight) {
                 return slot;
             }
         }
@@ -540,6 +653,12 @@ class NodeVisualizer {
             return;
         }
 
+        // Apply pan offset - center content on canvas then apply pan
+        ctx.save();
+        const offsetX = (width - this.contentWidth) / 2 + this.panX;
+        const offsetY = (height - this.contentHeight) / 2 + this.panY;
+        ctx.translate(offsetX, offsetY);
+
         // Draw connections first (behind nodes)
         this.renderConnections(ctx);
 
@@ -556,10 +675,12 @@ class NodeVisualizer {
         }
 
         // Draw "+ N more" labels
-        this.renderStackLabels(ctx, width, height);
+        this.renderStackLabels(ctx, this.contentWidth, this.contentHeight);
 
         // Draw navigation arrows below center node
         this.renderNavArrows(ctx);
+
+        ctx.restore();
     }
 
     renderNavArrows(ctx) {
@@ -588,16 +709,16 @@ class NodeVisualizer {
         };
     }
 
-    hitTestNavArrows(screenX, screenY) {
+    hitTestNavArrows(contentX, contentY) {
         if (!this.navArrows || this.nodes.size <= 1) return null;
 
         const hitRadius = 15;
         const { y, leftX, rightX } = this.navArrows;
 
-        if (Math.abs(screenX - leftX) < hitRadius && Math.abs(screenY - y) < hitRadius) {
+        if (Math.abs(contentX - leftX) < hitRadius && Math.abs(contentY - y) < hitRadius) {
             return 'left';
         }
-        if (Math.abs(screenX - rightX) < hitRadius && Math.abs(screenY - y) < hitRadius) {
+        if (Math.abs(contentX - rightX) < hitRadius && Math.abs(contentY - y) < hitRadius) {
             return 'right';
         }
         return null;
