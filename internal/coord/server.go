@@ -59,6 +59,7 @@ type Server struct {
 	version      string                // Server version for admin display
 	sseHub       *sseHub               // SSE hub for real-time dashboard updates
 	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
+	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -471,10 +472,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := proto.RegisterResponse{
-		MeshIP:   meshIP,
-		MeshCIDR: s.cfg.MeshCIDR,
-		Domain:   s.cfg.DomainSuffix,
-		Token:    token,
+		MeshIP:      meshIP,
+		MeshCIDR:    s.cfg.MeshCIDR,
+		Domain:      s.cfg.DomainSuffix,
+		Token:       token,
+		CoordMeshIP: s.coordMeshIP, // For "this.tunnelmesh" resolution
 	}
 
 	// Generate TLS certificate for the peer
@@ -633,6 +635,13 @@ func (s *Server) lookupPeerLocation(peerName, ip string) {
 func (s *Server) ListenAndServe() error {
 	log.Info().Str("listen", s.cfg.Listen).Msg("starting coordination server")
 	return http.ListenAndServe(s.cfg.Listen, s)
+}
+
+// SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
+// This is called after join_mesh completes so other peers can resolve "this" to the coordinator.
+func (s *Server) SetCoordMeshIP(ip string) {
+	s.coordMeshIP = ip
+	log.Info().Str("ip", ip).Msg("coordinator mesh IP set for 'this.tunnelmesh' resolution")
 }
 
 // StartAdminServer starts the admin interface on the specified address.
