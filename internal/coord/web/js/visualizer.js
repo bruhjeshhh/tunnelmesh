@@ -212,6 +212,7 @@ class NodeVisualizer {
         this.hoveredArrow = null;  // 'left' or 'right'
         this.navArrows = null;  // Arrow positions for hit testing
         this.domainSuffix = '.tunnelmesh';
+        this.coordNodeName = null;  // Name of coord node if enabled as peer
 
         // Stack info for "+ N more" labels
         this.stackInfo = {
@@ -241,6 +242,10 @@ class NodeVisualizer {
 
     setDomainSuffix(suffix) {
         this.domainSuffix = suffix;
+    }
+
+    setCoordNodeName(name) {
+        this.coordNodeName = name;
     }
 
     syncNodes(peers, wgConcentratorName = null) {
@@ -276,10 +281,26 @@ class NodeVisualizer {
             }
         }
 
-        // Auto-select first node if none selected
+        // Auto-select node if none selected
+        // Priority: 'server-node' > coord node > first alphabetically
         if (!this.selectedNodeId && this.nodes.size > 0) {
-            const firstNode = this.nodes.values().next().value;
-            this.selectNode(firstNode.id);
+            let nodeToSelect = null;
+
+            // 1. Prefer 'server-node'
+            if (this.nodes.has('server-node')) {
+                nodeToSelect = 'server-node';
+            }
+            // 2. Try coord node (if set)
+            else if (this.coordNodeName && this.nodes.has(this.coordNodeName)) {
+                nodeToSelect = this.coordNodeName;
+            }
+            // 3. Fallback to first alphabetically
+            else {
+                const sortedIds = Array.from(this.nodes.keys()).sort();
+                nodeToSelect = sortedIds[0];
+            }
+
+            this.selectNode(nodeToSelect);
         } else {
             // Recalculate layout
             this.recalculateLayout();
