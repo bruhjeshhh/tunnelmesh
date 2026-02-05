@@ -1254,10 +1254,12 @@ function highlightPeerOnCharts(peerName) {
 }
 
 // Central function to select a node - emits event for all listeners
+// Exposed globally so it can be called from HTML onclick handlers
 function selectNode(nodeId) {
     state.selectedNodeId = nodeId;
     events.emit('nodeSelected', nodeId);
 }
+window.selectNode = selectNode;
 
 // Initialize visualizer
 function initVisualizer() {
@@ -1271,6 +1273,13 @@ function initVisualizer() {
     state.visualizer.onNodeSelected = (nodeId) => {
         selectNode(nodeId);
     };
+
+    // Subscribe visualizer to selection events (for external selection changes)
+    events.on('nodeSelected', (nodeId) => {
+        if (state.visualizer) {
+            state.visualizer.setSelection(nodeId);
+        }
+    });
 
     // Subscribe charts to selection events
     events.on('nodeSelected', highlightPeerOnCharts);

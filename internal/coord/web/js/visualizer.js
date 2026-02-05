@@ -366,6 +366,26 @@ class NodeVisualizer {
         }
     }
 
+    // Set selection without triggering callback (for external sync)
+    setSelection(nodeId) {
+        if (this.selectedNodeId === nodeId) return;
+
+        // Deselect previous
+        if (this.selectedNodeId && this.nodes.has(this.selectedNodeId)) {
+            this.nodes.get(this.selectedNodeId).selected = false;
+        }
+
+        this.selectedNodeId = nodeId;
+
+        // Select new
+        if (nodeId && this.nodes.has(nodeId)) {
+            this.nodes.get(nodeId).selected = true;
+        }
+
+        this.recalculateLayout();
+        this.startAnimation();
+    }
+
     resize() {
         const rect = this.canvas.parentElement.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
