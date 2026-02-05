@@ -696,6 +696,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			// Configure NAT for exit node (server side)
 			if cfg.AllowExitTraffic {
 				log.Info().Msg("this node allows exit traffic from other peers")
+				exitCfg.IsExitNode = true
 
 				if err := tun.ConfigureExitNAT(exitCfg); err != nil {
 					log.Warn().Err(err).Msg("failed to configure exit NAT, manual setup may be required")
