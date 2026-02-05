@@ -215,9 +215,16 @@ func (f *Forwarder) IsExternalTraffic(dstIP net.IP) bool {
 	f.meshCIDRMu.RUnlock()
 
 	if meshCIDR == nil {
+		log.Trace().Str("dst", dstIP.String()).Msg("meshCIDR is nil, treating as internal")
 		return false // No mesh CIDR configured, treat all as mesh traffic
 	}
-	return !meshCIDR.Contains(dstIP)
+	isExternal := !meshCIDR.Contains(dstIP)
+	log.Trace().
+		Str("dst", dstIP.String()).
+		Str("meshCIDR", meshCIDR.String()).
+		Bool("isExternal", isExternal).
+		Msg("checked if external traffic")
+	return isExternal
 }
 
 // HandleRelayPacket processes a packet received from the persistent relay.
@@ -306,8 +313,22 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	f.exitNodeMu.RLock()
 	exitNode := f.exitNode
 	f.exitNodeMu.RUnlock()
-	if exitNode != "" && f.IsExternalTraffic(info.DstIP) {
+
+	isExternal := f.IsExternalTraffic(info.DstIP)
+	if exitNode != "" && isExternal {
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Str("exit_node", exitNode).
+			Msg("routing external traffic to exit node")
 		return f.forwardToExitNode(packet, info, exitNode)
+	}
+
+	// Debug: log when external traffic cannot be routed
+	if isExternal && exitNode == "" {
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Bool("meshCIDR_set", f.meshCIDR != nil).
+			Msg("external traffic but no exit node configured")
 	}
 
 	// Look up the route
@@ -404,14 +425,15 @@ func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeN
 		} else {
 			atomic.AddUint64(&f.stats.PacketsSent, 1)
 			atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
-			log.Trace().
-				Str("src", info.SrcIP.String()).
+			log.Debug().
 				Str("dst", info.DstIP.String()).
 				Str("exit_node", exitNodeName).
 				Int("len", len(packet)).
-				Msg("forwarded external packet via exit node")
+				Msg("forwarded exit packet via tunnel")
 			return nil
 		}
+	} else {
+		log.Debug().Str("exit_node", exitNodeName).Msg("no direct tunnel to exit node, trying relay")
 	}
 
 	// No direct tunnel or tunnel failed - try relay
@@ -547,6 +569,19 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 			Int("len", packetLen).
 			Msg("forwarded packet to WG client")
 		return nil
+	}
+
+	// Check for exit node routing (split tunnel)
+	f.exitNodeMu.RLock()
+	exitNode := f.exitNode
+	f.exitNodeMu.RUnlock()
+
+	if exitNode != "" && f.IsExternalTraffic(info.DstIP) {
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Str("exit_node", exitNode).
+			Msg("routing external traffic to exit node")
+		return f.forwardToExitNode(packet, info, exitNode)
 	}
 
 	// Look up the route
