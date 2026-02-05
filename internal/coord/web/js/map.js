@@ -260,7 +260,7 @@ class NodeMap {
         const polyline = L.polyline(curvePoints, {
             color: '#58a6ff',
             weight: 2,
-            opacity: 0.7,
+            opacity: 1,
             smoothFactor: 1
         }).addTo(this.map);
 

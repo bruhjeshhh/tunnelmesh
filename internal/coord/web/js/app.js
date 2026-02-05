@@ -909,7 +909,7 @@ function rebuildChartDatasets() {
         // Check if this peer is highlighted (selected in visualizer)
         const isHighlighted = peerName === state.charts.highlightedPeer;
         const lineColor = isHighlighted ? '#58a6ff' : baseColor;
-        const lineWidth = isHighlighted ? 3 : 1.5;
+        const lineWidth = isHighlighted ? 2 : 1.5;
 
         return {
             label: peerName,
