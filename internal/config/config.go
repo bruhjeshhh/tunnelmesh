@@ -86,6 +86,7 @@ type DNSConfig struct {
 type GeolocationConfig struct {
 	Latitude  float64 `yaml:"latitude"`  // Manual latitude (-90 to 90)
 	Longitude float64 `yaml:"longitude"` // Manual longitude (-180 to 180)
+	City      string  `yaml:"city"`      // Optional city name for display
 }
 
 // Validate checks if the geolocation coordinates are within valid ranges.

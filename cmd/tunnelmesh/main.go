@@ -80,6 +80,7 @@ var (
 	// Geolocation flags
 	latitude  float64
 	longitude float64
+	city      string
 
 	// Server feature flags
 	locationsEnabled bool
@@ -141,6 +142,7 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
+	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -531,6 +533,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.Geolocation.Latitude = latitude
 		cfg.Geolocation.Longitude = longitude
 	}
+	if city != "" {
+		cfg.Geolocation.City = city
+	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
@@ -590,11 +595,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		location = &proto.GeoLocation{
 			Latitude:  cfg.Geolocation.Latitude,
 			Longitude: cfg.Geolocation.Longitude,
+			City:      cfg.Geolocation.City,
 			Source:    "manual",
 		}
 		log.Info().
 			Float64("latitude", location.Latitude).
 			Float64("longitude", location.Longitude).
+			Str("city", location.City).
 			Msg("geolocation configured")
 	}
 
