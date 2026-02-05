@@ -11,6 +11,7 @@ class NodeMap {
         this.markers = new Map(); // peerName -> { marker, circle }
         this.bounds = null;
         this.initialized = false;
+        this.selectedPeer = null;
     }
 
     // Initialize the Leaflet map with dark theme tiles
@@ -71,14 +72,14 @@ class NodeMap {
             const lng = loc.longitude;
             boundsArray.push([lat, lng]);
 
-            // Determine marker color based on online status and source
+            // Determine marker color based on selection, online status and source
             let color;
-            if (!peer.online) {
+            if (peer.name === this.selectedPeer) {
+                color = '#58a6ff'; // blue for selected
+            } else if (!peer.online) {
                 color = '#6b7280'; // grey for offline
-            } else if (loc.source === 'manual') {
-                color = '#3fb950'; // green for manual config
             } else {
-                color = '#58a6ff'; // blue for IP geolocation
+                color = '#3fb950'; // green for online
             }
 
             // Create or update marker
@@ -215,6 +216,30 @@ class NodeMap {
         if (entry && entry.marker) {
             const latLng = entry.marker.getLatLng();
             this.map.panTo(latLng, { animate: false });
+        }
+    }
+
+    // Set the selected peer and update marker colors
+    setSelectedPeer(peerName) {
+        const previousSelected = this.selectedPeer;
+        this.selectedPeer = peerName;
+
+        // Update previous selected marker back to normal color
+        if (previousSelected && this.markers.has(previousSelected)) {
+            const entry = this.markers.get(previousSelected);
+            if (entry && entry.marker) {
+                const color = '#3fb950'; // green for online (assume online if marker exists)
+                entry.marker.setStyle({ fillColor: color, color: color });
+            }
+        }
+
+        // Update newly selected marker to blue
+        if (peerName && this.markers.has(peerName)) {
+            const entry = this.markers.get(peerName);
+            if (entry && entry.marker) {
+                const color = '#58a6ff'; // blue for selected
+                entry.marker.setStyle({ fillColor: color, color: color });
+            }
         }
     }
 

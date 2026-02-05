@@ -1247,8 +1247,11 @@ function initVisualizer() {
     // Wire up node selection to chart highlighting and map centering
     state.visualizer.onNodeSelected = (nodeId) => {
         highlightPeerOnCharts(nodeId);
-        if (state.nodeMap && nodeId) {
-            state.nodeMap.centerOnPeer(nodeId);
+        if (state.nodeMap) {
+            state.nodeMap.setSelectedPeer(nodeId);
+            if (nodeId) {
+                state.nodeMap.centerOnPeer(nodeId);
+            }
         }
     };
 }
