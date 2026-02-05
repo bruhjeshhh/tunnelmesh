@@ -125,7 +125,7 @@ function showToast(message, type = 'error', duration = TOAST_DURATION_MS) {
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
     try {
-        const url = includeHistory ? `/admin/api/overview?history=${MAX_HISTORY_POINTS}` : '/admin/api/overview';
+        const url = includeHistory ? `api/overview?history=${MAX_HISTORY_POINTS}` : 'api/overview';
         const resp = await fetch(url);
         if (resp.status === 401) {
             // Browser will show Basic Auth prompt on page load
@@ -161,7 +161,7 @@ function setupSSE() {
     }
 
     // EventSource with credentials for authenticated endpoints
-    state.eventSource = new EventSource('/admin/api/events', { withCredentials: true });
+    state.eventSource = new EventSource('api/events', { withCredentials: true });
 
     state.eventSource.addEventListener('connected', () => {
         console.log('SSE connected - dashboard will update in real-time');
@@ -640,7 +640,7 @@ async function fetchChartHistory() {
         // Fetch up to 1 hour of history
         const since = new Date(Date.now() - MAX_RANGE_HOURS * 60 * 60 * 1000);
 
-        const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${MAX_CHART_POINTS}`;
+        const url = `api/overview?since=${since.toISOString()}&maxPoints=${MAX_CHART_POINTS}`;
         const resp = await fetch(url);
         if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
@@ -1069,7 +1069,7 @@ function formatPorts(peer) {
 
 async function checkWireGuardStatus() {
     try {
-        const resp = await fetch('/admin/api/wireguard/clients');
+        const resp = await fetch('api/wireguard/clients');
         document.getElementById('wireguard-section').style.display = 'block';
 
         if (resp.ok) {
@@ -1099,7 +1099,7 @@ async function fetchWGClients() {
     if (!state.wgEnabled) return;
 
     try {
-        const resp = await fetch('/admin/api/wireguard/clients');
+        const resp = await fetch('api/wireguard/clients');
         if (resp.ok) {
             state.wgConcentratorConnected = true;
             const data = await resp.json();
@@ -1216,7 +1216,7 @@ async function createWGClient() {
     }
 
     try {
-        const resp = await fetch('/admin/api/wireguard/clients', {
+        const resp = await fetch('api/wireguard/clients', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name })
@@ -1266,7 +1266,7 @@ function downloadWGConfig() {
 
 async function toggleWGClient(id, enabled) {
     try {
-        const resp = await fetch(`/admin/api/wireguard/clients/${id}`, {
+        const resp = await fetch(`api/wireguard/clients/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled })
@@ -1290,7 +1290,7 @@ async function deleteWGClient(id, name) {
     }
 
     try {
-        const resp = await fetch(`/admin/api/wireguard/clients/${id}`, {
+        const resp = await fetch(`api/wireguard/clients/${id}`, {
             method: 'DELETE'
         });
 

@@ -26,7 +26,7 @@ admin:
   # For external access, use join_mesh (mesh-only HTTPS) or put behind authenticated proxy.
   #
   # With join_mesh configured: admin is served via HTTPS on the mesh IP only,
-  # accessible at https://<name>.tunnelmesh/admin/
+  # accessible at https://<name>.tunnelmesh/
   # Users should trust the mesh CA once: tunnelmesh trust-ca --server http://server:8080
 
 # WebSocket relay for peers that can't establish direct connections

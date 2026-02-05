@@ -219,37 +219,42 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 // With join_mesh: admin binds to mesh IP (HTTPS) - only accessible from mesh network.
 // Without join_mesh: admin binds to configured address (HTTP) - typically localhost only.
 func (s *Server) setupAdminRoutes() {
-	// Create a helper to register routes on a mux
-	registerAdminRoutes := func(mux *http.ServeMux) {
-		// API endpoints (no auth - access controlled by bind address)
-		mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
-		mux.HandleFunc("/admin/api/events", s.handleSSE)
-
-		// WireGuard client management endpoints (if enabled)
-		if s.cfg.WireGuard.Enabled {
-			mux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
-			mux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
-		}
-
-		// Serve embedded static files
-		staticFS, _ := fs.Sub(web.Assets, ".")
-		fileServer := http.FileServer(http.FS(staticFS))
-
-		// Serve index.html at /admin/ and /admin
-		mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
-		})
-		mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
-	}
+	// Serve embedded static files
+	staticFS, _ := fs.Sub(web.Assets, ".")
+	fileServer := http.FileServer(http.FS(staticFS))
 
 	if s.cfg.JoinMesh != nil {
 		// With join_mesh: create separate adminMux for HTTPS server on mesh IP
-		// Don't register on main mux - admin only accessible via mesh
+		// Serve at root (no /admin/ prefix needed - dedicated server)
 		s.adminMux = http.NewServeMux()
-		registerAdminRoutes(s.adminMux)
+
+		// API endpoints
+		s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)
+		s.adminMux.HandleFunc("/api/events", s.handleSSE)
+
+		// WireGuard client management endpoints (if enabled)
+		if s.cfg.WireGuard.Enabled {
+			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
+			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
+		}
+
+		// Serve static files at root
+		s.adminMux.Handle("/", fileServer)
 	} else {
-		// Without join_mesh: register on main mux (HTTP on bind_address)
-		registerAdminRoutes(s.mux)
+		// Without join_mesh: register on main mux with /admin/ prefix
+		// (shares mux with coordination API, needs prefix to avoid conflicts)
+		s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
+		s.mux.HandleFunc("/admin/api/events", s.handleSSE)
+
+		if s.cfg.WireGuard.Enabled {
+			s.mux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
+			s.mux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
+		}
+
+		s.mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+		})
+		s.mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
 	}
 }
 
