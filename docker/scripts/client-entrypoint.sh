@@ -87,6 +87,16 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+# Configure DNS to use TunnelMesh resolver for .tunnelmesh domains
+echo "Configuring DNS resolver..."
+# Backup original resolv.conf and add TunnelMesh DNS as primary
+cp /etc/resolv.conf /etc/resolv.conf.backup
+echo "nameserver 127.0.0.53" > /etc/resolv.conf
+echo "search tunnelmesh" >> /etc/resolv.conf
+cat /etc/resolv.conf.backup >> /etc/resolv.conf
+echo "DNS configured:"
+cat /etc/resolv.conf
+
 # Give time for initial peer discovery (Go code handles jitter and fast retries)
 echo "Waiting for initial peer discovery..."
 sleep 5
@@ -117,7 +127,7 @@ while true; do
         fi
     fi
 
-    # Pick a random peer and ping it
+    # Pick a random peer and ping it (alternating between IP and DNS alias)
     if [ -n "$PEER_IPS" ]; then
         # Convert to array and pick random
         readarray -t PEER_ARRAY <<< "$PEER_IPS"
@@ -128,11 +138,31 @@ while true; do
             TARGET_IP="${PEER_ARRAY[$RANDOM_INDEX]}"
             TARGET_NAME=$(echo "$PEERS_JSON" | jq -r ".peers[] | select(.mesh_ip == \"$TARGET_IP\") | .name" 2>/dev/null || echo "unknown")
 
-            echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME ($TARGET_IP) via mesh..."
-            if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
-                echo "  SUCCESS: $TARGET_NAME is reachable!"
+            # Randomly choose to ping by IP or by DNS alias
+            if [ $((RANDOM % 2)) -eq 0 ]; then
+                # Ping by IP
+                echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME ($TARGET_IP) via mesh IP..."
+                if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
+                    echo "  SUCCESS: $TARGET_NAME is reachable via IP!"
+                else
+                    echo "  FAILED: Cannot reach $TARGET_NAME via IP"
+                fi
             else
-                echo "  FAILED: Cannot reach $TARGET_NAME"
+                # Ping by DNS alias (alt.node-xxx.tunnelmesh)
+                # Use getent to resolve (musl's ping doesn't use custom resolvers properly)
+                TARGET_DNS="alt.${TARGET_NAME}.tunnelmesh"
+                RESOLVED_IP=$(getent hosts "$TARGET_DNS" 2>/dev/null | awk '{print $1}')
+                if [ -n "$RESOLVED_IP" ]; then
+                    echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS -> $RESOLVED_IP)..."
+                    if ping -c 1 -W 2 "$RESOLVED_IP" > /dev/null 2>&1; then
+                        echo "  SUCCESS: $TARGET_NAME is reachable via DNS alias!"
+                    else
+                        echo "  FAILED: Cannot reach $TARGET_NAME via DNS alias (ping failed)"
+                    fi
+                else
+                    echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS)..."
+                    echo "  FAILED: Cannot resolve DNS alias $TARGET_DNS"
+                fi
             fi
         fi
     fi

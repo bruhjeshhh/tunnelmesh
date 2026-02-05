@@ -507,13 +507,48 @@ function renderDnsTable() {
         return;
     }
 
+    // Build DNS records list: peer names + aliases, sorted by peer name then record name
+    const dnsRecords = [];
+    for (const peer of peers) {
+        // Add the peer's primary DNS name
+        dnsRecords.push({
+            name: peer.name,
+            meshIp: peer.mesh_ip,
+            peerName: peer.name,
+            isAlias: false
+        });
+        // Add aliases for this peer
+        if (peer.aliases && peer.aliases.length > 0) {
+            for (const alias of peer.aliases) {
+                dnsRecords.push({
+                    name: alias,
+                    meshIp: peer.mesh_ip,
+                    peerName: peer.name,
+                    isAlias: true
+                });
+            }
+        }
+    }
+
+    // Sort by peer name first (to group), then by record name
+    dnsRecords.sort((a, b) => {
+        if (a.peerName !== b.peerName) {
+            return a.peerName.localeCompare(b.peerName);
+        }
+        // Primary name comes before aliases
+        if (a.isAlias !== b.isAlias) {
+            return a.isAlias ? 1 : -1;
+        }
+        return a.name.localeCompare(b.name);
+    });
+
     if (dom.noDns) dom.noDns.style.display = 'none';
-    const visiblePeers = peers.slice(0, state.dnsVisibleCount);
+    const visibleRecords = dnsRecords.slice(0, state.dnsVisibleCount);
     if (!dom.dnsBody) return;
-    dom.dnsBody.innerHTML = visiblePeers.map(peer => `
+    dom.dnsBody.innerHTML = visibleRecords.map(record => `
         <tr>
-            <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
-            <td><code>${peer.mesh_ip}</code></td>
+            <td><code${record.isAlias ? ' style="color: var(--text-secondary)"' : ''}>${record.isAlias ? '↳ ' : ''}${escapeHtml(record.name)}${domainSuffix}</code></td>
+            <td><code>${record.meshIp}</code></td>
         </tr>
     `).join('');
 
@@ -523,7 +558,7 @@ function renderDnsTable() {
         showLessId: 'dns-show-less',
         shownCountId: 'dns-shown-count',
         totalCountId: 'dns-total-count',
-        totalCount: peers.length,
+        totalCount: dnsRecords.length,
         visibleCount: state.dnsVisibleCount
     });
 }
