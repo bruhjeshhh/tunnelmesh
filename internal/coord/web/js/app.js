@@ -323,10 +323,11 @@ async function fetchChartHistory() {
 }
 
 function initializeChartData(data) {
-    // Clear existing chart data
+    // Clear existing chart data and lastSeenTimes
     state.charts.chartData.labels = [];
     state.charts.chartData.throughput = {};
     state.charts.chartData.packets = {};
+    state.charts.lastSeenTimes = {};
 
     // Build chart data from peer histories
     // Each peer may have different history lengths, so we need to align timestamps
@@ -374,6 +375,12 @@ function initializeChartData(data) {
 
         state.charts.chartData.throughput[peerName] = throughputData;
         state.charts.chartData.packets[peerName] = packetsData;
+
+        // Initialize lastSeenTimes from the most recent history point
+        if (history.length > 0) {
+            const lastPoint = history[history.length - 1];
+            state.charts.lastSeenTimes[peerName] = new Date(lastPoint.ts).getTime();
+        }
     });
 
     rebuildChartDatasets();
