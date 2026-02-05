@@ -41,6 +41,9 @@ variable "nodes" {
     - size: string - Override default droplet size
     - wg_port: number - Override WireGuard port
     - ssh_port: number - Override SSH tunnel port
+    - exit_node: string - Route internet traffic through this peer (split-tunnel VPN)
+    - allow_exit_traffic: bool - Allow this node to be an exit node for other peers
+    - location: object - Manual GPS location { latitude, longitude, city, country }
     - tags: list(string) - Additional tags
   EOF
   type        = map(any)

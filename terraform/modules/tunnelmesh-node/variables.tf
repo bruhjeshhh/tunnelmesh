@@ -97,6 +97,46 @@ variable "ssh_tunnel_port" {
   default     = 2222
 }
 
+# --- Exit Node Settings ---
+
+variable "exit_node" {
+  description = "Name of peer to route internet traffic through (split-tunnel VPN)"
+  type        = string
+  default     = ""
+}
+
+variable "allow_exit_traffic" {
+  description = "Allow this node to act as an exit node for other peers"
+  type        = bool
+  default     = false
+}
+
+# --- Location Settings ---
+
+variable "location_latitude" {
+  description = "Manual GPS latitude for this node (overrides IP geolocation)"
+  type        = number
+  default     = null
+}
+
+variable "location_longitude" {
+  description = "Manual GPS longitude for this node (overrides IP geolocation)"
+  type        = number
+  default     = null
+}
+
+variable "location_city" {
+  description = "City name for this node location"
+  type        = string
+  default     = ""
+}
+
+variable "location_country" {
+  description = "Country name for this node location"
+  type        = string
+  default     = ""
+}
+
 # --- WireGuard Settings ---
 
 variable "wg_listen_port" {

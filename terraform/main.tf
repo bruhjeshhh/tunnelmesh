@@ -20,10 +20,24 @@
 #     region    = "fra1"
 #   }
 #
-#   # Exit node in Asia
+#   # Exit node in Asia (allows other peers to route internet traffic through it)
 #   "tm-asia" = {
-#     peer   = true
-#     region = "sgp1"
+#     peer               = true
+#     region             = "sgp1"
+#     allow_exit_traffic = true
+#     location = {
+#       latitude  = 1.3521
+#       longitude = 103.8198
+#       city      = "Singapore"
+#       country   = "Singapore"
+#     }
+#   }
+#
+#   # Client that routes internet traffic through tm-asia exit node
+#   "tm-client" = {
+#     peer      = true
+#     region    = "lon1"
+#     exit_node = "tm-asia"  # Route internet through Singapore exit
 #   }
 # }
 
@@ -82,6 +96,16 @@ module "node" {
   # Otherwise, connect to the coordinator node or external URL
   peer_server_url = lookup(each.value, "coordinator", false) ? "" : local.coordinator_url
 
+  # Exit node settings
+  exit_node          = lookup(each.value, "exit_node", "")
+  allow_exit_traffic = lookup(each.value, "allow_exit_traffic", false)
+
+  # Location settings (manual GPS override)
+  location_latitude  = try(each.value.location.latitude, null)
+  location_longitude = try(each.value.location.longitude, null)
+  location_city      = try(each.value.location.city, "")
+  location_country   = try(each.value.location.country, "")
+
   # WireGuard settings
   wg_listen_port = lookup(each.value, "wg_port", var.default_wg_port)
   wg_endpoint    = lookup(each.value, "wireguard", false) ? "${each.key}.${var.domain}:${lookup(each.value, "wg_port", var.default_wg_port)}" : ""
@@ -108,6 +132,7 @@ module "node" {
     lookup(each.value, "coordinator", false) ? ["coordinator"] : [],
     lookup(each.value, "peer", false) ? ["peer"] : [],
     lookup(each.value, "wireguard", false) ? ["wireguard"] : [],
+    lookup(each.value, "allow_exit_traffic", false) ? ["exit-node"] : [],
     try(each.value.tags, [])
   )
 }

@@ -35,6 +35,13 @@ admin_token = ""
 #   wg_port     = 51820       # Override WireGuard port
 #   ssh_port    = 2222        # Override SSH tunnel port
 #   tags        = ["custom"]  # Additional tags
+#
+# Exit node options (split-tunnel VPN):
+#   allow_exit_traffic = true/false  # Allow this node to be an exit node
+#   exit_node          = "node-name"  # Route internet through specified peer
+#
+# Location options (manual GPS - overrides IP geolocation):
+#   location = { latitude = 51.5, longitude = -0.12, city = "London", country = "UK" }
 
 # --- Example 1: All-in-One (recommended for getting started) ---
 # Single $4/month droplet with everything
@@ -78,7 +85,38 @@ nodes = {
 #   }
 # }
 
-# --- Example 4: High Availability Setup ---
+# --- Example 4: Exit Node Setup (Split-Tunnel VPN) ---
+# Route internet traffic through a designated exit node while keeping
+# mesh traffic direct. Great for privacy or geo-unblocking.
+# nodes = {
+#   "tunnelmesh" = {
+#     coordinator = true
+#     peer        = true
+#     wireguard   = true
+#     region      = "ams3"
+#   }
+#   # This node allows other peers to route their internet through it
+#   "tm-exit-sgp" = {
+#     peer               = true
+#     region             = "sgp1"
+#     allow_exit_traffic = true  # <-- Enable as exit node
+#     # Manual location (optional - overrides IP geolocation)
+#     location = {
+#       latitude  = 1.3521
+#       longitude = 103.8198
+#       city      = "Singapore"
+#       country   = "Singapore"
+#     }
+#   }
+#   # This peer routes its internet traffic through the Singapore exit
+#   "tm-client" = {
+#     peer      = true
+#     region    = "lon1"
+#     exit_node = "tm-exit-sgp"  # <-- Route internet through Singapore
+#   }
+# }
+
+# --- Example 5: High Availability Setup ---
 # Larger coordinator, multiple WireGuard entry points
 # nodes = {
 #   "tunnelmesh" = {
@@ -97,14 +135,9 @@ nodes = {
 #     wireguard = true
 #     region    = "sfo3"
 #   }
-#   "tm-exit-asia" = {
-#     peer   = true
-#     region = "sgp1"
-#     tags   = ["exit-node"]
-#   }
 # }
 
-# --- Example 5: Peers Only (external coordinator) ---
+# --- Example 6: Peers Only (external coordinator) ---
 # For connecting to an existing coordinator
 # external_coordinator_url = "https://tunnelmesh.example.com"
 # nodes = {

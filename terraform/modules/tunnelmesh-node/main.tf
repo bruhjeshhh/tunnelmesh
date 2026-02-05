@@ -72,6 +72,16 @@ resource "digitalocean_droplet" "node" {
     peer_server     = local.peer_server
     ssh_tunnel_port = var.ssh_tunnel_port
 
+    # Exit node settings
+    exit_node          = var.exit_node
+    allow_exit_traffic = var.allow_exit_traffic
+
+    # Location settings (manual GPS override)
+    location_latitude  = var.location_latitude
+    location_longitude = var.location_longitude
+    location_city      = var.location_city
+    location_country   = var.location_country
+
     # WireGuard settings
     wg_listen_port = var.wg_listen_port
     wg_endpoint    = local.wg_endpoint
