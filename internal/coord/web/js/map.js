@@ -142,37 +142,38 @@ class NodeMap {
         }
     }
 
-    // Update connection lines between all online peers
+    // Update connection lines from selected peer to other online peers
     updateConnections() {
         if (!this.map) return;
 
-        // Build set of expected connection keys
+        // Build set of expected connection keys (only from selected peer)
         const expectedConnections = new Set();
-        const peerNames = Array.from(this.onlinePeersWithLocation.keys()).sort();
 
-        // Create connections between all pairs of online peers
-        for (let i = 0; i < peerNames.length; i++) {
-            for (let j = i + 1; j < peerNames.length; j++) {
-                const key = `${peerNames[i]}-${peerNames[j]}`;
+        // Only draw connections if we have a selected peer that's online with location
+        if (this.selectedPeer && this.onlinePeersWithLocation.has(this.selectedPeer)) {
+            const selectedLoc = this.onlinePeersWithLocation.get(this.selectedPeer);
 
-                const loc1 = this.onlinePeersWithLocation.get(peerNames[i]);
-                const loc2 = this.onlinePeersWithLocation.get(peerNames[j]);
+            // Create connections from selected peer to all other online peers
+            this.onlinePeersWithLocation.forEach((loc, peerName) => {
+                if (peerName === this.selectedPeer) return;
+
+                const key = `${this.selectedPeer}-${peerName}`;
 
                 // Skip if either location is invalid
-                if (!loc1 || !loc2 || isNaN(loc1.lat) || isNaN(loc1.lng) || isNaN(loc2.lat) || isNaN(loc2.lng)) {
-                    continue;
+                if (!selectedLoc || !loc || isNaN(selectedLoc.lat) || isNaN(selectedLoc.lng) || isNaN(loc.lat) || isNaN(loc.lng)) {
+                    return;
                 }
 
                 expectedConnections.add(key);
 
                 if (this.connections.has(key)) {
                     // Update existing connection
-                    this.updateConnection(key, loc1, loc2);
+                    this.updateConnection(key, selectedLoc, loc);
                 } else {
                     // Create new connection
-                    this.createConnection(key, loc1, loc2);
+                    this.createConnection(key, selectedLoc, loc);
                 }
-            }
+            });
         }
 
         // Remove connections that no longer exist
@@ -184,6 +185,7 @@ class NodeMap {
     }
 
     // Calculate bezier curve points between two locations
+    // Trims first and last 5% to avoid crowding the node markers
     calculateCurvePoints(lat1, lng1, lat2, lng2, numPoints = 20) {
         const points = [];
 
@@ -193,9 +195,9 @@ class NodeMap {
         const dy = lat2 - lat1;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        // Handle same location - return straight line (just the two endpoints)
+        // Handle same location - return empty (no line needed)
         if (distance < 0.0001) {
-            return [[lat1, lng1], [lat2, lng2]];
+            return [];
         }
 
         // Calculate midpoint
@@ -212,8 +214,12 @@ class NodeMap {
         const ctrlLng = midLng + perpX;
 
         // Generate points along quadratic bezier curve
+        // Trim first and last 5% to avoid crowding node markers
+        const startT = 0.05;
+        const endT = 0.95;
+
         for (let i = 0; i <= numPoints; i++) {
-            const t = i / numPoints;
+            const t = startT + (i / numPoints) * (endT - startT);
             const t1 = 1 - t;
 
             // Quadratic bezier formula: B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
@@ -230,6 +236,9 @@ class NodeMap {
     createConnection(key, loc1, loc2) {
         const curvePoints = this.calculateCurvePoints(loc1.lat, loc1.lng, loc2.lat, loc2.lng);
 
+        // Skip if no points (same location)
+        if (curvePoints.length === 0) return;
+
         const polyline = L.polyline(curvePoints, {
             color: '#58a6ff',
             weight: 2,
@@ -237,29 +246,12 @@ class NodeMap {
             smoothFactor: 1
         }).addTo(this.map);
 
-        // Add connection dots at endpoints
-        const dot1 = L.circleMarker([loc1.lat, loc1.lng], {
-            radius: 4,
-            fillColor: '#58a6ff',
-            color: '#58a6ff',
-            weight: 0,
-            fillOpacity: 1
-        }).addTo(this.map);
-
-        const dot2 = L.circleMarker([loc2.lat, loc2.lng], {
-            radius: 4,
-            fillColor: '#58a6ff',
-            color: '#58a6ff',
-            weight: 0,
-            fillOpacity: 1
-        }).addTo(this.map);
-
         // Bring markers to front (above connection lines)
         this.markers.forEach(entry => {
             if (entry.marker) entry.marker.bringToFront();
         });
 
-        this.connections.set(key, { polyline, dot1, dot2 });
+        this.connections.set(key, { polyline });
     }
 
     // Update an existing connection line
@@ -268,9 +260,9 @@ class NodeMap {
         if (!entry) return;
 
         const curvePoints = this.calculateCurvePoints(loc1.lat, loc1.lng, loc2.lat, loc2.lng);
-        entry.polyline.setLatLngs(curvePoints);
-        entry.dot1.setLatLng([loc1.lat, loc1.lng]);
-        entry.dot2.setLatLng([loc2.lat, loc2.lng]);
+        if (curvePoints.length > 0) {
+            entry.polyline.setLatLngs(curvePoints);
+        }
     }
 
     // Remove a connection line
@@ -279,8 +271,6 @@ class NodeMap {
         if (!entry) return;
 
         if (entry.polyline) this.map.removeLayer(entry.polyline);
-        if (entry.dot1) this.map.removeLayer(entry.dot1);
-        if (entry.dot2) this.map.removeLayer(entry.dot2);
 
         this.connections.delete(key);
     }
@@ -403,6 +393,9 @@ class NodeMap {
                 entry.circle.setStyle({ fillColor: color, color: color });
             }
         }
+
+        // Update connections to show only from selected peer
+        this.updateConnections();
     }
 
     // Force map to recalculate size (call after container becomes visible)
