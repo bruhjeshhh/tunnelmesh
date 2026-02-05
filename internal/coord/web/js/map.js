@@ -357,7 +357,9 @@ class NodeMap {
         // Update previous selected marker back to normal color and remove its accuracy circle
         if (previousSelected && this.markers.has(previousSelected)) {
             const entry = this.markers.get(previousSelected);
-            const color = '#3fb950'; // green for online (assume online if marker exists)
+            // Use correct color based on online status
+            const isOnline = entry.peer && entry.peer.online;
+            const color = isOnline ? '#3fb950' : '#6b7280'; // green for online, grey for offline
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
             }
