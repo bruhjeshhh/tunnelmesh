@@ -11,3 +11,5 @@ tun:
   mtu: 1400
 dns:
   enabled: false
+  aliases:
+    - "alt.${NODE_NAME}"
