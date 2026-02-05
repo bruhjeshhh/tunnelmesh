@@ -683,8 +683,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 			// Configure exit node routing (client side)
 			if cfg.ExitNode != "" {
-				forwarder.SetExitNode(cfg.ExitNode)
-				log.Info().Str("exit_node", cfg.ExitNode).Msg("exit node configured, internet traffic will route through peer")
+				// Strip domain suffix if present (allow both "peer" and "peer.tunnelmesh")
+				exitNodeName := cfg.ExitNode
+				if resp.Domain != "" && strings.HasSuffix(exitNodeName, resp.Domain) {
+					exitNodeName = strings.TrimSuffix(exitNodeName, resp.Domain)
+				}
+				forwarder.SetExitNode(exitNodeName)
+				log.Info().Str("exit_node", exitNodeName).Msg("exit node configured, internet traffic will route through peer")
 
 				if err := tun.ConfigureExitRoutes(exitCfg); err != nil {
 					log.Warn().Err(err).Msg("failed to configure exit routes, manual setup may be required")
