@@ -81,7 +81,8 @@ class VisualizerNode {
 function formatBytesCompact(bytes) {
     if (bytes < 1024) return Math.round(bytes) + 'B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
-    return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
 }
 
 // Check if source node can reach target node
