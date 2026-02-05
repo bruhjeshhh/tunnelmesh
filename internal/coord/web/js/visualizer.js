@@ -56,6 +56,17 @@ class VisualizerNode {
         this.bytesSentRate = peer.bytes_sent_rate || 0;
         this.bytesReceivedRate = peer.bytes_received_rate || 0;
 
+        // Location info (region/city) - use shortest available
+        this.region = null;
+        if (peer.location && peer.location.source) {
+            // Prefer city, fall back to region, then country
+            this.region = peer.location.city || peer.location.region || peer.location.country || null;
+            // Truncate if too long
+            if (this.region && this.region.length > 20) {
+                this.region = this.region.substring(0, 18) + '…';
+            }
+        }
+
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
         this.dnsName = fullDns.length > 25 ? fullDns.substring(0, 22) + '...' : fullDns;
@@ -707,10 +718,10 @@ class NodeVisualizer {
         const centerSlot = this.slots.find(s => s.side === 'center');
         if (!centerSlot || this.nodes.size <= 1) return;
 
-        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 35;
-        const arrowSpacing = 50;
+        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 30;
+        const arrowSpacing = 40;
 
-        ctx.font = '48px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        ctx.font = '36px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
 
         // Left arrow
         ctx.fillStyle = this.hoveredArrow === 'left' ? COLORS.text : COLORS.textDim;
@@ -732,7 +743,7 @@ class NodeVisualizer {
     hitTestNavArrows(contentX, contentY) {
         if (!this.navArrows || this.nodes.size <= 1) return null;
 
-        const hitRadius = 30;
+        const hitRadius = 24;
         const { y, leftX, rightX } = this.navArrows;
 
         if (Math.abs(contentX - leftX) < hitRadius && Math.abs(contentY - y) < hitRadius) {
@@ -886,7 +897,17 @@ class NodeVisualizer {
         const tunnelText = `${node.activeTunnels}t`;
         ctx.fillText(tunnelText, contentX, contentY + lineHeight + 6);
 
+        // Region (after tunnel count, if available)
+        if (node.region) {
+            const tunnelWidth = ctx.measureText(tunnelText).width;
+            ctx.fillStyle = '#6e7681'; // Even dimmer than textDim
+            ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            ctx.fillText(node.region, contentX + tunnelWidth + 8, contentY + lineHeight + 6);
+        }
+
         // Throughput (right side of line 2)
+        ctx.fillStyle = COLORS.textDim;
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         const throughputText = `↑${formatBytesCompact(node.bytesSentRate)} ↓${formatBytesCompact(node.bytesReceivedRate)}`;
         ctx.textAlign = 'right';
         ctx.fillText(throughputText, x + CARD_WIDTH - 10, contentY + lineHeight + 6);
