@@ -40,6 +40,23 @@ const GREEN_GRADIENT = [
 
 // Max time range for charts (1 hour)
 const MAX_RANGE_HOURS = 1;
+
+// Toast notification system
+function showToast(message, type = 'error', duration = 4000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    // Auto-dismiss after duration
+    setTimeout(() => {
+        toast.classList.add('fade-out');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
 // At 10-second heartbeat intervals, 1 hour = 360 points
 // Request full resolution (no downsampling)
 const MAX_CHART_POINTS = 360;
@@ -187,12 +204,14 @@ function updateDashboard(data, loadHistory = false) {
             history.packetsTx.push(peer.packets_sent_rate || 0);
             history.packetsRx.push(peer.packets_received_rate || 0);
 
-            // Trim to max history
-            if (history.throughputTx.length > state.maxHistoryPoints) {
-                history.throughputTx.shift();
-                history.throughputRx.shift();
-                history.packetsTx.shift();
-                history.packetsRx.shift();
+            // Trim to max history using slice (O(n) instead of O(n) shift per element)
+            const maxPoints = state.maxHistoryPoints;
+            if (history.throughputTx.length > maxPoints) {
+                const excess = history.throughputTx.length - maxPoints;
+                history.throughputTx = history.throughputTx.slice(excess);
+                history.throughputRx = history.throughputRx.slice(excess);
+                history.packetsTx = history.packetsTx.slice(excess);
+                history.packetsRx = history.packetsRx.slice(excess);
             }
         }
     });
@@ -251,6 +270,42 @@ function createSparklinePath(data, width, height, padding, maxVal) {
     return 'M' + points.join(' L');
 }
 
+// Pagination helper - updates pagination UI elements
+function updatePaginationUI(config) {
+    const {
+        paginationId,
+        showMoreId,
+        showLessId,
+        shownCountId,
+        totalCountId,
+        totalCount,
+        visibleCount
+    } = config;
+
+    const paginationEl = document.getElementById(paginationId);
+    const showMoreEl = document.getElementById(showMoreId);
+    const showLessEl = document.getElementById(showLessId);
+
+    if (!paginationEl) return;
+
+    const hasMore = totalCount > visibleCount;
+    const canShowLess = visibleCount > state.rowsPerPage;
+
+    if (hasMore || canShowLess) {
+        paginationEl.style.display = 'block';
+        if (showMoreEl) showMoreEl.style.display = hasMore ? 'inline' : 'none';
+        if (showLessEl) showLessEl.style.display = canShowLess ? 'inline' : 'none';
+        if (hasMore && shownCountId && totalCountId) {
+            const shownEl = document.getElementById(shownCountId);
+            const totalEl = document.getElementById(totalCountId);
+            if (shownEl) shownEl.textContent = visibleCount;
+            if (totalEl) totalEl.textContent = totalCount;
+        }
+    } else {
+        paginationEl.style.display = 'none';
+    }
+}
+
 // Pagination functions
 function showMorePeers() {
     state.peersVisibleCount += state.rowsPerPage;
@@ -286,14 +341,11 @@ function renderPeersTable() {
     const peers = state.currentPeers;
     const tbody = document.getElementById('peers-body');
     const noPeers = document.getElementById('no-peers');
-    const peersPagination = document.getElementById('peers-pagination');
-    const peersShowMore = document.getElementById('peers-show-more');
-    const peersShowLess = document.getElementById('peers-show-less');
 
     if (peers.length === 0) {
         tbody.innerHTML = '';
         noPeers.style.display = 'block';
-        peersPagination.style.display = 'none';
+        document.getElementById('peers-pagination').style.display = 'none';
         return;
     }
 
@@ -328,36 +380,27 @@ function renderPeersTable() {
         </tr>
     `}).join('');
 
-    // Show/hide pagination links
-    const hasMore = peers.length > state.peersVisibleCount;
-    const canShowLess = state.peersVisibleCount > state.rowsPerPage;
-
-    if (hasMore || canShowLess) {
-        peersPagination.style.display = 'block';
-        peersShowMore.style.display = hasMore ? 'inline' : 'none';
-        peersShowLess.style.display = canShowLess ? 'inline' : 'none';
-        if (hasMore) {
-            document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
-            document.getElementById('peers-total-count').textContent = peers.length;
-        }
-    } else {
-        peersPagination.style.display = 'none';
-    }
+    updatePaginationUI({
+        paginationId: 'peers-pagination',
+        showMoreId: 'peers-show-more',
+        showLessId: 'peers-show-less',
+        shownCountId: 'peers-shown-count',
+        totalCountId: 'peers-total-count',
+        totalCount: peers.length,
+        visibleCount: state.peersVisibleCount
+    });
 }
 
 function renderDnsTable() {
     const peers = state.currentPeers;
     const dnsTbody = document.getElementById('dns-body');
     const noDns = document.getElementById('no-dns');
-    const dnsPagination = document.getElementById('dns-pagination');
-    const dnsShowMore = document.getElementById('dns-show-more');
-    const dnsShowLess = document.getElementById('dns-show-less');
     const domainSuffix = state.domainSuffix;
 
     if (peers.length === 0) {
         dnsTbody.innerHTML = '';
         noDns.style.display = 'block';
-        dnsPagination.style.display = 'none';
+        document.getElementById('dns-pagination').style.display = 'none';
         return;
     }
 
@@ -370,21 +413,15 @@ function renderDnsTable() {
         </tr>
     `).join('');
 
-    // Show/hide pagination links
-    const hasMore = peers.length > state.dnsVisibleCount;
-    const canShowLess = state.dnsVisibleCount > state.rowsPerPage;
-
-    if (hasMore || canShowLess) {
-        dnsPagination.style.display = 'block';
-        dnsShowMore.style.display = hasMore ? 'inline' : 'none';
-        dnsShowLess.style.display = canShowLess ? 'inline' : 'none';
-        if (hasMore) {
-            document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
-            document.getElementById('dns-total-count').textContent = peers.length;
-        }
-    } else {
-        dnsPagination.style.display = 'none';
-    }
+    updatePaginationUI({
+        paginationId: 'dns-pagination',
+        showMoreId: 'dns-show-more',
+        showLessId: 'dns-show-less',
+        shownCountId: 'dns-shown-count',
+        totalCountId: 'dns-total-count',
+        totalCount: peers.length,
+        visibleCount: state.dnsVisibleCount
+    });
 }
 
 function formatBytes(bytes) {
@@ -713,17 +750,14 @@ function updateChartsWithNewData(peers) {
         });
     });
 
-    // Trim to max points (rolling window)
+    // Trim to max points (rolling window) using slice - O(n) instead of O(n²) with shift loop
     const maxPoints = state.charts.maxChartPoints;
-    while (state.charts.chartData.labels.length > maxPoints) {
-        state.charts.chartData.labels.shift();
+    if (state.charts.chartData.labels.length > maxPoints) {
+        const excess = state.charts.chartData.labels.length - maxPoints;
+        state.charts.chartData.labels = state.charts.chartData.labels.slice(excess);
         Object.keys(state.charts.chartData.throughput).forEach(peerName => {
-            if (state.charts.chartData.throughput[peerName].length > maxPoints) {
-                state.charts.chartData.throughput[peerName].shift();
-            }
-            if (state.charts.chartData.packets[peerName].length > maxPoints) {
-                state.charts.chartData.packets[peerName].shift();
-            }
+            state.charts.chartData.throughput[peerName] = state.charts.chartData.throughput[peerName].slice(excess);
+            state.charts.chartData.packets[peerName] = state.charts.chartData.packets[peerName].slice(excess);
         });
     }
 
@@ -952,16 +986,13 @@ function updateWGClientsTable() {
     const tbody = document.getElementById('wg-clients-body');
     const noClients = document.getElementById('no-wg-clients');
     const addBtn = document.getElementById('add-wg-client-btn');
-    const wgPagination = document.getElementById('wg-pagination');
-    const wgShowMore = document.getElementById('wg-show-more');
-    const wgShowLess = document.getElementById('wg-show-less');
 
     // Check if concentrator is connected
     if (!state.wgConcentratorConnected) {
         tbody.innerHTML = '';
         noClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
         noClients.style.display = 'block';
-        if (wgPagination) wgPagination.style.display = 'none';
+        document.getElementById('wg-pagination').style.display = 'none';
         if (addBtn) addBtn.disabled = true;
         return;
     }
@@ -972,7 +1003,7 @@ function updateWGClientsTable() {
         tbody.innerHTML = '';
         noClients.textContent = 'No WireGuard peers yet. Add a peer to generate a QR code.';
         noClients.style.display = 'block';
-        if (wgPagination) wgPagination.style.display = 'none';
+        document.getElementById('wg-pagination').style.display = 'none';
         return;
     }
 
@@ -1000,23 +1031,15 @@ function updateWGClientsTable() {
         `;
     }).join('');
 
-    // Show/hide pagination links
-    if (wgPagination) {
-        const hasMore = state.wgClients.length > state.wgVisibleCount;
-        const canShowLess = state.wgVisibleCount > state.rowsPerPage;
-
-        if (hasMore || canShowLess) {
-            wgPagination.style.display = 'block';
-            wgShowMore.style.display = hasMore ? 'inline' : 'none';
-            wgShowLess.style.display = canShowLess ? 'inline' : 'none';
-            if (hasMore) {
-                document.getElementById('wg-shown-count').textContent = state.wgVisibleCount;
-                document.getElementById('wg-total-count').textContent = state.wgClients.length;
-            }
-        } else {
-            wgPagination.style.display = 'none';
-        }
-    }
+    updatePaginationUI({
+        paginationId: 'wg-pagination',
+        showMoreId: 'wg-show-more',
+        showLessId: 'wg-show-less',
+        shownCountId: 'wg-shown-count',
+        totalCountId: 'wg-total-count',
+        totalCount: state.wgClients.length,
+        visibleCount: state.wgVisibleCount
+    });
 }
 
 function formatLastSeen(timestamp) {
@@ -1054,7 +1077,7 @@ async function createWGClient() {
     const name = nameInput.value.trim();
 
     if (!name) {
-        alert('Please enter a client name');
+        showToast('Please enter a client name', 'warning');
         return;
     }
 
@@ -1067,7 +1090,7 @@ async function createWGClient() {
 
         if (!resp.ok) {
             const err = await resp.json();
-            alert('Failed to create client: ' + (err.message || 'Unknown error'));
+            showToast('Failed to create client: ' + (err.message || 'Unknown error'), 'error');
             return;
         }
 
@@ -1087,7 +1110,7 @@ async function createWGClient() {
 
     } catch (err) {
         console.error('Failed to create WG client:', err);
-        alert('Failed to create client');
+        showToast('Failed to create client', 'error');
     }
 }
 
@@ -1116,14 +1139,14 @@ async function toggleWGClient(id, enabled) {
         });
 
         if (!resp.ok) {
-            alert('Failed to update client');
+            showToast('Failed to update client', 'error');
             return;
         }
 
         fetchWGClients();
     } catch (err) {
         console.error('Failed to toggle WG client:', err);
-        alert('Failed to update client');
+        showToast('Failed to update client', 'error');
     }
 }
 
@@ -1138,14 +1161,14 @@ async function deleteWGClient(id, name) {
         });
 
         if (!resp.ok) {
-            alert('Failed to delete client');
+            showToast('Failed to delete client', 'error');
             return;
         }
 
         fetchWGClients();
     } catch (err) {
         console.error('Failed to delete WG client:', err);
-        alert('Failed to delete client');
+        showToast('Failed to delete client', 'error');
     }
 }
 
