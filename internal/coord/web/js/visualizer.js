@@ -493,8 +493,19 @@ class NodeVisualizer {
         const arrow = this.hitTestNavArrows(content.x, content.y);
         const slot = this.hitTestSlots(content.x, content.y);
 
-        if (arrow || slot) {
-            // Don't start drag if clicking interactive element
+        if (arrow) {
+            // Handle arrow click immediately
+            if (arrow === 'left') {
+                this.navigatePrev();
+            } else if (arrow === 'right') {
+                this.navigateNext();
+            }
+            return;
+        }
+
+        if (slot && slot.node.id !== this.selectedNodeId) {
+            // Handle slot click immediately
+            this.selectNode(slot.node.id);
             return;
         }
 
