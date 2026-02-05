@@ -299,7 +299,8 @@ class NodeMap {
             color: '#58a6ff',
             weight: 2,
             opacity: 1,
-            smoothFactor: 1
+            smoothFactor: 1,
+            dashArray: '6, 4'
         }).addTo(this.map);
 
         // Bring markers to front (above connection lines)
