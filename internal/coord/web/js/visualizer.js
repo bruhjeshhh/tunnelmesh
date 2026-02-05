@@ -124,7 +124,8 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     const centerY = canvasHeight / 2;
 
     // Dynamic column spacing based on canvas width (adjust to fit)
-    const columnSpacing = Math.min(300, (canvasWidth - CARD_WIDTH * 3) / 2.5);
+    // Increased spacing to move nodes further from center
+    const columnSpacing = Math.min(340, (canvasWidth - CARD_WIDTH * 3) / 2);
 
     // Reset stack info
     stackInfo.left = { total: 0, hidden: 0 };
@@ -185,10 +186,23 @@ function layoutColumn(nodes, centerX, centerY, stackInfo, slots, side) {
     const totalHeight = (visibleCount - 1) * ROW_SPACING;
     let currentY = centerY - totalHeight / 2;
 
+    // Elliptical offset - nodes at top/bottom curve inward
+    const ellipseWidth = 40;  // Max horizontal offset for ellipse effect
+
     for (let i = 0; i < visibleCount; i++) {
         const node = nodes[i];
         const slot = new VisualSlot(node, side);
-        slot.targetX = centerX;
+
+        // Calculate elliptical X offset based on Y distance from center
+        // Nodes at centerY get max offset, nodes away from center curve inward
+        const yDistFromCenter = Math.abs(currentY - centerY);
+        const maxYDist = totalHeight / 2 || 1;
+        const normalizedDist = yDistFromCenter / maxYDist;  // 0 at center, 1 at edges
+        const ellipseOffset = ellipseWidth * (1 - normalizedDist * normalizedDist);
+
+        // Apply offset away from center (left side goes more left, right side goes more right)
+        const offsetDir = side === 'left' ? -1 : 1;
+        slot.targetX = centerX + (offsetDir * ellipseOffset);
         slot.targetY = currentY;
         slots.push(slot);
         currentY += ROW_SPACING;
