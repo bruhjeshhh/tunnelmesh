@@ -667,6 +667,45 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 	node.Forwarder = forwarder
 
+	// Configure exit node settings
+	if tunDev != nil {
+		// Parse mesh CIDR for split-tunnel detection
+		_, meshNet, err := net.ParseCIDR(resp.MeshCIDR)
+		if err != nil {
+			log.Warn().Err(err).Str("cidr", resp.MeshCIDR).Msg("failed to parse mesh CIDR, exit routing disabled")
+		} else {
+			forwarder.SetMeshCIDR(meshNet)
+
+			exitCfg := tun.ExitRouteConfig{
+				InterfaceName: tunDev.Name(),
+				MeshCIDR:      resp.MeshCIDR,
+			}
+
+			// Configure exit node routing (client side)
+			if cfg.ExitNode != "" {
+				forwarder.SetExitNode(cfg.ExitNode)
+				log.Info().Str("exit_node", cfg.ExitNode).Msg("exit node configured, internet traffic will route through peer")
+
+				if err := tun.ConfigureExitRoutes(exitCfg); err != nil {
+					log.Warn().Err(err).Msg("failed to configure exit routes, manual setup may be required")
+				} else {
+					log.Info().Msg("exit routes configured (0.0.0.0/1, 128.0.0.0/1 via TUN)")
+				}
+			}
+
+			// Configure NAT for exit node (server side)
+			if cfg.AllowExitTraffic {
+				log.Info().Msg("this node allows exit traffic from other peers")
+
+				if err := tun.ConfigureExitNAT(exitCfg); err != nil {
+					log.Warn().Err(err).Msg("failed to configure exit NAT, manual setup may be required")
+				} else {
+					log.Info().Msg("exit NAT configured (IP forwarding + masquerade)")
+				}
+			}
+		}
+	}
+
 	// When forwarder detects a dead tunnel (write fails), disconnect the peer
 	// This removes the tunnel and triggers discovery for reconnection
 	forwarder.SetOnDeadTunnel(func(peerName string) {

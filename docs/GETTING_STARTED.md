@@ -400,21 +400,12 @@ Add:
 allow_exit_traffic: true
 ```
 
-Enable IP forwarding and NAT:
-
-```bash
-# Enable IP forwarding
-sudo sysctl -w net.ipv4.ip_forward=1
-echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
-
-# Configure NAT (replace 10.99.0.0/16 with your mesh_cidr)
-sudo iptables -t nat -A POSTROUTING -s 10.99.0.0/16 ! -d 10.99.0.0/16 -j MASQUERADE
-```
-
 Restart the peer service:
 ```bash
 sudo tunnelmesh service restart
 ```
+
+TunnelMesh automatically configures IP forwarding and NAT when `allow_exit_traffic` is enabled.
 
 ### Configure the Client
 

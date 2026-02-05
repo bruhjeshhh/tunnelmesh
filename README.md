@@ -230,11 +230,11 @@ Or in config:
 exit_node: "exit-peer-name"
 ```
 
-The exit node must have IP forwarding enabled and NAT configured. On Linux:
-```bash
-sysctl -w net.ipv4.ip_forward=1
-iptables -t nat -A POSTROUTING -s 10.99.0.0/16 ! -d 10.99.0.0/16 -j MASQUERADE
-```
+TunnelMesh automatically configures:
+- **Exit node**: IP forwarding and NAT/masquerade rules
+- **Client**: Default routes (0.0.0.0/1 and 128.0.0.0/1) through the TUN interface
+
+This works on Linux and macOS. On Windows, manual route configuration may be required.
 
 ### Config File Locations
 
