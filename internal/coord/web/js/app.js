@@ -13,6 +13,22 @@ const QUANTIZE_INTERVAL_MS = 10000;     // Timestamp quantization interval
 // Cached DOM elements (populated on DOMContentLoaded)
 const dom = {};
 
+// Simple event bus for cross-component communication
+const events = {
+    listeners: {},
+    on(event, fn) {
+        (this.listeners[event] ||= []).push(fn);
+    },
+    off(event, fn) {
+        if (this.listeners[event]) {
+            this.listeners[event] = this.listeners[event].filter(f => f !== fn);
+        }
+    },
+    emit(event, data) {
+        this.listeners[event]?.forEach(fn => fn(data));
+    }
+};
+
 // Dashboard state - track history per peer
 const state = {
     peerHistory: {}, // { peerName: { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] } }
@@ -20,6 +36,7 @@ const state = {
     wgEnabled: false,
     currentWGConfig: null,
     eventSource: null, // Store EventSource for cleanup
+    selectedNodeId: null, // Centralized selection state
     // Chart state
     charts: {
         throughput: null,
@@ -1230,10 +1247,16 @@ async function deleteWGClient(id, name) {
     }
 }
 
-// Highlight peer on charts when selected in visualizer
+// Highlight peer on charts when selected
 function highlightPeerOnCharts(peerName) {
     state.charts.highlightedPeer = peerName;
     rebuildChartDatasets();
+}
+
+// Central function to select a node - emits event for all listeners
+function selectNode(nodeId) {
+    state.selectedNodeId = nodeId;
+    events.emit('nodeSelected', nodeId);
 }
 
 // Initialize visualizer
@@ -1244,13 +1267,13 @@ function initVisualizer() {
     state.visualizer = new NodeVisualizer(canvas);
     state.visualizer.setDomainSuffix(state.domainSuffix);
 
-    // Wire up node selection to chart highlighting and map zoom
+    // Wire up visualizer selection to central event system
     state.visualizer.onNodeSelected = (nodeId) => {
-        highlightPeerOnCharts(nodeId);
-        if (state.nodeMap) {
-            state.nodeMap.setSelectedPeer(nodeId);
-        }
+        selectNode(nodeId);
     };
+
+    // Subscribe charts to selection events
+    events.on('nodeSelected', highlightPeerOnCharts);
 }
 
 // Initialize map
@@ -1260,6 +1283,13 @@ function initMap() {
 
     state.nodeMap = new NodeMap('node-map');
     // Map is initialized lazily when first peer with location is added
+
+    // Subscribe map to selection events
+    events.on('nodeSelected', (nodeId) => {
+        if (state.nodeMap) {
+            state.nodeMap.setSelectedPeer(nodeId);
+        }
+    });
 }
 
 // Initialize
