@@ -490,3 +490,62 @@ func TestPeerConfig_ValidateGeolocation(t *testing.T) {
 		})
 	}
 }
+
+// Exit Node Feature Tests
+
+func TestLoadPeerConfig_WithExitNode(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "client-node"
+server: "http://localhost:8080"
+auth_token: "token"
+exit_node: "exit-server"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "client-node", cfg.Name)
+	assert.Equal(t, "exit-server", cfg.ExitNode)
+}
+
+func TestLoadPeerConfig_WithAllowExitTraffic(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "exit-server"
+server: "http://localhost:8080"
+auth_token: "token"
+allow_exit_traffic: true
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "exit-server", cfg.Name)
+	assert.True(t, cfg.AllowExitTraffic)
+}
+
+func TestLoadPeerConfig_ExitNodeDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config without exit fields - they should default to empty/false
+	content := `
+name: "regular-node"
+server: "http://localhost:8080"
+auth_token: "token"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "", cfg.ExitNode, "exit_node should default to empty string")
+	assert.False(t, cfg.AllowExitTraffic, "allow_exit_traffic should default to false")
+}

@@ -227,6 +227,7 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 	stats := &proto.PeerStats{
 		ActiveTunnels: m.tunnelMgr.CountHealthy(),
 		Location:      m.identity.Location, // Include location in every heartbeat
+		Connections:   m.getConnectionTypes(),
 	}
 
 	if m.Forwarder != nil {
@@ -241,6 +242,25 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 	}
 
 	return stats
+}
+
+// getConnectionTypes returns a map of peer name to transport type for all connected peers.
+func (m *MeshNode) getConnectionTypes() map[string]string {
+	if m.Connections == nil {
+		return nil
+	}
+
+	connections := make(map[string]string)
+	for _, info := range m.Connections.AllInfo() {
+		if info.State == connection.StateConnected && info.TransportType != "" {
+			connections[info.PeerName] = info.TransportType
+		}
+	}
+
+	if len(connections) == 0 {
+		return nil
+	}
+	return connections
 }
 
 // slicesEqual compares two string slices for equality.
@@ -378,6 +398,7 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 			if _, regErr := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
 				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
+				m.identity.Config.ExitNode, m.identity.Config.AllowExitTraffic,
 			); regErr != nil {
 				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
 			} else {

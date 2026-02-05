@@ -445,9 +445,11 @@ function renderPeersTable() {
     dom.peersBody.innerHTML = visiblePeers.map(peer => {
         const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
         const peerNameEscaped = escapeHtml(peer.name);
+        const exitBadge = peer.allows_exit_traffic ? '<span class="status-badge exit">EXIT</span>' : '';
+        const exitVia = peer.exit_node ? `<span class="exit-via">via ${escapeHtml(peer.exit_node)}</span>` : '';
         return `
         <tr>
-            <td><strong>${peerNameEscaped}</strong></td>
+            <td><strong>${peerNameEscaped}</strong>${exitBadge}${exitVia}</td>
             <td><code>${peer.mesh_ip}</code></td>
             <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
             <td class="ports-cell">${formatPorts(peer)}</td>

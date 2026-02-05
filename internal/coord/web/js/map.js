@@ -14,7 +14,8 @@ class NodeMap {
         this.bounds = null;
         this.initialized = false;
         this.selectedPeer = null;
-        this.onlinePeersWithLocation = new Map(); // peerName -> {lat, lng}
+        this.selectedPeerData = null; // Full peer data for selected node
+        this.onlinePeersWithLocation = new Map(); // peerName -> {lat, lng, exitNode}
         this.pendingFitToConnections = false; // Flag to fit after first updatePeers
         this.skipNextZoom = false; // Flag to skip zoom on next selection (for map clicks)
     }
@@ -121,7 +122,15 @@ class NodeMap {
 
             // Track online peers with location for connection drawing
             if (peer.online) {
-                this.onlinePeersWithLocation.set(peer.name, { lat, lng });
+                this.onlinePeersWithLocation.set(peer.name, {
+                    lat, lng,
+                    exitNode: peer.exit_node || ''
+                });
+            }
+
+            // Update selectedPeerData if this is the selected peer
+            if (peer.name === this.selectedPeer) {
+                this.selectedPeerData = peer;
             }
 
             // Determine marker color based on selection, online status and source
@@ -199,6 +208,7 @@ class NodeMap {
         // Only draw connections if we have a selected peer that's online with location
         if (this.selectedPeer && this.onlinePeersWithLocation.has(this.selectedPeer)) {
             const selectedLoc = this.onlinePeersWithLocation.get(this.selectedPeer);
+            const selectedExitNode = this.selectedPeerData?.exit_node || '';
 
             // Create connections from selected peer to all other online peers
             this.onlinePeersWithLocation.forEach((loc, peerName) => {
@@ -211,14 +221,17 @@ class NodeMap {
                     return;
                 }
 
+                // Check if this is an exit path connection
+                const isExitPath = (selectedExitNode === peerName) || (loc.exitNode === this.selectedPeer);
+
                 expectedConnections.add(key);
 
                 if (this.connections.has(key)) {
                     // Update existing connection
-                    this.updateConnection(key, selectedLoc, loc);
+                    this.updateConnection(key, selectedLoc, loc, isExitPath);
                 } else {
                     // Create new connection
-                    this.createConnection(key, selectedLoc, loc);
+                    this.createConnection(key, selectedLoc, loc, isExitPath);
                 }
             });
         }
@@ -290,18 +303,19 @@ class NodeMap {
     }
 
     // Create a connection line between two peers
-    createConnection(key, loc1, loc2) {
+    createConnection(key, loc1, loc2, isExitPath = false) {
         const curvePoints = this.calculateCurvePoints(loc1.lat, loc1.lng, loc2.lat, loc2.lng);
 
         // Skip if no points (same location)
         if (curvePoints.length === 0) return;
 
+        // Use golden color and solid line for exit paths
         const polyline = L.polyline(curvePoints, {
-            color: '#58a6ff',
-            weight: 2,
+            color: isExitPath ? '#f0a500' : '#58a6ff',
+            weight: isExitPath ? 3 : 2,
             opacity: 1,
             smoothFactor: 1,
-            dashArray: '6, 4'
+            dashArray: isExitPath ? null : '6, 4'  // Solid for exit, dashed for mesh
         }).addTo(this.map);
 
         // Bring markers to front (above connection lines)
@@ -309,17 +323,27 @@ class NodeMap {
             if (entry.marker) entry.marker.bringToFront();
         });
 
-        this.connections.set(key, { polyline });
+        this.connections.set(key, { polyline, isExitPath });
     }
 
     // Update an existing connection line
-    updateConnection(key, loc1, loc2) {
+    updateConnection(key, loc1, loc2, isExitPath = false) {
         const entry = this.connections.get(key);
         if (!entry) return;
 
         const curvePoints = this.calculateCurvePoints(loc1.lat, loc1.lng, loc2.lat, loc2.lng);
         if (curvePoints.length > 0) {
             entry.polyline.setLatLngs(curvePoints);
+
+            // Update style if exit path status changed
+            if (entry.isExitPath !== isExitPath) {
+                entry.polyline.setStyle({
+                    color: isExitPath ? '#f0a500' : '#58a6ff',
+                    weight: isExitPath ? 3 : 2,
+                    dashArray: isExitPath ? null : '6, 4'
+                });
+                entry.isExitPath = isExitPath;
+            }
         }
     }
 

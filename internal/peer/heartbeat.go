@@ -59,6 +59,7 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 			if _, err := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
 				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
+				m.identity.Config.ExitNode, m.identity.Config.AllowExitTraffic,
 			); err != nil {
 				log.Error().Err(err).Msg("failed to re-register after IP change")
 			} else {

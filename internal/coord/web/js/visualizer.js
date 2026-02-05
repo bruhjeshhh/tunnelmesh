@@ -32,7 +32,12 @@ const COLORS = {
     text: '#e6edf3',
     textDim: '#8b949e',
     connection: '#30363d',
-    connectionHighlight: '#58a6ff'
+    connectionHighlight: '#58a6ff',
+    exitConnection: '#f0a500',  // Golden color for exit path connections
+    // Transport type badge colors
+    transportSSH: '#3fb950',    // Green
+    transportUDP: '#58a6ff',    // Blue
+    transportRelay: '#d29922'   // Orange/amber
 };
 
 // =============================================================================
@@ -62,6 +67,14 @@ class VisualizerNode {
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
         this.dnsName = fullDns.length > 25 ? fullDns.substring(0, 22) + '...' : fullDns;
+
+        // Exit node info
+        this.exitNode = peer.exit_node || '';           // Name of peer this node uses as exit
+        this.allowsExitTraffic = peer.allows_exit_traffic || false;  // Whether this node can be exit
+        this.exitClients = peer.exit_clients || [];     // Clients using this as exit
+
+        // Connection types (peer -> transport type)
+        this.connections = peer.connections || {};
 
         // Layout positions
         this.x = 0;
@@ -325,6 +338,12 @@ class NodeVisualizer {
                 node.bytesSentRate = peer.bytes_sent_rate || 0;
                 node.bytesReceivedRate = peer.bytes_received_rate || 0;
                 node.region = extractRegion(peer);
+                // Exit node info
+                node.exitNode = peer.exit_node || '';
+                node.allowsExitTraffic = peer.allows_exit_traffic || false;
+                node.exitClients = peer.exit_clients || [];
+                // Connection types
+                node.connections = peer.connections || {};
             } else {
                 // Add new node
                 const node = new VisualizerNode(peer, this.domainSuffix, nodeType);
@@ -812,9 +831,15 @@ class NodeVisualizer {
 
             const isLeft = slot.side === 'left';
 
+            // Check if this is an exit path connection
+            const centerNode = centerSlot.node;
+            const otherNode = slot.node;
+            const isExitPath = (centerNode.exitNode === otherNode.name) ||
+                               (otherNode.exitNode === centerNode.name);
+
             ctx.beginPath();
-            ctx.strokeStyle = COLORS.connectionHighlight;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = isExitPath ? COLORS.exitConnection : COLORS.connectionHighlight;
+            ctx.lineWidth = isExitPath ? 3 : 2;  // Thicker for exit path
 
             const startX = isLeft ? slot.x + CARD_WIDTH / 2 : slot.x - CARD_WIDTH / 2;
             const startY = slot.y;
@@ -827,8 +852,9 @@ class NodeVisualizer {
             ctx.bezierCurveTo(midX, startY, midX, endY, endX, endY);
             ctx.stroke();
 
-            // Connection dots
-            ctx.fillStyle = COLORS.connectionHighlight;
+            // Connection dots - use same color as line
+            const dotColor = isExitPath ? COLORS.exitConnection : COLORS.connectionHighlight;
+            ctx.fillStyle = dotColor;
             ctx.beginPath();
             ctx.arc(startX, startY, CONNECTION_DOT_RADIUS, 0, Math.PI * 2);
             ctx.fill();
@@ -913,6 +939,74 @@ class NodeVisualizer {
             ctx.textAlign = 'left';
             ctx.fillText(node.region, contentX, contentY + lineHeight * 2 + 8);
         }
+
+        // Transport type badge (show connection type to selected node)
+        const selectedNode = this.selectedNodeId ? this.nodes.get(this.selectedNodeId) : null;
+        if (selectedNode && slot.side !== 'center') {
+            // Get transport type from this node's connections to the selected node
+            // or from selected node's connections to this node
+            let transportType = node.connections[selectedNode.name] ||
+                               selectedNode.connections[node.name];
+            if (transportType) {
+                this.drawTransportBadge(ctx, x + CARD_WIDTH - 10, contentY + lineHeight * 2 + 8, transportType);
+            }
+        }
+
+        // Exit badge for nodes that allow exit traffic
+        if (node.allowsExitTraffic) {
+            this.drawExitBadge(ctx, x + CARD_WIDTH - 10, y + 6);
+        }
+    }
+
+    drawTransportBadge(ctx, x, y, transportType) {
+        const type = transportType.toLowerCase();
+        let color;
+        switch (type) {
+            case 'ssh':
+                color = COLORS.transportSSH;
+                break;
+            case 'udp':
+                color = COLORS.transportUDP;
+                break;
+            case 'relay':
+                color = COLORS.transportRelay;
+                break;
+            default:
+                color = COLORS.textDim;
+        }
+
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = color;
+        ctx.fillText(type.toUpperCase(), x, y);
+    }
+
+    drawExitBadge(ctx, x, y) {
+        const text = 'EXIT';
+        ctx.font = 'bold 8px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        const textWidth = ctx.measureText(text).width;
+
+        // Draw badge background
+        const padding = 3;
+        const badgeX = x - textWidth - padding * 2;
+        const badgeY = y;
+        const badgeWidth = textWidth + padding * 2;
+        const badgeHeight = 12;
+        const radius = 3;
+
+        ctx.fillStyle = 'rgba(240, 165, 0, 0.2)';
+        ctx.strokeStyle = 'rgba(240, 165, 0, 0.5)';
+        ctx.lineWidth = 1;
+
+        ctx.beginPath();
+        ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, radius);
+        ctx.fill();
+        ctx.stroke();
+
+        // Draw text
+        ctx.fillStyle = COLORS.exitConnection;
+        ctx.textAlign = 'right';
+        ctx.fillText(text, x - padding, badgeY + 9);
     }
 
 }

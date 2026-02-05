@@ -45,33 +45,37 @@ func (g *GeoLocation) IsSet() bool {
 
 // Peer represents a node in the mesh network.
 type Peer struct {
-	Name             string       `json:"name"`
-	PublicKey        string       `json:"public_key"`                  // SSH public key (base64 encoded wire format)
-	PublicIPs        []string     `json:"public_ips"`                  // Externally reachable IPs
-	PrivateIPs       []string     `json:"private_ips"`                 // Internal network IPs
-	SSHPort          int          `json:"ssh_port"`                    // SSH server port
-	UDPPort          int          `json:"udp_port,omitempty"`          // UDP transport port
-	MeshIP           string       `json:"mesh_ip"`                     // Assigned mesh network IP (10.99.x.x)
-	LastSeen         time.Time    `json:"last_seen"`                   // Last heartbeat time
-	Connectable      bool         `json:"connectable"`                 // Can accept incoming connections
-	BehindNAT        bool         `json:"behind_nat"`                  // Public IP was fetched externally (behind NAT)
-	ExternalEndpoint string       `json:"external_endpoint,omitempty"` // STUN-discovered external address for UDP
-	Version          string       `json:"version,omitempty"`           // Application version
-	PCPMapped        bool         `json:"pcp_mapped,omitempty"`        // Whether peer has PCP/NAT-PMP port mapping
-	Location         *GeoLocation `json:"location,omitempty"`          // Geographic location
+	Name              string       `json:"name"`
+	PublicKey         string       `json:"public_key"`                    // SSH public key (base64 encoded wire format)
+	PublicIPs         []string     `json:"public_ips"`                    // Externally reachable IPs
+	PrivateIPs        []string     `json:"private_ips"`                   // Internal network IPs
+	SSHPort           int          `json:"ssh_port"`                      // SSH server port
+	UDPPort           int          `json:"udp_port,omitempty"`            // UDP transport port
+	MeshIP            string       `json:"mesh_ip"`                       // Assigned mesh network IP (10.99.x.x)
+	LastSeen          time.Time    `json:"last_seen"`                     // Last heartbeat time
+	Connectable       bool         `json:"connectable"`                   // Can accept incoming connections
+	BehindNAT         bool         `json:"behind_nat"`                    // Public IP was fetched externally (behind NAT)
+	ExternalEndpoint  string       `json:"external_endpoint,omitempty"`   // STUN-discovered external address for UDP
+	Version           string       `json:"version,omitempty"`             // Application version
+	PCPMapped         bool         `json:"pcp_mapped,omitempty"`          // Whether peer has PCP/NAT-PMP port mapping
+	Location          *GeoLocation `json:"location,omitempty"`            // Geographic location
+	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Can act as exit node for other peers
+	ExitNode          string       `json:"exit_node,omitempty"`           // Name of peer used as exit node
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
 type RegisterRequest struct {
-	Name       string       `json:"name"`
-	PublicKey  string       `json:"public_key"`
-	PublicIPs  []string     `json:"public_ips"`
-	PrivateIPs []string     `json:"private_ips"`
-	SSHPort    int          `json:"ssh_port"`
-	UDPPort    int          `json:"udp_port,omitempty"` // UDP transport port
-	BehindNAT  bool         `json:"behind_nat"`         // True if public IP was fetched from external service
-	Version    string       `json:"version,omitempty"`  // Application version
-	Location   *GeoLocation `json:"location,omitempty"` // Geographic location (manual config)
+	Name              string       `json:"name"`
+	PublicKey         string       `json:"public_key"`
+	PublicIPs         []string     `json:"public_ips"`
+	PrivateIPs        []string     `json:"private_ips"`
+	SSHPort           int          `json:"ssh_port"`
+	UDPPort           int          `json:"udp_port,omitempty"`            // UDP transport port
+	BehindNAT         bool         `json:"behind_nat"`                    // True if public IP was fetched from external service
+	Version           string       `json:"version,omitempty"`             // Application version
+	Location          *GeoLocation `json:"location,omitempty"`            // Geographic location (manual config)
+	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Allow this node to act as exit node
+	ExitNode          string       `json:"exit_node,omitempty"`           // Name of peer to use as exit node
 }
 
 // RegisterResponse is returned after successful registration.
@@ -85,15 +89,16 @@ type RegisterResponse struct {
 // PeerStats contains traffic statistics reported by peers.
 // Stats are now sent via WebSocket heartbeat (see internal/tunnel/persistent_relay.go).
 type PeerStats struct {
-	PacketsSent     uint64       `json:"packets_sent"`
-	PacketsReceived uint64       `json:"packets_received"`
-	BytesSent       uint64       `json:"bytes_sent"`
-	BytesReceived   uint64       `json:"bytes_received"`
-	DroppedNoRoute  uint64       `json:"dropped_no_route"`
-	DroppedNoTunnel uint64       `json:"dropped_no_tunnel"`
-	Errors          uint64       `json:"errors"`
-	ActiveTunnels   int          `json:"active_tunnels"`
-	Location        *GeoLocation `json:"location,omitempty"` // Geographic location (sent with every heartbeat)
+	PacketsSent     uint64            `json:"packets_sent"`
+	PacketsReceived uint64            `json:"packets_received"`
+	BytesSent       uint64            `json:"bytes_sent"`
+	BytesReceived   uint64            `json:"bytes_received"`
+	DroppedNoRoute  uint64            `json:"dropped_no_route"`
+	DroppedNoTunnel uint64            `json:"dropped_no_tunnel"`
+	Errors          uint64            `json:"errors"`
+	ActiveTunnels   int               `json:"active_tunnels"`
+	Location        *GeoLocation      `json:"location,omitempty"`    // Geographic location (sent with every heartbeat)
+	Connections     map[string]string `json:"connections,omitempty"` // Active connections: peerName -> transport type ("ssh", "udp", "relay")
 }
 
 // Note: HeartbeatRequest and HeartbeatResponse removed.

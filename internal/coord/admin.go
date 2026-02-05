@@ -54,6 +54,12 @@ type AdminPeerInfo struct {
 	Version             string              `json:"version,omitempty"`
 	Location            *proto.GeoLocation  `json:"location,omitempty"`
 	History             []StatsDataPoint    `json:"history,omitempty"`
+	// Exit node info
+	AllowsExitTraffic bool              `json:"allows_exit_traffic,omitempty"`
+	ExitNode          string            `json:"exit_node,omitempty"`
+	ExitClients       []string          `json:"exit_clients,omitempty"`
+	// Connection info (peer -> transport type)
+	Connections       map[string]string `json:"connections,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -108,6 +114,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
 	}
 
+	// Build exit client map (which clients use which exit node)
+	exitClients := make(map[string][]string) // exitNodeName -> [clientNames]
+	for _, info := range s.peers {
+		if info.peer.ExitNode != "" {
+			exitClients[info.peer.ExitNode] = append(exitClients[info.peer.ExitNode], info.peer.Name)
+		}
+	}
+
 	for _, info := range s.peers {
 		online := now.Sub(info.peer.LastSeen) < onlineThreshold
 		if online {
@@ -115,20 +129,32 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		}
 
 		peerInfo := AdminPeerInfo{
-			Name:           info.peer.Name,
-			MeshIP:         info.peer.MeshIP,
-			PublicIPs:      info.peer.PublicIPs,
-			PrivateIPs:     info.peer.PrivateIPs,
-			SSHPort:        info.peer.SSHPort,
-			UDPPort:        info.peer.UDPPort,
-			LastSeen:       info.peer.LastSeen,
-			Online:         online,
-			Connectable:    info.peer.Connectable,
-			BehindNAT:      info.peer.BehindNAT,
-			RegisteredAt:   info.registeredAt,
-			HeartbeatCount: info.heartbeatCount,
-			Stats:          info.stats,
-			Version:        info.peer.Version,
+			Name:              info.peer.Name,
+			MeshIP:            info.peer.MeshIP,
+			PublicIPs:         info.peer.PublicIPs,
+			PrivateIPs:        info.peer.PrivateIPs,
+			SSHPort:           info.peer.SSHPort,
+			UDPPort:           info.peer.UDPPort,
+			LastSeen:          info.peer.LastSeen,
+			Online:            online,
+			Connectable:       info.peer.Connectable,
+			BehindNAT:         info.peer.BehindNAT,
+			RegisteredAt:      info.registeredAt,
+			HeartbeatCount:    info.heartbeatCount,
+			Stats:             info.stats,
+			Version:           info.peer.Version,
+			AllowsExitTraffic: info.peer.AllowsExitTraffic,
+			ExitNode:          info.peer.ExitNode,
+		}
+
+		// Include exit clients if this peer allows exit traffic
+		if info.peer.AllowsExitTraffic {
+			peerInfo.ExitClients = exitClients[info.peer.Name]
+		}
+
+		// Include connection types from stats (peer -> transport type)
+		if info.stats != nil && len(info.stats.Connections) > 0 {
+			peerInfo.Connections = info.stats.Connections
 		}
 
 		// Only include location if the feature is enabled
