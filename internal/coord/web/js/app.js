@@ -451,7 +451,17 @@ function updateChartsWithNewData(peers) {
     // Sort groups by timestamp and add each as a data point
     const sortedGroups = Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
 
+    // Get the last timestamp in the chart (if any)
+    const lastChartTime = state.charts.chartData.labels.length > 0
+        ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
+        : 0;
+
     sortedGroups.forEach(group => {
+        // Only add if this timestamp is newer than the last one in the chart
+        if (group.timestamp.getTime() <= lastChartTime) {
+            return; // Skip data points in the past
+        }
+
         // Add timestamp
         state.charts.chartData.labels.push(group.timestamp);
 
