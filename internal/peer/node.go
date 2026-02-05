@@ -226,6 +226,7 @@ func (m *MeshNode) IPsChanged(publicIPs, privateIPs []string, behindNAT bool) bo
 func (m *MeshNode) CollectStats() *proto.PeerStats {
 	stats := &proto.PeerStats{
 		ActiveTunnels: m.tunnelMgr.CountHealthy(),
+		Location:      m.identity.Location, // Include location in every heartbeat
 	}
 
 	if m.Forwarder != nil {

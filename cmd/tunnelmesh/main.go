@@ -628,6 +628,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
+	identity.Location = location // Set location for heartbeat reporting
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router

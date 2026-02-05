@@ -85,14 +85,15 @@ type RegisterResponse struct {
 // PeerStats contains traffic statistics reported by peers.
 // Stats are now sent via WebSocket heartbeat (see internal/tunnel/persistent_relay.go).
 type PeerStats struct {
-	PacketsSent     uint64 `json:"packets_sent"`
-	PacketsReceived uint64 `json:"packets_received"`
-	BytesSent       uint64 `json:"bytes_sent"`
-	BytesReceived   uint64 `json:"bytes_received"`
-	DroppedNoRoute  uint64 `json:"dropped_no_route"`
-	DroppedNoTunnel uint64 `json:"dropped_no_tunnel"`
-	Errors          uint64 `json:"errors"`
-	ActiveTunnels   int    `json:"active_tunnels"`
+	PacketsSent     uint64       `json:"packets_sent"`
+	PacketsReceived uint64       `json:"packets_received"`
+	BytesSent       uint64       `json:"bytes_sent"`
+	BytesReceived   uint64       `json:"bytes_received"`
+	DroppedNoRoute  uint64       `json:"dropped_no_route"`
+	DroppedNoTunnel uint64       `json:"dropped_no_tunnel"`
+	Errors          uint64       `json:"errors"`
+	ActiveTunnels   int          `json:"active_tunnels"`
+	Location        *GeoLocation `json:"location,omitempty"` // Geographic location (sent with every heartbeat)
 }
 
 // Note: HeartbeatRequest and HeartbeatResponse removed.
