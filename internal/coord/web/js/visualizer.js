@@ -18,9 +18,11 @@ const ROW_SPACING = 110;  // Vertical spacing between spread nodes
 const CONNECTION_DOT_RADIUS = 5;
 const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
-// Fixed content dimensions for layout (decoupled from canvas size)
-const CONTENT_WIDTH = 900;
-const CONTENT_HEIGHT = 400;
+// Content dimension bounds (content size scales with canvas, within these limits)
+const MIN_CONTENT_WIDTH = 800;
+const MAX_CONTENT_WIDTH = 1400;
+const MIN_CONTENT_HEIGHT = 350;
+const MAX_CONTENT_HEIGHT = 500;
 
 // Colors matching dashboard theme - simplified uniform styling
 const COLORS = {
@@ -252,6 +254,10 @@ class NodeVisualizer {
         this.panStartX = 0;
         this.panStartY = 0;
 
+        // Dynamic content dimensions (calculated from canvas size)
+        this.contentWidth = MIN_CONTENT_WIDTH;
+        this.contentHeight = MIN_CONTENT_HEIGHT;
+
         // Callbacks
         this.onNodeSelected = null;
 
@@ -368,6 +374,10 @@ class NodeVisualizer {
 
         this.ctx.scale(dpr, dpr);
 
+        // Calculate content dimensions based on canvas size (with min/max bounds)
+        this.contentWidth = Math.max(MIN_CONTENT_WIDTH, Math.min(MAX_CONTENT_WIDTH, rect.width * 0.95));
+        this.contentHeight = Math.max(MIN_CONTENT_HEIGHT, Math.min(MAX_CONTENT_HEIGHT, rect.height * 0.9));
+
         this.recalculateLayout();
         this.render();
     }
@@ -379,8 +389,8 @@ class NodeVisualizer {
     recalculateLayout() {
         const oldSlots = new Map(this.slots.map(s => [s.id, { x: s.x, y: s.y }]));
 
-        // Use fixed content size for layout (decoupled from canvas)
-        calculateLayout(this.nodes, this.selectedNodeId, CONTENT_WIDTH, CONTENT_HEIGHT, this.stackInfo, this.slots);
+        // Use dynamic content size for layout
+        calculateLayout(this.nodes, this.selectedNodeId, this.contentWidth, this.contentHeight, this.stackInfo, this.slots);
 
         // Preserve old positions for animation, or initialize to target
         for (const slot of this.slots) {
@@ -457,8 +467,8 @@ class NodeVisualizer {
     // Convert screen coordinates to content coordinates (accounting for pan and centering)
     screenToContent(screenX, screenY) {
         const rect = this.canvas.getBoundingClientRect();
-        const offsetX = (rect.width - CONTENT_WIDTH) / 2 + this.panX;
-        const offsetY = (rect.height - CONTENT_HEIGHT) / 2 + this.panY;
+        const offsetX = (rect.width - this.contentWidth) / 2 + this.panX;
+        const offsetY = (rect.height - this.contentHeight) / 2 + this.panY;
         return {
             x: screenX - offsetX,
             y: screenY - offsetY
@@ -467,9 +477,8 @@ class NodeVisualizer {
 
     // Constrain pan to bounds (allow panning up to 2x content size)
     clampPan() {
-        const rect = this.canvas.getBoundingClientRect();
-        const maxPanX = CONTENT_WIDTH / 2;
-        const maxPanY = CONTENT_HEIGHT / 2;
+        const maxPanX = this.contentWidth / 2;
+        const maxPanY = this.contentHeight / 2;
         this.panX = Math.max(-maxPanX, Math.min(maxPanX, this.panX));
         this.panY = Math.max(-maxPanY, Math.min(maxPanY, this.panY));
     }
@@ -627,8 +636,8 @@ class NodeVisualizer {
 
         // Apply pan offset - center content on canvas then apply pan
         ctx.save();
-        const offsetX = (width - CONTENT_WIDTH) / 2 + this.panX;
-        const offsetY = (height - CONTENT_HEIGHT) / 2 + this.panY;
+        const offsetX = (width - this.contentWidth) / 2 + this.panX;
+        const offsetY = (height - this.contentHeight) / 2 + this.panY;
         ctx.translate(offsetX, offsetY);
 
         // Draw connections first (behind nodes)
@@ -647,7 +656,7 @@ class NodeVisualizer {
         }
 
         // Draw "+ N more" labels
-        this.renderStackLabels(ctx, CONTENT_WIDTH, CONTENT_HEIGHT);
+        this.renderStackLabels(ctx, this.contentWidth, this.contentHeight);
 
         // Draw navigation arrows below center node
         this.renderNavArrows(ctx);
