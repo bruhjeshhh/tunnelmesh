@@ -56,7 +56,9 @@ domain_suffix: "${domain_suffix}"
 
 admin:
   enabled: true
-  token: "${admin_token}"
+%{ if peer_enabled ~}
+  port: 8443  # Use non-standard port to avoid conflict with nginx on 443
+%{ endif ~}
 
 relay:
   enabled: ${relay_enabled}
@@ -141,6 +143,7 @@ server {
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
     ssl_prefer_server_ciphers off;
 
+    # API endpoints only - admin is mesh-internal at https://this.tunnelmesh:8443/
     location / {
         proxy_pass http://127.0.0.1:${coordinator_port};
         proxy_http_version 1.1;
@@ -242,6 +245,9 @@ ufw allow ${ssh_tunnel_port + 1}/udp comment 'TunnelMesh UDP'
 %{ if coordinator_enabled ~}
 ufw allow 80/tcp comment 'HTTP'
 ufw allow 443/tcp comment 'HTTPS'
+%{ if peer_enabled ~}
+ufw allow in on tun-mesh to any port 8443 proto tcp comment 'Mesh Admin HTTPS'
+%{ endif ~}
 %{ endif ~}
 
 %{ if wireguard_enabled && peer_enabled ~}
