@@ -88,6 +88,7 @@ type Forwarder struct {
 	zeroCopyPool       *ZeroCopyBufferPool // Pool for zero-copy buffers
 	framePool          *sync.Pool          // Pool for frame buffers (header + MTU)
 	stats              ForwarderStats
+	statsEnabled       uint32              // Atomic: 1 = enabled (default), 0 = disabled for high-performance mode
 	tunMu              sync.RWMutex
 	relayMu            sync.RWMutex
 	wgMu               sync.RWMutex
@@ -109,6 +110,7 @@ func NewForwarder(router *Router, tunnels TunnelProvider) *Forwarder {
 		tunnels:      tunnels,
 		bufPool:      NewPacketBufferPool(MaxPacketSize),
 		zeroCopyPool: NewZeroCopyBufferPool(FrameHeaderSize, MaxPacketSize),
+		statsEnabled: 1, // Enabled by default
 		framePool: &sync.Pool{
 			New: func() interface{} {
 				// Allocate buffer for header + max packet size
@@ -117,6 +119,36 @@ func NewForwarder(router *Router, tunnels TunnelProvider) *Forwarder {
 				return &buf
 			},
 		},
+	}
+}
+
+// StatsEnabled returns whether stats collection is enabled.
+func (f *Forwarder) StatsEnabled() bool {
+	return atomic.LoadUint32(&f.statsEnabled) == 1
+}
+
+// SetStatsEnabled enables or disables stats collection.
+// Disable for 10Gbps+ high-performance networks where atomic counter overhead matters.
+func (f *Forwarder) SetStatsEnabled(enabled bool) {
+	if enabled {
+		atomic.StoreUint32(&f.statsEnabled, 1)
+	} else {
+		atomic.StoreUint32(&f.statsEnabled, 0)
+	}
+}
+
+// incStat increments a stat counter if stats collection is enabled.
+// This helper keeps the hot path code clean while supporting the feature gate.
+func (f *Forwarder) incStat(collectStats bool, stat *uint64) {
+	if collectStats {
+		atomic.AddUint64(stat, 1)
+	}
+}
+
+// addStat adds a value to a stat counter if stats collection is enabled.
+func (f *Forwarder) addStat(collectStats bool, stat *uint64, delta uint64) {
+	if collectStats {
+		atomic.AddUint64(stat, delta)
 	}
 }
 
@@ -262,6 +294,9 @@ func (f *Forwarder) HandleRelayPacket(sourcePeer string, data []byte) {
 
 // ForwardPacket forwards a packet from the TUN to the appropriate tunnel.
 func (f *Forwarder) ForwardPacket(packet []byte) error {
+	// Load stats flag once for the entire function (high-performance mode optimization)
+	collectStats := atomic.LoadUint32(&f.statsEnabled) == 1
+
 	// Check packet length and version
 	if len(packet) < 1 {
 		return nil // Silently drop empty packets
@@ -270,14 +305,18 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	version := packet[0] >> 4
 	if version != 4 {
 		// Silently drop non-IPv4 packets (IPv6, etc.) - the mesh only supports IPv4
-		atomic.AddUint64(&f.stats.DroppedNonIPv4, 1)
+		if collectStats {
+			atomic.AddUint64(&f.stats.DroppedNonIPv4, 1)
+		}
 		return nil
 	}
 
 	// Parse the packet
 	info, err := ParseIPv4Packet(packet)
 	if err != nil {
-		atomic.AddUint64(&f.stats.Errors, 1)
+		if collectStats {
+			atomic.AddUint64(&f.stats.Errors, 1)
+		}
 		return fmt.Errorf("parse packet: %w", err)
 	}
 
@@ -336,7 +375,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	// Look up the route
 	peerName, ok := f.router.Lookup(info.DstIP)
 	if !ok {
-		atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
+		f.incStat(collectStats, &f.stats.DroppedNoRoute)
 		return fmt.Errorf("%w for %s", ErrNoRoute, info.DstIP)
 	}
 
@@ -345,7 +384,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	if ok {
 		// Direct tunnel exists - use it
 		if err := f.writeFrame(tunnel, packet); err != nil {
-			atomic.AddUint64(&f.stats.Errors, 1)
+			f.incStat(collectStats, &f.stats.Errors)
 			log.Warn().Err(err).Str("peer", peerName).Msg("tunnel write failed, marking dead and falling back to relay")
 
 			// Signal dead tunnel so it can be removed and reconnection triggered
@@ -353,8 +392,8 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 
 			// Fall through to relay fallback below
 		} else {
-			atomic.AddUint64(&f.stats.PacketsSent, 1)
-			atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+			f.incStat(collectStats, &f.stats.PacketsSent)
+			f.addStat(collectStats, &f.stats.BytesSent, uint64(len(packet)))
 
 			log.Trace().
 				Str("src", info.SrcIP.String()).
@@ -481,6 +520,8 @@ func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeN
 
 // ReceivePacket writes a received packet to the TUN device.
 func (f *Forwarder) ReceivePacket(packet []byte) error {
+	collectStats := atomic.LoadUint32(&f.statsEnabled) == 1
+
 	f.tunMu.RLock()
 	tun := f.tun
 	f.tunMu.RUnlock()
@@ -491,12 +532,12 @@ func (f *Forwarder) ReceivePacket(packet []byte) error {
 
 	_, err := tun.Write(packet)
 	if err != nil {
-		atomic.AddUint64(&f.stats.Errors, 1)
+		f.incStat(collectStats, &f.stats.Errors)
 		return fmt.Errorf("write to TUN: %w", err)
 	}
 
-	atomic.AddUint64(&f.stats.PacketsReceived, 1)
-	atomic.AddUint64(&f.stats.BytesReceived, uint64(len(packet)))
+	f.incStat(collectStats, &f.stats.PacketsReceived)
+	f.addStat(collectStats, &f.stats.BytesReceived, uint64(len(packet)))
 
 	return nil
 }

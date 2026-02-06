@@ -932,3 +932,112 @@ func TestForwarder_ExitNode_FallbackToRelay(t *testing.T) {
 	require.Len(t, relayPackets, 1)
 	assert.Equal(t, "exit-server", relayPackets[0].target)
 }
+
+// Stats Feature Gate Tests
+
+func TestForwarderStats_EnabledByDefault(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", tunnel)
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+
+	// Stats collection should be enabled by default
+	assert.True(t, fwd.StatsEnabled(), "stats should be enabled by default")
+
+	// Forward a packet
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+	_ = fwd.ForwardPacket(packet)
+
+	stats := fwd.Stats()
+	assert.Equal(t, uint64(1), stats.PacketsSent, "stats should be collected when enabled")
+}
+
+func TestForwarderStats_Disabled(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", tunnel)
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+	fwd.SetStatsEnabled(false) // Disable stats for high-performance mode
+
+	assert.False(t, fwd.StatsEnabled(), "stats should be disabled after SetStatsEnabled(false)")
+
+	// Forward multiple packets
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	for i := 0; i < 100; i++ {
+		packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+		_ = fwd.ForwardPacket(packet)
+	}
+
+	// Receive a packet
+	srcIP = net.ParseIP("10.99.0.2").To4()
+	dstIP = net.ParseIP("10.99.0.1").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+	_ = fwd.ReceivePacket(packet)
+
+	// Stats should NOT be collected when disabled
+	stats := fwd.Stats()
+	assert.Equal(t, uint64(0), stats.PacketsSent, "stats should not be collected when disabled")
+	assert.Equal(t, uint64(0), stats.PacketsReceived, "stats should not be collected when disabled")
+	assert.Equal(t, uint64(0), stats.BytesSent, "stats should not be collected when disabled")
+	assert.Equal(t, uint64(0), stats.BytesReceived, "stats should not be collected when disabled")
+}
+
+func TestForwarderStats_DisabledNoRoute(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetStatsEnabled(false)
+
+	// Try to forward packet with no route
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.99").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+	_ = fwd.ForwardPacket(packet) // Will fail, but should not record stats
+
+	stats := fwd.Stats()
+	assert.Equal(t, uint64(0), stats.DroppedNoRoute, "dropped stats should not be collected when disabled")
+}
+
+func TestForwarderStats_ReEnable(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", tunnel)
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetStatsEnabled(false)
+
+	// Forward while disabled
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+	_ = fwd.ForwardPacket(packet)
+
+	stats := fwd.Stats()
+	assert.Equal(t, uint64(0), stats.PacketsSent, "no stats while disabled")
+
+	// Re-enable stats
+	fwd.SetStatsEnabled(true)
+	_ = fwd.ForwardPacket(packet)
+
+	stats = fwd.Stats()
+	assert.Equal(t, uint64(1), stats.PacketsSent, "stats should be collected after re-enabling")
+}

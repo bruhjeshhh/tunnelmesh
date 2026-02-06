@@ -72,6 +72,7 @@ type PeerConfig struct {
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
 	HeartbeatInterval string              `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
+	MetricsEnabled    *bool               `yaml:"metrics_enabled"`    // Enable Prometheus metrics (default: true). Disable for 10Gbps+ high-performance networks.
 	MetricsPort       int                 `yaml:"metrics_port"`       // Prometheus metrics port on mesh IP (default: 9443)
 	TUN               TUNConfig           `yaml:"tun"`
 	DNS               DNSConfig           `yaml:"dns"`
@@ -329,6 +330,13 @@ func (c *ServerConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// IsMetricsEnabled returns whether Prometheus metrics collection is enabled.
+// Returns true by default (when MetricsEnabled is nil or explicitly true).
+// Disable for 10Gbps+ high-performance networks where atomic counter overhead matters.
+func (c *PeerConfig) IsMetricsEnabled() bool {
+	return c.MetricsEnabled == nil || *c.MetricsEnabled
 }
 
 // Validate checks if the peer configuration is valid.
