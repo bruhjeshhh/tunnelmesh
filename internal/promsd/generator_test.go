@@ -352,7 +352,7 @@ func TestHTTPFetcher_Success(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -375,7 +375,7 @@ func TestHTTPFetcher_WithAuthToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(PeersResponse{Peers: []Peer{}})
+		_ = json.NewEncoder(w).Encode(PeersResponse{Peers: []Peer{}})
 	}))
 	defer server.Close()
 
@@ -398,7 +398,7 @@ func TestHTTPFetcher_WithAuthToken(t *testing.T) {
 func TestHTTPFetcher_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal server error"))
+		_, _ = w.Write([]byte("internal server error"))
 	}))
 	defer server.Close()
 
@@ -416,7 +416,7 @@ func TestHTTPFetcher_APIError(t *testing.T) {
 func TestHTTPFetcher_InvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("not valid json"))
+		_, _ = w.Write([]byte("not valid json"))
 	}))
 	defer server.Close()
 
