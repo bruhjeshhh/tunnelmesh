@@ -1186,7 +1186,7 @@ function enableChartLinks() {
         if (wrapper) {
             wrapper.classList.add('clickable-card');
             wrapper.addEventListener('click', () => {
-                window.open(grafanaUrl, '_blank');
+                window.location.href = grafanaUrl;
             });
         }
     });
