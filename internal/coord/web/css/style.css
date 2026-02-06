@@ -748,6 +748,24 @@ td {
     margin-left: 0.25rem;
 }
 
+/* Alert icon badge - styled like EXIT but with primary text color */
+.status-badge.alert-icon {
+    background: transparent;
+    color: var(--color-text-primary);
+    border-color: transparent;
+    border-radius: 0;
+    padding: 0.1rem 0.2rem;
+    font-size: 0.7rem;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+
+/* Tunnel count after mesh IP */
+.tunnel-count {
+    color: var(--color-text-secondary);
+    font-size: 0.85em;
+}
+
 .empty-state {
     text-align: center;
     padding: 3rem;
