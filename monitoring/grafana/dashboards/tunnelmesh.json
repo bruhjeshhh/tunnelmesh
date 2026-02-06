@@ -1189,8 +1189,8 @@
       },
       "targets": [
         {
-          "expr": "tunnelmesh_coordinator_peer_rtt_ms",
-          "legendFormat": "{{peer}}",
+          "expr": "tunnelmesh_coordinator_peer_latency_ms",
+          "legendFormat": "{{source}} → {{target}}",
           "refId": "A"
         }
       ],
