@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/admin"
+	"github.com/tunnelmesh/tunnelmesh/internal/benchmark"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
@@ -225,6 +226,9 @@ It does not route traffic - peers connect directly to each other.`,
 
 	// Trust CA command - install mesh CA cert in system trust store
 	rootCmd.AddCommand(newTrustCACmd())
+
+	// Benchmark command - speed test between peers
+	rootCmd.AddCommand(newBenchmarkCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -1342,6 +1346,17 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				defer func() { _ = adminServer.Stop() }()
 			}
 		}
+	}
+
+	// Start benchmark server on mesh IP for speed tests
+	benchServer := benchmark.NewServer(resp.MeshIP, benchmark.DefaultPort)
+	if err := benchServer.Start(); err != nil {
+		log.Warn().Err(err).Msg("failed to start benchmark server")
+	} else {
+		log.Info().
+			Str("address", benchServer.Addr()).
+			Msg("benchmark server started")
+		defer func() { _ = benchServer.Stop() }()
 	}
 
 	// Start peer discovery and tunnel establishment loop

@@ -169,6 +169,29 @@ services:
         restart: true
     restart: unless-stopped
 
+  benchmarker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.benchmarker
+    container_name: tunnelmesh-benchmarker
+    # Share server's network namespace to access mesh IPs via TUN
+    network_mode: "service:server"
+    environment:
+      - COORD_SERVER_URL=http://localhost:8080
+      - AUTH_TOKEN=docker-test-token-123
+      - LOCAL_PEER=benchmarker
+      - BENCHMARK_INTERVAL=5m
+      - BENCHMARK_SIZE=100MB
+      - OUTPUT_DIR=/results
+      - TLS_SKIP_VERIFY=true
+    volumes:
+      - benchmark-results:/results
+    depends_on:
+      server:
+        condition: service_healthy
+        restart: true
+    restart: unless-stopped
+
 networks:
   mesh-control:
     driver: bridge
@@ -184,3 +207,4 @@ volumes:
   prometheus-data:
   grafana-data:
   loki-data:
+  benchmark-results:
