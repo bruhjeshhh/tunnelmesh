@@ -1,5 +1,8 @@
 # TunnelMesh
 
+[![CI](https://github.com/zombar/tunnelmesh/actions/workflows/ci.yml/badge.svg)](https://github.com/zombar/tunnelmesh/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/zombar/tunnelmesh/branch/main/graph/badge.svg)](https://codecov.io/gh/zombar/tunnelmesh)
+
 A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes. TunnelMesh enables direct, secure communication between peers in a distributed topology without requiring a traditional VPN or centralized traffic routing.
 
 ## Features
