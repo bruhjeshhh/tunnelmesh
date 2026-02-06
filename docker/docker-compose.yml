@@ -184,6 +184,13 @@ services:
       - BENCHMARK_SIZE=100MB
       - OUTPUT_DIR=/results
       - TLS_SKIP_VERIFY=true
+      # Chaos testing - subtle defaults simulate real-world conditions
+      # Set CHAOS_DISABLED=true to run clean benchmarks
+      # - CHAOS_PACKET_LOSS=0.1    # 0.1% packet loss (default)
+      # - CHAOS_LATENCY=2ms        # 2ms added latency (default)
+      # - CHAOS_JITTER=1ms         # ±1ms jitter (default)
+      # - CHAOS_BANDWIDTH=100mbps  # bandwidth limit (default: unlimited)
+      # - CHAOS_DISABLED=true      # disable all chaos
     volumes:
       - benchmark-results:/results
     depends_on:

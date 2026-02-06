@@ -39,6 +39,9 @@ type Config struct {
 
 	// TLSSkipVerify disables TLS certificate verification
 	TLSSkipVerify bool
+
+	// Chaos testing configuration
+	Chaos benchmark.ChaosConfig
 }
 
 func main() {
@@ -50,6 +53,21 @@ func main() {
 	fmt.Printf("  Interval:     %s\n", cfg.Interval)
 	fmt.Printf("  Size:         %s\n", bytesize.Format(cfg.Size))
 	fmt.Printf("  Output dir:   %s\n", cfg.OutputDir)
+	if cfg.Chaos.IsEnabled() {
+		fmt.Printf("  Chaos:        enabled\n")
+		if cfg.Chaos.PacketLossPercent > 0 {
+			fmt.Printf("    Packet loss: %.1f%%\n", cfg.Chaos.PacketLossPercent)
+		}
+		if cfg.Chaos.Latency > 0 {
+			fmt.Printf("    Latency:     %v\n", cfg.Chaos.Latency)
+		}
+		if cfg.Chaos.Jitter > 0 {
+			fmt.Printf("    Jitter:      ±%v\n", cfg.Chaos.Jitter)
+		}
+		if cfg.Chaos.BandwidthBps > 0 {
+			fmt.Printf("    Bandwidth:   %s\n", bytesize.FormatRate(cfg.Chaos.BandwidthBps))
+		}
+	}
 
 	// Ensure output directory exists
 	if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
@@ -164,6 +182,7 @@ func runBenchmark(cfg Config, peer peerInfo) *benchmark.Result {
 		Direction: benchmark.DirectionUpload,
 		Timeout:   120 * time.Second,
 		Port:      benchmark.DefaultPort,
+		Chaos:     cfg.Chaos,
 	}
 
 	client := benchmark.NewClient(cfg.LocalPeer, peer.MeshIP)
@@ -211,6 +230,13 @@ func configFromEnv() Config {
 		Interval:  5 * time.Minute,
 		Size:      100 * 1024 * 1024, // 100MB
 		OutputDir: "/results",
+		// Subtle chaos defaults - barely perceptible but simulates real-world conditions
+		Chaos: benchmark.ChaosConfig{
+			PacketLossPercent: 0.1,                  // 0.1% packet loss - occasional retransmit
+			Latency:           2 * time.Millisecond, // 2ms base latency - typical LAN
+			Jitter:            1 * time.Millisecond, // ±1ms jitter - subtle variation
+			BandwidthBps:      0,                    // unlimited
+		},
 	}
 
 	if v := os.Getenv("COORD_SERVER_URL"); v != "" {
@@ -239,5 +265,37 @@ func configFromEnv() Config {
 		cfg.TLSSkipVerify = true
 	}
 
+	// Chaos config overrides
+	if v := os.Getenv("CHAOS_PACKET_LOSS"); v != "" {
+		if pct, err := parseFloat(v); err == nil {
+			cfg.Chaos.PacketLossPercent = pct
+		}
+	}
+	if v := os.Getenv("CHAOS_LATENCY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Chaos.Latency = d
+		}
+	}
+	if v := os.Getenv("CHAOS_JITTER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Chaos.Jitter = d
+		}
+	}
+	if v := os.Getenv("CHAOS_BANDWIDTH"); v != "" {
+		if bw, err := bytesize.ParseRate(v); err == nil {
+			cfg.Chaos.BandwidthBps = bw
+		}
+	}
+	// Allow disabling chaos entirely
+	if os.Getenv("CHAOS_DISABLED") == "true" {
+		cfg.Chaos = benchmark.ChaosConfig{}
+	}
+
 	return cfg
+}
+
+func parseFloat(s string) (float64, error) {
+	var f float64
+	_, err := fmt.Sscanf(s, "%f", &f)
+	return f, err
 }
