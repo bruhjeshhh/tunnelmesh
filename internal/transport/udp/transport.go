@@ -311,6 +311,13 @@ func (t *Transport) ListConnectedPeers() []string {
 			peers = append(peers, name)
 		}
 	}
+
+	// Debug: always log session counts for diagnostics
+	log.Debug().
+		Int("total_sessions", len(t.peerSessions)).
+		Int("established", len(peers)).
+		Msg("ListConnectedPeers called")
+
 	return peers
 }
 
