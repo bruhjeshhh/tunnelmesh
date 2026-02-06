@@ -64,6 +64,19 @@ jobs:
             exit 1
           fi
 
+  test-go126:
+    name: Test (Go 1.26)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+      - name: Run tests
+        run: go test -race ./...
+
   build:
     name: Build
     needs: [lint, security, test]
