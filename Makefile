@@ -45,6 +45,7 @@ test-coverage:
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
+	$(GO) clean -cache >/dev/null 2>&1 || true
 
 # Install to /usr/local/bin
 install: build
@@ -124,6 +125,7 @@ DOCKER_COMPOSE=docker compose -f docker/docker-compose.yml
 
 docker-build:
 	$(DOCKER_COMPOSE) build
+	@docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
 
 docker-up: docker-build
 	$(DOCKER_COMPOSE) up -d
@@ -231,6 +233,7 @@ ghcr-build:
 		-f docker/Dockerfile \
 		--load .
 	@echo "Built: $(GHCR_REPO):$(GHCR_TAG)"
+	@docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
 
 ghcr-push:
 	@echo "Building and pushing to GitHub Container Registry (linux/amd64)..."
@@ -244,6 +247,7 @@ ghcr-push:
 		-f docker/Dockerfile \
 		--push .
 	@echo "Pushed: $(GHCR_REPO):$(GHCR_TAG) and :latest"
+	@docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
 
 # Service management targets (require sudo on Linux/macOS)
 SERVICE_MODE ?= join
