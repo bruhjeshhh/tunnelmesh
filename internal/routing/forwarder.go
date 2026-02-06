@@ -65,6 +65,8 @@ type ForwarderStats struct {
 	DroppedNoTunnel uint64
 	DroppedNonIPv4  uint64
 	Errors          uint64
+	ExitPacketsSent uint64 // Packets sent through exit node
+	ExitBytesSent   uint64 // Bytes sent through exit node
 }
 
 // WGPacketHandler handles packets destined for WireGuard clients.
@@ -425,6 +427,8 @@ func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeN
 		} else {
 			atomic.AddUint64(&f.stats.PacketsSent, 1)
 			atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+			atomic.AddUint64(&f.stats.ExitPacketsSent, 1)
+			atomic.AddUint64(&f.stats.ExitBytesSent, uint64(len(packet)))
 			log.Debug().
 				Str("dst", info.DstIP.String()).
 				Str("exit_node", exitNodeName).
@@ -456,6 +460,8 @@ func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeN
 
 		atomic.AddUint64(&f.stats.PacketsSent, 1)
 		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+		atomic.AddUint64(&f.stats.ExitPacketsSent, 1)
+		atomic.AddUint64(&f.stats.ExitBytesSent, uint64(len(packet)))
 		log.Trace().
 			Str("src", info.SrcIP.String()).
 			Str("dst", info.DstIP.String()).
@@ -702,6 +708,8 @@ func (f *Forwarder) Stats() ForwarderStats {
 		DroppedNoTunnel: atomic.LoadUint64(&f.stats.DroppedNoTunnel),
 		DroppedNonIPv4:  atomic.LoadUint64(&f.stats.DroppedNonIPv4),
 		Errors:          atomic.LoadUint64(&f.stats.Errors),
+		ExitPacketsSent: atomic.LoadUint64(&f.stats.ExitPacketsSent),
+		ExitBytesSent:   atomic.LoadUint64(&f.stats.ExitBytesSent),
 	}
 }
 

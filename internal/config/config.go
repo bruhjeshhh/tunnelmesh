@@ -65,6 +65,7 @@ type PeerConfig struct {
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
 	HeartbeatInterval string              `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
+	MetricsPort       int                 `yaml:"metrics_port"`       // Prometheus metrics port on mesh IP (default: 9443)
 	TUN               TUNConfig           `yaml:"tun"`
 	DNS               DNSConfig           `yaml:"dns"`
 	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
@@ -181,6 +182,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		if cfg.JoinMesh.DNS.CacheTTL == 0 {
 			cfg.JoinMesh.DNS.CacheTTL = 300
 		}
+		if cfg.JoinMesh.MetricsPort == 0 {
+			cfg.JoinMesh.MetricsPort = 9443
+		}
 		// Expand home directory in private key path
 		if strings.HasPrefix(cfg.JoinMesh.PrivateKey, "~/") {
 			homeDir, err := os.UserHomeDir()
@@ -227,6 +231,9 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	}
 	if cfg.HeartbeatInterval == "" {
 		cfg.HeartbeatInterval = "10s"
+	}
+	if cfg.MetricsPort == 0 {
+		cfg.MetricsPort = 9443
 	}
 
 	// Expand home directory in private key path

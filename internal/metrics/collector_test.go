@@ -1,0 +1,655 @@
+package metrics
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tunnelmesh/tunnelmesh/internal/peer"
+	"github.com/tunnelmesh/tunnelmesh/internal/peer/connection"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
+)
+
+// Mock implementations for testing
+
+type mockForwarder struct {
+	stats    routing.ForwarderStats
+	exitNode string
+}
+
+func (m *mockForwarder) Stats() routing.ForwarderStats {
+	return m.stats
+}
+
+func (m *mockForwarder) ExitNode() string {
+	return m.exitNode
+}
+
+type mockTunnelMgr struct {
+	tunnels       []string
+	healthyCount  int
+}
+
+func (m *mockTunnelMgr) List() []string {
+	return m.tunnels
+}
+
+func (m *mockTunnelMgr) CountHealthy() int {
+	return m.healthyCount
+}
+
+type mockConnectionMgr struct {
+	infos []connection.ConnectionInfo
+}
+
+func (m *mockConnectionMgr) AllInfo() []connection.ConnectionInfo {
+	return m.infos
+}
+
+type mockRelay struct {
+	connected bool
+}
+
+func (m *mockRelay) IsConnected() bool {
+	return m.connected
+}
+
+type mockWGConcentrator struct {
+	deviceRunning  bool
+	totalClients   int
+	enabledClients int
+}
+
+func (m *mockWGConcentrator) IsDeviceRunning() bool {
+	return m.deviceRunning
+}
+
+func (m *mockWGConcentrator) ClientCount() (total, enabled int) {
+	return m.totalClients, m.enabledClients
+}
+
+func setupTestCollector(t *testing.T) (*Collector, *PeerMetrics) {
+	t.Helper()
+
+	// Create a fresh registry
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	t.Cleanup(func() { Registry = oldRegistry })
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	return NewCollector(m, CollectorConfig{}), m
+}
+
+func TestCollector_CollectForwarderStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	fwd := &mockForwarder{
+		stats: routing.ForwarderStats{
+			PacketsSent:     100,
+			PacketsReceived: 80,
+			BytesSent:       10000,
+			BytesReceived:   8000,
+			DroppedNoRoute:  5,
+			DroppedNoTunnel: 3,
+			DroppedNonIPv4:  2,
+			Errors:          1,
+		},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Forwarder: fwd,
+	})
+
+	// First collection
+	c.Collect()
+
+	// Gather and verify
+	mfs, err := Registry.Gather()
+	if err != nil {
+		t.Fatalf("Failed to gather metrics: %v", err)
+	}
+
+	expected := map[string]float64{
+		"tunnelmesh_packets_sent_total":       100,
+		"tunnelmesh_packets_received_total":   80,
+		"tunnelmesh_bytes_sent_total":         10000,
+		"tunnelmesh_bytes_received_total":     8000,
+		"tunnelmesh_dropped_no_route_total":   5,
+		"tunnelmesh_dropped_no_tunnel_total":  3,
+		"tunnelmesh_dropped_non_ipv4_total":   2,
+		"tunnelmesh_forwarder_errors_total":   1,
+	}
+
+	for _, mf := range mfs {
+		if exp, ok := expected[mf.GetName()]; ok {
+			if len(mf.GetMetric()) == 0 {
+				t.Errorf("No metrics for %s", mf.GetName())
+				continue
+			}
+			val := mf.GetMetric()[0].GetCounter().GetValue()
+			if val != exp {
+				t.Errorf("%s: expected %f, got %f", mf.GetName(), exp, val)
+			}
+		}
+	}
+
+	// Second collection with increased stats
+	fwd.stats.PacketsSent = 150
+	fwd.stats.BytesSent = 15000
+	c.Collect()
+
+	mfs, _ = Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_packets_sent_total" {
+			val := mf.GetMetric()[0].GetCounter().GetValue()
+			if val != 150 { // 100 + 50 delta
+				t.Errorf("Expected cumulative packets_sent=150, got %f", val)
+			}
+		}
+	}
+}
+
+func TestCollector_CollectTunnelStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	tunnelMgr := &mockTunnelMgr{
+		tunnels:      []string{"peer-a", "peer-b", "peer-c"},
+		healthyCount: 2,
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		TunnelMgr: tunnelMgr,
+	})
+
+	c.Collect()
+
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "tunnelmesh_active_tunnels":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 3 {
+				t.Errorf("Expected active_tunnels=3, got %f", val)
+			}
+		case "tunnelmesh_healthy_tunnels":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 2 {
+				t.Errorf("Expected healthy_tunnels=2, got %f", val)
+			}
+		}
+	}
+}
+
+func TestCollector_CollectConnectionStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	connMgr := &mockConnectionMgr{
+		infos: []connection.ConnectionInfo{
+			{PeerName: "peer-a", State: connection.StateConnected, TransportType: "ssh"},
+			{PeerName: "peer-b", State: connection.StateConnecting, TransportType: "udp"},
+			{PeerName: "peer-c", State: connection.StateDisconnected, TransportType: ""},
+		},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Connections: connMgr,
+	})
+
+	c.Collect()
+
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_connection_state" {
+			if len(mf.GetMetric()) != 3 {
+				t.Errorf("Expected 3 connection states, got %d", len(mf.GetMetric()))
+			}
+			// Verify each connection state
+			for _, metric := range mf.GetMetric() {
+				labels := make(map[string]string)
+				for _, l := range metric.GetLabel() {
+					labels[l.GetName()] = l.GetValue()
+				}
+				val := metric.GetGauge().GetValue()
+				switch labels["target_peer"] {
+				case "peer-a":
+					if val != float64(connection.StateConnected) {
+						t.Errorf("peer-a: expected state=%d, got %f", connection.StateConnected, val)
+					}
+					if labels["transport"] != "ssh" {
+						t.Errorf("peer-a: expected transport=ssh, got %s", labels["transport"])
+					}
+				case "peer-b":
+					if val != float64(connection.StateConnecting) {
+						t.Errorf("peer-b: expected state=%d, got %f", connection.StateConnecting, val)
+					}
+				case "peer-c":
+					if val != float64(connection.StateDisconnected) {
+						t.Errorf("peer-c: expected state=%d, got %f", connection.StateDisconnected, val)
+					}
+					if labels["transport"] != "none" {
+						t.Errorf("peer-c: expected transport=none, got %s", labels["transport"])
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestCollector_CollectRelayStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	relay := &mockRelay{connected: true}
+
+	c := NewCollector(m, CollectorConfig{
+		Relay: relay,
+	})
+
+	c.Collect()
+
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_relay_connected" {
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 1 {
+				t.Errorf("Expected relay_connected=1, got %f", val)
+			}
+		}
+	}
+
+	// Test disconnected
+	relay.connected = false
+	c.Collect()
+
+	mfs, _ = Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_relay_connected" {
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 0 {
+				t.Errorf("Expected relay_connected=0, got %f", val)
+			}
+		}
+	}
+}
+
+func TestCollector_CollectExitNodeStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	fwd := &mockForwarder{
+		exitNode: "exit-node-1",
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Forwarder:  fwd,
+		AllowsExit: true,
+	})
+
+	c.Collect()
+
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "tunnelmesh_exit_node_configured":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 1 {
+				t.Errorf("Expected exit_node_configured=1, got %f", val)
+			}
+		case "tunnelmesh_allows_exit_traffic":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 1 {
+				t.Errorf("Expected allows_exit_traffic=1, got %f", val)
+			}
+		case "tunnelmesh_exit_node_info":
+			if len(mf.GetMetric()) == 0 {
+				t.Error("Expected exit_node_info metric")
+				continue
+			}
+			labels := make(map[string]string)
+			for _, l := range mf.GetMetric()[0].GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["exit_node"] != "exit-node-1" {
+				t.Errorf("Expected exit_node=exit-node-1, got %s", labels["exit_node"])
+			}
+		}
+	}
+}
+
+func TestCollector_CollectWireGuardStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	wg := &mockWGConcentrator{
+		deviceRunning:  true,
+		totalClients:   10,
+		enabledClients: 8,
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		WGEnabled:      true,
+		WGConcentrator: wg,
+	})
+
+	c.Collect()
+
+	mfs, _ := Registry.Gather()
+	expected := map[string]float64{
+		"tunnelmesh_wireguard_enabled":         1,
+		"tunnelmesh_wireguard_device_running":  1,
+		"tunnelmesh_wireguard_clients_total":   10,
+		"tunnelmesh_wireguard_clients_enabled": 8,
+	}
+
+	for _, mf := range mfs {
+		if exp, ok := expected[mf.GetName()]; ok {
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != exp {
+				t.Errorf("%s: expected %f, got %f", mf.GetName(), exp, val)
+			}
+		}
+	}
+}
+
+func TestCollector_CollectGeolocationStats(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	identity := &peer.PeerIdentity{
+		Name:   "test-peer",
+		MeshIP: "10.99.0.1",
+		Location: &proto.GeoLocation{
+			Latitude:  37.7749,
+			Longitude: -122.4194,
+			City:      "San Francisco",
+		},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Identity: identity,
+	})
+
+	c.Collect()
+
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "tunnelmesh_peer_latitude":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 37.7749 {
+				t.Errorf("Expected latitude=37.7749, got %f", val)
+			}
+		case "tunnelmesh_peer_longitude":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != -122.4194 {
+				t.Errorf("Expected longitude=-122.4194, got %f", val)
+			}
+		case "tunnelmesh_peer_location_info":
+			if len(mf.GetMetric()) == 0 {
+				t.Error("Expected peer_location_info metric")
+				continue
+			}
+			labels := make(map[string]string)
+			for _, l := range mf.GetMetric()[0].GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["city"] != "San Francisco" {
+				t.Errorf("Expected city=San Francisco, got %s", labels["city"])
+			}
+		}
+	}
+}
+
+func TestCollector_Run(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	fwd := &mockForwarder{
+		stats: routing.ForwarderStats{PacketsSent: 10},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Forwarder: fwd,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Run collector in background
+	done := make(chan struct{})
+	go func() {
+		c.Run(ctx, 50*time.Millisecond)
+		close(done)
+	}()
+
+	// Wait for a few collection cycles
+	time.Sleep(150 * time.Millisecond)
+
+	// Increase stats
+	fwd.stats.PacketsSent = 30
+
+	// Wait for another cycle
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop collector
+	cancel()
+	<-done
+
+	// Verify metrics were collected
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_packets_sent_total" {
+			val := mf.GetMetric()[0].GetCounter().GetValue()
+			if val < 10 {
+				t.Errorf("Expected packets_sent >= 10, got %f", val)
+			}
+		}
+	}
+}
+
+func TestCollector_ReconnectObserver(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	c := NewCollector(m, CollectorConfig{})
+
+	observer := c.ReconnectObserver()
+
+	// Simulate reconnect transitions
+	observer.OnTransition(connection.Transition{
+		PeerName: "peer-a",
+		From:     connection.StateReconnecting,
+		To:       connection.StateConnected,
+	})
+	observer.OnTransition(connection.Transition{
+		PeerName: "peer-a",
+		From:     connection.StateReconnecting,
+		To:       connection.StateConnected,
+	})
+	observer.OnTransition(connection.Transition{
+		PeerName: "peer-b",
+		From:     connection.StateReconnecting,
+		To:       connection.StateConnected,
+	})
+
+	// This shouldn't count (not a reconnect)
+	observer.OnTransition(connection.Transition{
+		PeerName: "peer-c",
+		From:     connection.StateConnecting,
+		To:       connection.StateConnected,
+	})
+
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_reconnects_total" {
+			// Should have 2 entries: peer-a with 2 reconnects, peer-b with 1
+			if len(mf.GetMetric()) != 2 {
+				t.Errorf("Expected 2 reconnect metrics, got %d", len(mf.GetMetric()))
+			}
+			for _, metric := range mf.GetMetric() {
+				labels := make(map[string]string)
+				for _, l := range metric.GetLabel() {
+					labels[l.GetName()] = l.GetValue()
+				}
+				val := metric.GetCounter().GetValue()
+				switch labels["target_peer"] {
+				case "peer-a":
+					if val != 2 {
+						t.Errorf("peer-a: expected 2 reconnects, got %f", val)
+					}
+				case "peer-b":
+					if val != 1 {
+						t.Errorf("peer-b: expected 1 reconnect, got %f", val)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestCollector_DeltaCalculation(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	fwd := &mockForwarder{
+		stats: routing.ForwarderStats{PacketsSent: 100},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Forwarder: fwd,
+	})
+
+	// First collection
+	c.Collect()
+
+	// Verify initial value
+	mfs, _ := Registry.Gather()
+	var initialVal float64
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_packets_sent_total" {
+			initialVal = mf.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	if initialVal != 100 {
+		t.Errorf("Expected initial value 100, got %f", initialVal)
+	}
+
+	// Simulate counter reset (e.g., peer restart)
+	fwd.stats.PacketsSent = 50 // Lower than before
+
+	c.Collect()
+
+	// Value should not decrease (counter reset protection)
+	mfs, _ = Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_packets_sent_total" {
+			val := mf.GetMetric()[0].GetCounter().GetValue()
+			// Our implementation only adds positive deltas, so value stays at 100
+			if val < 100 {
+				t.Errorf("Counter should not decrease, got %f", val)
+			}
+		}
+	}
+}
+
+func TestCollector_NilComponents(t *testing.T) {
+	oldRegistry := Registry
+	Registry = prometheus.NewRegistry()
+	defer func() { Registry = oldRegistry }()
+
+	Registry.MustRegister(prometheus.NewGoCollector())
+	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	// Create collector with all nil components
+	c := NewCollector(m, CollectorConfig{})
+
+	// Should not panic
+	c.Collect()
+
+	// Verify default values
+	mfs, _ := Registry.Gather()
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "tunnelmesh_relay_connected":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 0 {
+				t.Errorf("Expected relay_connected=0 with nil relay, got %f", val)
+			}
+		case "tunnelmesh_wireguard_enabled":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			if val != 0 {
+				t.Errorf("Expected wireguard_enabled=0 with WGEnabled=false, got %f", val)
+			}
+		}
+	}
+}

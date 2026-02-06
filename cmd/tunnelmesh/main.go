@@ -21,9 +21,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/tunnelmesh/tunnelmesh/internal/admin"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
+	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	peerwg "github.com/tunnelmesh/tunnelmesh/internal/peer/wireguard"
@@ -1191,6 +1193,64 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		} else {
 			defer netMonitor.Close()
 			go node.RunNetworkMonitor(ctx, networkChanges)
+		}
+	}
+
+	// Initialize metrics
+	peerMetrics := metrics.InitMetrics(cfg.Name, resp.MeshIP, Version)
+
+	// Create WireGuard metrics wrapper if enabled
+	var wgWrapper metrics.WGConcentrator
+	if wgConcentrator != nil {
+		wgWrapper = metrics.NewWGConcentratorWrapper(
+			wgConcentrator.IsDeviceRunning,
+			func() (total, enabled int) {
+				clients := wgConcentrator.Clients()
+				for _, c := range clients {
+					total++
+					if c.Enabled {
+						enabled++
+					}
+				}
+				return
+			},
+		)
+	}
+
+	// Create metrics collector
+	metricsCollector := metrics.NewCollector(peerMetrics, metrics.CollectorConfig{
+		Forwarder:      forwarder,
+		TunnelMgr:      node.TunnelMgr(),
+		Connections:    node.Connections,
+		Relay:          metrics.NewRelayWrapper(node.PersistentRelay),
+		Identity:       identity,
+		AllowsExit:     cfg.AllowExitTraffic,
+		WGEnabled:      cfg.WireGuard.Enabled,
+		WGConcentrator: wgWrapper,
+	})
+
+	// Register reconnect observer for metrics
+	node.Connections.AddObserver(metricsCollector.ReconnectObserver())
+
+	// Start metrics collection loop
+	go metricsCollector.Run(ctx, 10*time.Second)
+
+	// Start metrics admin server on mesh IP
+	if tlsMgr != nil {
+		tlsCert, err := tlsMgr.LoadCert()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to load TLS cert for metrics server")
+		} else {
+			metricsAddr := fmt.Sprintf("%s:%d", resp.MeshIP, cfg.MetricsPort)
+			adminServer := admin.NewAdminServer()
+			if err := adminServer.Start(metricsAddr, tlsCert); err != nil {
+				log.Warn().Err(err).Msg("failed to start metrics admin server")
+			} else {
+				log.Info().
+					Str("address", metricsAddr).
+					Msg("metrics admin server started (HTTPS)")
+				defer adminServer.Stop()
+			}
 		}
 	}
 
