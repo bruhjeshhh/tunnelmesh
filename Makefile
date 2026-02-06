@@ -1,4 +1,4 @@
-.PHONY: all build build-force test test-verbose test-coverage clean install lint fmt \
+.PHONY: all build build-force test test-verbose test-coverage clean install lint fmt hooks hooks-install \
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
         ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
@@ -59,6 +59,18 @@ lint:
 fmt:
 	$(GO) fmt ./...
 	goimports -w .
+
+# Git hooks with lefthook
+hooks-install:
+	@if ! command -v lefthook &> /dev/null; then \
+		echo "Installing lefthook..."; \
+		$(GO) install github.com/evilmartians/lefthook@latest; \
+	fi
+	lefthook install
+	@echo "Git hooks installed"
+
+hooks:
+	lefthook run pre-commit
 
 # Development helpers
 dev-server: build
@@ -294,6 +306,8 @@ help:
 	@echo "  install        - Install to /usr/local/bin"
 	@echo "  lint           - Run golangci-lint"
 	@echo "  fmt            - Format code"
+	@echo "  hooks-install  - Install lefthook git hooks"
+	@echo "  hooks          - Run pre-commit hooks manually"
 	@echo "  release        - Build release binary for current platform"
 	@echo "  release-all    - Build release binaries for all platforms"
 	@echo "  push-release   - Create and push git tag (default: commit ID, or TAG=v1.0.0)"
