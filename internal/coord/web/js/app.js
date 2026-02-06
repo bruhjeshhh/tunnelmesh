@@ -1179,9 +1179,19 @@ function enableChartLinks() {
 // Loki logs
 async function checkLokiAvailable() {
     try {
-        // Query Loki through Grafana's datasource proxy
-        const resp = await fetch('/grafana/api/datasources/proxy/uid/loki/loki/api/v1/labels');
-        if (resp.ok) {
+        // First get the Loki datasource info from Grafana
+        const dsResp = await fetch('/grafana/api/datasources/name/Loki');
+        if (!dsResp.ok) {
+            console.debug('Loki datasource not found');
+            return;
+        }
+        const dsInfo = await dsResp.json();
+        state.lokiDatasourceId = dsInfo.id;
+        state.lokiDatasourceUid = dsInfo.uid;
+
+        // Test query to verify Loki is responding
+        const testResp = await fetch(`/grafana/api/datasources/proxy/${dsInfo.id}/loki/api/v1/labels`);
+        if (testResp.ok) {
             state.lokiEnabled = true;
             document.getElementById('logs-section').style.display = 'block';
             updateLokiExploreLink();
@@ -1201,13 +1211,17 @@ function updateLokiExploreLink() {
     // Build Grafana explore URL with Loki query
     const now = Date.now();
     const from = now - 3600000; // 1 hour ago
-    const query = encodeURIComponent('{job="tunnelmesh"}');
-    const exploreUrl = `/grafana/explore?orgId=1&left={"datasource":"loki","queries":[{"refId":"A","expr":"${query}","queryType":"range"}],"range":{"from":"${from}","to":"${now}"}}`;
-    logsLink.href = exploreUrl;
+    const dsUid = state.lokiDatasourceUid || 'loki';
+    const leftParam = encodeURIComponent(JSON.stringify({
+        datasource: { type: 'loki', uid: dsUid },
+        queries: [{ refId: 'A', expr: '{job="tunnelmesh"}', queryType: 'range' }],
+        range: { from: String(from), to: String(now) }
+    }));
+    logsLink.href = `/grafana/explore?orgId=1&left=${leftParam}`;
 }
 
 async function fetchLogs() {
-    if (!state.lokiEnabled) return;
+    if (!state.lokiEnabled || !state.lokiDatasourceId) return;
 
     try {
         const peerCount = Math.max(state.currentPeers.length, 1);
@@ -1216,7 +1230,7 @@ async function fetchLogs() {
         const oneHourAgo = now - (3600 * 1000000000);
 
         const query = encodeURIComponent('{job="tunnelmesh"}');
-        const url = `/grafana/api/datasources/proxy/uid/loki/loki/api/v1/query_range?query=${query}&start=${oneHourAgo}&end=${now}&limit=${limit}&direction=backward`;
+        const url = `/grafana/api/datasources/proxy/${state.lokiDatasourceId}/loki/api/v1/query_range?query=${query}&start=${oneHourAgo}&end=${now}&limit=${limit}&direction=backward`;
 
         const resp = await fetch(url);
         if (!resp.ok) return;
