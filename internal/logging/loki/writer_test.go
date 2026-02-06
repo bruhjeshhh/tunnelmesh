@@ -108,11 +108,14 @@ func TestWriter_Write_SkipsEmptyLines(t *testing.T) {
 func TestWriter_Write_FlushesWhenBatchFull(t *testing.T) {
 	var requestCount atomic.Int32
 	var receivedPayload lokiPushRequest
+	var payloadMu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		body, _ := io.ReadAll(r.Body)
+		payloadMu.Lock()
 		json.Unmarshal(body, &receivedPayload)
+		payloadMu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -134,12 +137,20 @@ func TestWriter_Write_FlushesWhenBatchFull(t *testing.T) {
 		t.Errorf("expected 1 flush request, got %d", requestCount.Load())
 	}
 
-	if len(receivedPayload.Streams) != 1 {
-		t.Fatalf("expected 1 stream, got %d", len(receivedPayload.Streams))
+	payloadMu.Lock()
+	streamCount := len(receivedPayload.Streams)
+	var valueCount int
+	if streamCount > 0 {
+		valueCount = len(receivedPayload.Streams[0].Values)
+	}
+	payloadMu.Unlock()
+
+	if streamCount != 1 {
+		t.Fatalf("expected 1 stream, got %d", streamCount)
 	}
 
-	if len(receivedPayload.Streams[0].Values) != 3 {
-		t.Errorf("expected 3 values in stream, got %d", len(receivedPayload.Streams[0].Values))
+	if valueCount != 3 {
+		t.Errorf("expected 3 values in stream, got %d", valueCount)
 	}
 }
 

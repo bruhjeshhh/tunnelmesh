@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,12 +16,21 @@ import (
 // Mock implementations for testing
 
 type mockForwarder struct {
+	mu       sync.Mutex
 	stats    routing.ForwarderStats
 	exitNode string
 }
 
 func (m *mockForwarder) Stats() routing.ForwarderStats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.stats
+}
+
+func (m *mockForwarder) SetStats(stats routing.ForwarderStats) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stats = stats
 }
 
 func (m *mockForwarder) ExitNode() string {
@@ -482,7 +492,7 @@ func TestCollector_Run(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Increase stats
-	fwd.stats.PacketsSent = 30
+	fwd.SetStats(routing.ForwarderStats{PacketsSent: 30})
 
 	// Wait for another cycle
 	time.Sleep(100 * time.Millisecond)
