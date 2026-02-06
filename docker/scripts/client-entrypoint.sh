@@ -71,10 +71,16 @@ envsubst < /etc/tunnelmesh/peer.yaml.template > /etc/tunnelmesh/peer.yaml
 echo "Generated peer config:"
 cat /etc/tunnelmesh/peer.yaml
 
+# Function to start the mesh daemon
+start_daemon() {
+    echo "Starting mesh daemon..."
+    tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level info --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
+    MESH_PID=$!
+    echo "Daemon started with PID $MESH_PID"
+}
+
 # Start the mesh client in background
-echo "Starting mesh daemon..."
-tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level info --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
-MESH_PID=$!
+start_daemon
 
 # Wait for TUN device to be created
 echo "Waiting for TUN device..."
@@ -110,6 +116,27 @@ counter=0
 PEER_IPS=""
 
 while true; do
+    # Check if daemon is still running, restart if dead
+    if ! kill -0 "$MESH_PID" 2>/dev/null; then
+        echo ""
+        echo "!!! Daemon (PID $MESH_PID) died, restarting..."
+        start_daemon
+        # Wait for TUN device to be recreated
+        for i in $(seq 1 30); do
+            if ip link show tun-mesh0 > /dev/null 2>&1; then
+                echo "TUN device recreated!"
+                break
+            fi
+            sleep 1
+        done
+        # Reconfigure DNS
+        cp /etc/resolv.conf.backup /etc/resolv.conf.tmp 2>/dev/null || true
+        echo "nameserver 127.0.0.53" > /etc/resolv.conf
+        echo "search tunnelmesh" >> /etc/resolv.conf
+        cat /etc/resolv.conf.tmp >> /etc/resolv.conf 2>/dev/null || true
+        sleep 5  # Give time for peer discovery
+    fi
+
     # Refresh peer list periodically
     if [ $((counter % DISCOVERY_INTERVAL)) -eq 0 ] || [ -z "$PEER_IPS" ]; then
         echo ""

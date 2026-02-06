@@ -549,6 +549,50 @@ func TestPeerConnection_CancelOutboundDuringConnecting(t *testing.T) {
 	}
 }
 
+// Test that ConnectedSince returns zero when tunnel is set but state is not Connected.
+// This is important for relay packet handling: if a tunnel is set but state is Connecting,
+// we must not use time.Since(zero) to calculate tunnel age as it would return a huge duration.
+func TestPeerConnection_ConnectedSinceZeroWhenNotConnected(t *testing.T) {
+	pc := NewPeerConnection(PeerConnectionConfig{
+		PeerName: "test-peer",
+		MeshIP:   "10.0.0.1",
+	})
+
+	// Set a tunnel directly without transitioning to Connected state
+	tunnel := &mockTunnel{}
+	pc.SetTunnel(tunnel, "test")
+
+	// Verify tunnel is set
+	if !pc.HasTunnel() {
+		t.Error("HasTunnel() should return true")
+	}
+
+	// State should still be Disconnected
+	if pc.State() != StateDisconnected {
+		t.Errorf("State() = %v, want %v", pc.State(), StateDisconnected)
+	}
+
+	// ConnectedSince should return zero time since we're not in Connected state
+	connectedSince := pc.ConnectedSince()
+	if !connectedSince.IsZero() {
+		t.Errorf("ConnectedSince() = %v, want zero time when state is not Connected", connectedSince)
+	}
+
+	// Now transition to Connecting - should still return zero
+	_ = pc.TransitionTo(StateConnecting, "dial started", nil)
+	connectedSince = pc.ConnectedSince()
+	if !connectedSince.IsZero() {
+		t.Errorf("ConnectedSince() = %v, want zero time when state is Connecting", connectedSince)
+	}
+
+	// Now properly connect - should have non-zero time
+	_ = pc.TransitionTo(StateConnected, "connected", nil)
+	connectedSince = pc.ConnectedSince()
+	if connectedSince.IsZero() {
+		t.Error("ConnectedSince() should be non-zero after transitioning to Connected")
+	}
+}
+
 // Test that tunnels with actual data work
 func TestPeerConnection_TunnelDataFlow(t *testing.T) {
 	pc := NewPeerConnection(PeerConnectionConfig{

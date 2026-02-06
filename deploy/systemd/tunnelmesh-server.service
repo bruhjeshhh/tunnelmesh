@@ -1,0 +1,33 @@
+[Unit]
+Description=TunnelMesh Server - Coordination and Mesh Peer
+Documentation=https://github.com/zombar/tunnelmesh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/tunnelmesh serve --config /etc/tunnelmesh/server.yaml
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Security hardening
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/tunnelmesh /root/.tunnelmesh
+PrivateTmp=yes
+
+# Required capabilities for TUN device
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tunnelmesh-server
+
+[Install]
+WantedBy=multi-user.target
