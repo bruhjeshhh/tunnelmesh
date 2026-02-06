@@ -16,6 +16,10 @@ ssh_port: 2222
 # Path to SSH private key (will be generated if missing)
 private_key: "~/.tunnelmesh/id_ed25519"
 
+# Log level: trace, debug, info, warn, error (default: info)
+# Use "debug" or "trace" for troubleshooting, "warn" for minimal logging
+# log_level: "info"
+
 # TUN interface configuration
 tun:
   name: "tun-mesh0"   # Interface name (distinct from tailscale0)
