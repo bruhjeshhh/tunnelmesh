@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,6 +59,7 @@ type ServerConfig struct {
 	DataDir           string                `yaml:"data_dir"`            // Data directory for persistence (default: /var/lib/tunnelmesh)
 	HeartbeatInterval string                `yaml:"heartbeat_interval"`  // Heartbeat interval (default: 10s)
 	Locations         bool                  `yaml:"locations"`           // Enable node location tracking (requires external IP geolocation API)
+	LogLevel          string                `yaml:"log_level"`           // trace, debug, info, warn, error (default: info)
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
@@ -74,10 +76,11 @@ type PeerConfig struct {
 	HeartbeatInterval string              `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
 	MetricsEnabled    *bool               `yaml:"metrics_enabled"`    // Enable Prometheus metrics (default: true). Disable for 10Gbps+ high-performance networks.
 	MetricsPort       int                 `yaml:"metrics_port"`       // Prometheus metrics port on mesh IP (default: 9443)
+	LogLevel          string              `yaml:"log_level"`          // trace, debug, info, warn, error (default: info)
 	TUN               TUNConfig           `yaml:"tun"`
 	DNS               DNSConfig           `yaml:"dns"`
 	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
-	Geolocation       GeolocationConfig   `yaml:"geolocation"`       // Manual geolocation coordinates
+	Geolocation       GeolocationConfig   `yaml:"geolocation"`        // Manual geolocation coordinates
 	ExitNode          string              `yaml:"exit_node"`          // Name of peer to route internet traffic through
 	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this node to act as exit node for other peers
 	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
@@ -413,4 +416,19 @@ func validateDNSLabel(label string) error {
 
 func isAlphanumeric(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// ApplyLogLevel parses the log level string and sets zerolog's global level.
+// Returns true if the level was successfully applied, false if the level string
+// was empty or invalid.
+func ApplyLogLevel(level string) bool {
+	if level == "" {
+		return false
+	}
+	parsed, err := zerolog.ParseLevel(level)
+	if err != nil {
+		return false
+	}
+	zerolog.SetGlobalLevel(parsed)
+	return true
 }

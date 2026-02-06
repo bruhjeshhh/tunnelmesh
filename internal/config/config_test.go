@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/testutil"
@@ -849,4 +850,191 @@ metrics_enabled: true
 	require.NoError(t, err)
 
 	assert.True(t, cfg.IsMetricsEnabled(), "metrics should be enabled when explicitly set to true")
+}
+
+// Log Level Configuration Tests
+
+func TestLoadServerConfig_WithLogLevel(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":8080"
+auth_token: "test-token-123"
+log_level: "debug"
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, ":8080", cfg.Listen)
+	assert.Equal(t, "debug", cfg.LogLevel)
+}
+
+func TestLoadServerConfig_LogLevelDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config without log_level - should default to empty string
+	content := `
+listen: ":8080"
+auth_token: "test-token-123"
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "", cfg.LogLevel, "log_level should default to empty string")
+}
+
+func TestLoadPeerConfig_WithLogLevel(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "mynode"
+server: "http://localhost:8080"
+auth_token: "token"
+log_level: "warn"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "mynode", cfg.Name)
+	assert.Equal(t, "warn", cfg.LogLevel)
+}
+
+func TestLoadPeerConfig_LogLevelDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config without log_level - should default to empty string
+	content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "", cfg.LogLevel, "log_level should default to empty string")
+}
+
+func TestLoadServerConfig_AllLogLevels(t *testing.T) {
+	levels := []string{"trace", "debug", "info", "warn", "error"}
+
+	for _, level := range levels {
+		t.Run(level, func(t *testing.T) {
+			dir, cleanup := testutil.TempDir(t)
+			defer cleanup()
+
+			content := `
+listen: ":8080"
+auth_token: "token"
+log_level: "` + level + `"
+`
+			configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+			cfg, err := LoadServerConfig(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, level, cfg.LogLevel)
+		})
+	}
+}
+
+func TestLoadPeerConfig_AllLogLevels(t *testing.T) {
+	levels := []string{"trace", "debug", "info", "warn", "error"}
+
+	for _, level := range levels {
+		t.Run(level, func(t *testing.T) {
+			dir, cleanup := testutil.TempDir(t)
+			defer cleanup()
+
+			content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+log_level: "` + level + `"
+`
+			configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+			cfg, err := LoadPeerConfig(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, level, cfg.LogLevel)
+		})
+	}
+}
+
+func TestApplyLogLevel(t *testing.T) {
+	// Save original level to restore after test
+	originalLevel := zerolog.GlobalLevel()
+	defer zerolog.SetGlobalLevel(originalLevel)
+
+	tests := []struct {
+		name          string
+		level         string
+		expectApplied bool
+		expectLevel   zerolog.Level
+	}{
+		{
+			name:          "empty level",
+			level:         "",
+			expectApplied: false,
+		},
+		{
+			name:          "trace level",
+			level:         "trace",
+			expectApplied: true,
+			expectLevel:   zerolog.TraceLevel,
+		},
+		{
+			name:          "debug level",
+			level:         "debug",
+			expectApplied: true,
+			expectLevel:   zerolog.DebugLevel,
+		},
+		{
+			name:          "info level",
+			level:         "info",
+			expectApplied: true,
+			expectLevel:   zerolog.InfoLevel,
+		},
+		{
+			name:          "warn level",
+			level:         "warn",
+			expectApplied: true,
+			expectLevel:   zerolog.WarnLevel,
+		},
+		{
+			name:          "error level",
+			level:         "error",
+			expectApplied: true,
+			expectLevel:   zerolog.ErrorLevel,
+		},
+		{
+			name:          "invalid level",
+			level:         "invalid",
+			expectApplied: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset to known state before each test
+			zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+			applied := ApplyLogLevel(tt.level)
+			assert.Equal(t, tt.expectApplied, applied)
+
+			if tt.expectApplied {
+				assert.Equal(t, tt.expectLevel, zerolog.GlobalLevel())
+			}
+		})
+	}
 }
