@@ -24,6 +24,11 @@ join_mesh:
   name: "server-node"
   private_key: "/root/.tunnelmesh/id_ed25519"
   allow_exit_traffic: true
+  dns:
+    enabled: true
+    listen: "127.0.0.53:53"
+    aliases:
+      - "alt.server-node"
   loki:
     enabled: true
     url: "http://localhost:3100"  # Loki runs in same network namespace
