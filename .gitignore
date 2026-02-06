@@ -36,6 +36,10 @@ peer.yaml
 *.pem
 *.key
 *.crt
+*.cer
+*.der
+*.p12
+*.pfx
 
 # Exception: docker test configs are OK to commit
 !docker/config/server.yaml
