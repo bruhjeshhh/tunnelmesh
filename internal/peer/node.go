@@ -276,6 +276,48 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
+// HandleRelayPacketForAsymmetricDetection checks if we should invalidate a direct tunnel
+// when receiving relay packets from a peer. This handles detection of asymmetric path failures
+// where we can reach the peer directly but they can't reach us.
+//
+// Returns true if the tunnel was invalidated, false otherwise.
+func (m *MeshNode) HandleRelayPacketForAsymmetricDetection(sourcePeer string) bool {
+	pc := m.Connections.Get(sourcePeer)
+	if pc == nil {
+		return false
+	}
+
+	if !pc.HasTunnel() {
+		return false
+	}
+
+	connectedSince := pc.ConnectedSince()
+	// If connectedSince is zero (state not Connected), skip invalidation
+	// to avoid false positives from time.Since(zero) returning huge duration
+	if connectedSince.IsZero() {
+		log.Debug().
+			Str("peer", sourcePeer).
+			Msg("ignoring relay packet: connection state not Connected (connectedSince is zero)")
+		return false
+	}
+
+	tunnelAge := time.Since(connectedSince)
+	if tunnelAge < asymmetricDetectionGracePeriod {
+		log.Debug().
+			Str("peer", sourcePeer).
+			Dur("tunnel_age", tunnelAge).
+			Msg("ignoring relay packet during grace period after tunnel establishment")
+		return false
+	}
+
+	log.Info().
+		Str("peer", sourcePeer).
+		Dur("tunnel_age", tunnelAge).
+		Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
+	_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+	return true
+}
+
 // setupRelayHandlers configures the packet and peer reconnection handlers for a relay.
 // This is extracted to ensure consistent behavior between initial connect and reconnect.
 func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
@@ -288,36 +330,8 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 			log.Warn().Str("source", sourcePeer).Int("len", len(data)).Msg("dropping relay packet: forwarder not set")
 		}
 
-		// If we're receiving relay packets from a peer, they can't reach us directly.
-		// Our direct tunnel to them is also likely broken (asymmetric path failure).
-		// However, we apply a grace period after tunnel establishment to avoid
-		// tearing down freshly established tunnels due to stale relay packets.
-		if pc := m.Connections.Get(sourcePeer); pc != nil {
-			if pc.HasTunnel() {
-				connectedSince := pc.ConnectedSince()
-				// If connectedSince is zero (state not Connected), skip invalidation
-				// to avoid false positives from time.Since(zero) returning huge duration
-				if connectedSince.IsZero() {
-					log.Debug().
-						Str("peer", sourcePeer).
-						Msg("ignoring relay packet: connection state not Connected (connectedSince is zero)")
-				} else {
-					tunnelAge := time.Since(connectedSince)
-					if tunnelAge < asymmetricDetectionGracePeriod {
-						log.Debug().
-							Str("peer", sourcePeer).
-							Dur("tunnel_age", tunnelAge).
-							Msg("ignoring relay packet during grace period after tunnel establishment")
-					} else {
-						log.Info().
-							Str("peer", sourcePeer).
-							Dur("tunnel_age", tunnelAge).
-							Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
-						_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
-					}
-				}
-			}
-		}
+		// Check for asymmetric path failure (we can reach peer but they can't reach us)
+		m.HandleRelayPacketForAsymmetricDetection(sourcePeer)
 	})
 
 	// Set up handler for peer reconnection notifications.

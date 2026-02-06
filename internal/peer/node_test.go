@@ -280,6 +280,64 @@ func TestMeshNode_StartConnecting_AlreadyConnecting(t *testing.T) {
 // - m.Forwarder.SetRelay(nil) is ONLY called after all retries fail
 // - m.Forwarder.SetRelay(newRelay) is called BEFORE oldRelay.Close()
 
+func TestMeshNode_HandleRelayPacketForAsymmetricDetection(t *testing.T) {
+	identity := &PeerIdentity{
+		Name: "test-node",
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	t.Run("no peer connection returns false", func(t *testing.T) {
+		invalidated := node.HandleRelayPacketForAsymmetricDetection("nonexistent-peer")
+		assert.False(t, invalidated)
+	})
+
+	t.Run("peer without tunnel returns false", func(t *testing.T) {
+		// Create a peer connection without a tunnel
+		node.Connections.GetOrCreate("peer1", "10.0.0.1")
+		invalidated := node.HandleRelayPacketForAsymmetricDetection("peer1")
+		assert.False(t, invalidated)
+	})
+
+	t.Run("peer with tunnel but zero connectedSince returns false", func(t *testing.T) {
+		// Create a peer connection and set tunnel directly (without transitioning to Connected)
+		pc := node.Connections.GetOrCreate("peer2", "10.0.0.2")
+		pc.SetTunnel(&mockTunnel{}, "test")
+
+		// Should have tunnel but ConnectedSince should be zero (state is not Connected)
+		assert.True(t, pc.HasTunnel())
+		assert.True(t, pc.ConnectedSince().IsZero())
+
+		// Should NOT invalidate because connectedSince is zero
+		invalidated := node.HandleRelayPacketForAsymmetricDetection("peer2")
+		assert.False(t, invalidated)
+
+		// Peer should still have its tunnel
+		assert.True(t, pc.HasTunnel())
+	})
+
+	t.Run("peer with tunnel in grace period returns false", func(t *testing.T) {
+		// Create a properly connected peer (just connected, within grace period)
+		pc := node.Connections.GetOrCreate("peer3", "10.0.0.3")
+		err := pc.Connected(&mockTunnel{}, "test", "test connection")
+		require.NoError(t, err)
+
+		// Should have tunnel and non-zero ConnectedSince
+		assert.True(t, pc.HasTunnel())
+		assert.False(t, pc.ConnectedSince().IsZero())
+
+		// Should NOT invalidate because tunnel is too new (within grace period)
+		invalidated := node.HandleRelayPacketForAsymmetricDetection("peer3")
+		assert.False(t, invalidated)
+
+		// Peer should still have its tunnel
+		assert.True(t, pc.HasTunnel())
+	})
+}
+
 func TestMeshNode_InboundCancelsOutbound_Integration(t *testing.T) {
 	// This test simulates the full flow:
 	// 1. Start an outbound connection (slow, takes 100ms)
