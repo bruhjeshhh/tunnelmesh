@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer/connection"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
@@ -80,29 +81,13 @@ func (m *mockWGConcentrator) ClientCount() (total, enabled int) {
 	return m.totalClients, m.enabledClients
 }
 
-func setupTestCollector(t *testing.T) (*Collector, *PeerMetrics) {
-	t.Helper()
-
-	// Create a fresh registry
-	oldRegistry := Registry
-	Registry = prometheus.NewRegistry()
-	t.Cleanup(func() { Registry = oldRegistry })
-
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
-
-	return NewCollector(m, CollectorConfig{}), m
-}
-
 func TestCollector_CollectForwarderStats(t *testing.T) {
 	oldRegistry := Registry
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -177,8 +162,8 @@ func TestCollector_CollectTunnelStats(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -215,8 +200,8 @@ func TestCollector_CollectConnectionStats(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -277,8 +262,8 @@ func TestCollector_CollectRelayStats(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -320,8 +305,8 @@ func TestCollector_CollectExitNodeStats(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -370,8 +355,8 @@ func TestCollector_CollectWireGuardStats(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -411,8 +396,8 @@ func TestCollector_CollectGeolocationStats(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -466,8 +451,8 @@ func TestCollector_Run(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -518,8 +503,8 @@ func TestCollector_ReconnectObserver(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -584,8 +569,8 @@ func TestCollector_DeltaCalculation(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -635,8 +620,8 @@ func TestCollector_NilComponents(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 

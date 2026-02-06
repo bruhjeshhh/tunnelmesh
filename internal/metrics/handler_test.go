@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 func TestHandler(t *testing.T) {
@@ -15,8 +16,8 @@ func TestHandler(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	// Initialize metrics
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
@@ -110,8 +111,8 @@ func TestHandler_OpenMetricsFormat(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	_ = InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -143,8 +144,8 @@ func TestHandler_LabeledMetrics(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 

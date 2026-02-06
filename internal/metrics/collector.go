@@ -20,23 +20,6 @@ type WireGuardCollector interface {
 	}
 }
 
-// wgConcentratorAdapter adapts the actual WireGuard concentrator to our interface.
-type wgConcentratorAdapter struct {
-	concentrator interface {
-		IsDeviceRunning() bool
-		Clients() []struct {
-			ID        string
-			Name      string
-			PublicKey string
-			MeshIP    string
-			DNSName   string
-			Enabled   bool
-			CreatedAt time.Time
-			LastSeen  time.Time
-		}
-	}
-}
-
 // ForwarderSnapshot holds the last-seen forwarder stats for delta calculation.
 type ForwarderSnapshot struct {
 	PacketsSent     uint64
@@ -312,12 +295,6 @@ func (c *Collector) Run(ctx context.Context, interval time.Duration) {
 			c.Collect()
 		}
 	}
-}
-
-// WGConcentratorWrapper wraps a WireGuard concentrator to implement WGConcentrator interface.
-type WGConcentratorWrapper struct {
-	isDeviceRunning func() bool
-	getClients      func() []interface{ IsEnabled() bool }
 }
 
 // NewWGConcentratorWrapper creates a new wrapper for WireGuard concentrator.

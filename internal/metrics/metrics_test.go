@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	io_prometheus_client "github.com/prometheus/client_model/go"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 func TestInitMetrics(t *testing.T) {
@@ -14,8 +14,8 @@ func TestInitMetrics(t *testing.T) {
 	defer func() { Registry = oldRegistry }()
 
 	// Re-register standard collectors
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 	if m == nil {
@@ -67,8 +67,8 @@ func TestMetricsCounterIncrement(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -107,8 +107,8 @@ func TestMetricsGaugeSet(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -142,8 +142,8 @@ func TestMetricsLabels(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 
@@ -194,8 +194,8 @@ func TestPeerInfoMetric(t *testing.T) {
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()
 
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	_ = InitMetrics("my-node", "10.99.1.5", "2.0.0")
 
@@ -235,29 +235,4 @@ func TestPeerInfoMetric(t *testing.T) {
 	if !found {
 		t.Error("tunnelmesh_peer_info not found")
 	}
-}
-
-func getMetricValue(mf *io_prometheus_client.MetricFamily, labels map[string]string) float64 {
-	for _, m := range mf.GetMetric() {
-		match := true
-		metricLabels := make(map[string]string)
-		for _, l := range m.GetLabel() {
-			metricLabels[l.GetName()] = l.GetValue()
-		}
-		for k, v := range labels {
-			if metricLabels[k] != v {
-				match = false
-				break
-			}
-		}
-		if match {
-			if m.GetCounter() != nil {
-				return m.GetCounter().GetValue()
-			}
-			if m.GetGauge() != nil {
-				return m.GetGauge().GetValue()
-			}
-		}
-	}
-	return -1
 }

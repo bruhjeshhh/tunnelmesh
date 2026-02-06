@@ -91,10 +91,10 @@ func TestWriter_Write_SkipsEmptyLines(t *testing.T) {
 	})
 
 	// Write empty and whitespace-only entries
-	w.Write([]byte(""))
-	w.Write([]byte("   "))
-	w.Write([]byte("\n"))
-	w.Write([]byte(`{"level":"info","msg":"real message"}`))
+	_, _ = w.Write([]byte(""))
+	_, _ = w.Write([]byte("   "))
+	_, _ = w.Write([]byte("\n"))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"real message"}`))
 
 	w.mu.Lock()
 	bufLen := len(w.buffer)
@@ -114,7 +114,7 @@ func TestWriter_Write_FlushesWhenBatchFull(t *testing.T) {
 		requestCount.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		payloadMu.Lock()
-		json.Unmarshal(body, &receivedPayload)
+		_ = json.Unmarshal(body, &receivedPayload)
 		payloadMu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -126,9 +126,9 @@ func TestWriter_Write_FlushesWhenBatchFull(t *testing.T) {
 	})
 
 	// Write exactly batch size entries
-	w.Write([]byte(`{"level":"info","msg":"message 1"}`))
-	w.Write([]byte(`{"level":"info","msg":"message 2"}`))
-	w.Write([]byte(`{"level":"info","msg":"message 3"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"message 1"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"message 2"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"message 3"}`))
 
 	// Give time for async flush
 	time.Sleep(100 * time.Millisecond)
@@ -161,7 +161,7 @@ func TestWriter_Flush_SendsCorrectPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedContentType = r.Header.Get("Content-Type")
 		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &receivedPayload)
+		_ = json.Unmarshal(body, &receivedPayload)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -175,7 +175,7 @@ func TestWriter_Flush_SendsCorrectPayload(t *testing.T) {
 		},
 	})
 
-	w.Write([]byte(`{"level":"info","msg":"test log line"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"test log line"}`))
 	w.flush()
 
 	if receivedContentType != "application/json" {
@@ -261,8 +261,8 @@ func TestWriter_StartStop_PeriodicFlush(t *testing.T) {
 	w.Start()
 
 	// Write some entries
-	w.Write([]byte(`{"level":"info","msg":"message 1"}`))
-	w.Write([]byte(`{"level":"info","msg":"message 2"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"message 1"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"message 2"}`))
 
 	// Wait for periodic flush
 	time.Sleep(100 * time.Millisecond)
@@ -290,7 +290,7 @@ func TestWriter_Stop_FinalFlush(t *testing.T) {
 	})
 
 	w.Start()
-	w.Write([]byte(`{"level":"info","msg":"final message"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"final message"}`))
 
 	// Stop should trigger final flush
 	w.Stop()
@@ -359,7 +359,7 @@ func TestWriter_HandlesLokiConnectionRefused(t *testing.T) {
 		Timeout:   100 * time.Millisecond,
 	})
 
-	w.Write([]byte(`{"level":"info","msg":"test"}`))
+	_, _ = w.Write([]byte(`{"level":"info","msg":"test"}`))
 
 	// Should not panic
 	w.flush()
@@ -389,7 +389,7 @@ func TestWriter_ConcurrentWrites(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			w.Write([]byte(`{"level":"info","msg":"concurrent message"}`))
+			_, _ = w.Write([]byte(`{"level":"info","msg":"concurrent message"}`))
 		}(i)
 	}
 	wg.Wait()

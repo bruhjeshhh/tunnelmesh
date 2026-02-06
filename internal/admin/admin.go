@@ -45,9 +45,8 @@ func (s *AdminServer) Start(addr string, cert *tls.Certificate) error {
 
 	go func() {
 		// Use ListenAndServeTLS with empty strings since certs are in TLSConfig
-		if err := s.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			// Log error but don't crash - metrics are optional
-		}
+		// Ignore errors - metrics are optional and server shutdown is expected
+		_ = s.server.ListenAndServeTLS("", "")
 	}()
 
 	return nil
@@ -64,9 +63,8 @@ func (s *AdminServer) StartInsecure(addr string) error {
 	}
 
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			// Log error but don't crash - metrics are optional
-		}
+		// Ignore errors - metrics are optional and server shutdown is expected
+		_ = s.server.ListenAndServe()
 	}()
 
 	return nil
@@ -88,5 +86,5 @@ func (s *AdminServer) Stop() error {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok\n"))
+	_, _ = w.Write([]byte("ok\n"))
 }

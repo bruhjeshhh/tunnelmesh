@@ -19,6 +19,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 func TestNewAdminServer(t *testing.T) {
@@ -46,7 +47,7 @@ func TestAdminServer_HealthEndpoint(t *testing.T) {
 	if err := server.StartInsecure(addr); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Give server time to start
 	time.Sleep(50 * time.Millisecond)
@@ -74,7 +75,7 @@ func TestAdminServer_MetricsEndpoint(t *testing.T) {
 	metrics.Registry = prometheus.NewRegistry()
 	defer func() { metrics.Registry = oldRegistry }()
 
-	metrics.Registry.MustRegister(prometheus.NewGoCollector())
+	metrics.Registry.MustRegister(collectors.NewGoCollector())
 	m := metrics.InitMetrics("test-peer", "10.99.0.1", "1.0.0")
 	m.ActiveTunnels.Set(3)
 
@@ -91,7 +92,7 @@ func TestAdminServer_MetricsEndpoint(t *testing.T) {
 	if err := server.StartInsecure(addr); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -173,7 +174,7 @@ func TestAdminServer_StartTLS(t *testing.T) {
 	if err := server.Start(addr, cert); err != nil {
 		t.Fatalf("Failed to start TLS server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -210,7 +211,7 @@ func TestAdminServer_NotFoundHandler(t *testing.T) {
 	if err := server.StartInsecure(addr); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 

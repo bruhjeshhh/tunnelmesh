@@ -3,6 +3,7 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
@@ -56,8 +57,8 @@ type PeerMetrics struct {
 
 func init() {
 	// Register standard Go metrics
-	Registry.MustRegister(prometheus.NewGoCollector())
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 }
 
 // InitMetrics initializes all metrics with the given peer name as a constant label.

@@ -1277,7 +1277,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				log.Info().
 					Str("address", metricsAddr).
 					Msg("metrics admin server started (HTTPS)")
-				defer adminServer.Stop()
+				defer func() { _ = adminServer.Stop() }()
 			}
 		}
 	}
