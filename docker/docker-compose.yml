@@ -52,6 +52,8 @@ services:
       - DISCOVERY_INTERVAL=20
 
   # Monitoring stack - shares server's network namespace for mesh access
+  # Note: These use network_mode: "service:server" which binds to server's container.
+  # The restart: true ensures they restart when server restarts/recreates.
   prometheus:
     image: prom/prometheus:latest
     container_name: tunnelmesh-prometheus
@@ -72,6 +74,7 @@ services:
     depends_on:
       server:
         condition: service_healthy
+        restart: true
     restart: unless-stopped
 
   sd-generator:
@@ -93,6 +96,7 @@ services:
     depends_on:
       server:
         condition: service_healthy
+        restart: true
     restart: unless-stopped
 
   grafana:
@@ -115,7 +119,11 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:
-      - prometheus
+      server:
+        condition: service_healthy
+        restart: true
+      prometheus:
+        condition: service_started
     restart: unless-stopped
 
 networks:
