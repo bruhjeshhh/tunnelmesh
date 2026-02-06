@@ -796,55 +796,81 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "Disconnected"
-                },
-                "1": {
-                  "color": "yellow",
-                  "index": 1,
-                  "text": "Connecting"
-                },
-                "2": {
-                  "color": "green",
-                  "index": 2,
-                  "text": "Connected"
-                },
-                "3": {
-                  "color": "orange",
-                  "index": 3,
-                  "text": "Reconnecting"
-                },
-                "4": {
-                  "color": "purple",
-                  "index": 4,
-                  "text": "Closed"
-                }
-              },
-              "type": "value"
-            }
-          ],
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
                 "color": "green",
-                "value": 2
+                "value": null
               }
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Connected"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Disconnected"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Connecting"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reconnecting"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -855,9 +881,9 @@
       "id": 12,
       "options": {
         "colorMode": "value",
-        "graphMode": "none",
+        "graphMode": "area",
         "justifyMode": "auto",
-        "orientation": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": ["lastNotNull"],
           "fields": "",
@@ -868,9 +894,24 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "tunnelmesh_connection_state",
-          "legendFormat": "{{peer}} -> {{target_peer}} ({{transport}})",
+          "expr": "count(tunnelmesh_connection_state == 2)",
+          "legendFormat": "Connected",
           "refId": "A"
+        },
+        {
+          "expr": "count(tunnelmesh_connection_state == 0)",
+          "legendFormat": "Disconnected",
+          "refId": "B"
+        },
+        {
+          "expr": "count(tunnelmesh_connection_state == 1)",
+          "legendFormat": "Connecting",
+          "refId": "C"
+        },
+        {
+          "expr": "count(tunnelmesh_connection_state == 3)",
+          "legendFormat": "Reconnecting",
+          "refId": "D"
         }
       ],
       "title": "Connection States",
