@@ -435,6 +435,7 @@ type MonitoringProxyConfig struct {
 
 // SetupMonitoringProxies registers reverse proxy handlers for Prometheus and Grafana.
 // These are registered on the main mux with /prometheus/ and /grafana/ prefixes.
+// If adminMux exists (mesh-only mode), also register there for access via https://this.tunnelmesh/
 // Prometheus should be configured with --web.route-prefix=/prometheus/
 // Grafana should be configured with GF_SERVER_SERVE_FROM_SUB_PATH=true
 func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
@@ -450,9 +451,13 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 					// Path already includes /prometheus/ prefix which Prometheus expects
 				},
 			}
-			s.mux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
+			handler := func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
-			})
+			}
+			s.mux.HandleFunc("/prometheus/", handler)
+			if s.adminMux != nil {
+				s.adminMux.HandleFunc("/prometheus/", handler)
+			}
 		}
 	}
 
@@ -468,9 +473,13 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 					// Path already includes /grafana/ prefix which Grafana expects
 				},
 			}
-			s.mux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
+			handler := func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
-			})
+			}
+			s.mux.HandleFunc("/grafana/", handler)
+			if s.adminMux != nil {
+				s.adminMux.HandleFunc("/grafana/", handler)
+			}
 		}
 	}
 }

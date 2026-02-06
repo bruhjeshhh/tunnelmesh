@@ -263,6 +263,71 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 	assert.Equal(t, "udp", peer1Info.Connections["peer3"])
 }
 
+func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
+	// Create a server with JoinMesh configured to enable adminMux
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Admin: config.AdminConfig{
+			Enabled: true,
+		},
+		JoinMesh: &config.PeerConfig{
+			Name: "test-coord",
+		},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
+
+	// Start mock Prometheus and Grafana servers
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("prometheus"))
+	}))
+	defer promServer.Close()
+
+	grafanaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("grafana"))
+	}))
+	defer grafanaServer.Close()
+
+	// Setup monitoring proxies
+	srv.SetupMonitoringProxies(MonitoringProxyConfig{
+		PrometheusURL: promServer.URL,
+		GrafanaURL:    grafanaServer.URL,
+	})
+
+	// Test adminMux has the prometheus route
+	req := httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "prometheus", rec.Body.String())
+
+	// Test adminMux has the grafana route
+	req = httptest.NewRequest(http.MethodGet, "/grafana/", nil)
+	rec = httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "grafana", rec.Body.String())
+
+	// Test main mux also has the routes
+	req = httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
+	rec = httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "prometheus", rec.Body.String())
+
+	req = httptest.NewRequest(http.MethodGet, "/grafana/", nil)
+	rec = httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "grafana", rec.Body.String())
+}
+
 func TestDownsampleHistory_Uniformity(t *testing.T) {
 	// Test that sampling is roughly uniform
 	now := time.Now()
