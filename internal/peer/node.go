@@ -254,6 +254,9 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 	// Include peer latencies from latency prober
 	if m.LatencyProber != nil {
 		stats.PeerLatencies = m.LatencyProber.GetLatencies()
+		if len(stats.PeerLatencies) > 0 {
+			log.Debug().Int("count", len(stats.PeerLatencies)).Msg("collected peer latencies for heartbeat")
+		}
 	}
 
 	return stats

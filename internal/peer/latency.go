@@ -71,10 +71,11 @@ func (lp *LatencyProber) probeAllPeers() {
 
 	peers := lp.udp.ListConnectedPeers()
 	if len(peers) == 0 {
+		log.Debug().Msg("latency prober: no UDP peers connected")
 		return
 	}
 
-	log.Debug().Int("count", len(peers)).Msg("probing latency to connected peers")
+	log.Debug().Int("count", len(peers)).Strs("peers", peers).Msg("probing latency to connected peers")
 
 	for _, peerName := range peers {
 		if err := lp.udp.SendPingToPeer(peerName); err != nil {
