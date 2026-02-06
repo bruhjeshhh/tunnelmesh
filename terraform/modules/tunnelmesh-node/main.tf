@@ -96,6 +96,7 @@ locals {
     prometheus_version        = var.prometheus_version
     loki_version              = var.loki_version
     prometheus_retention_days = var.prometheus_retention_days
+    loki_retention_days       = var.loki_retention_days
     loki_enabled              = var.monitoring_enabled
   })
 }

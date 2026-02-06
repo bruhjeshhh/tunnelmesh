@@ -19,7 +19,7 @@ chmod +x /opt/monitoring/loki/loki
 rm -f "loki-$LOKI_ARCH.zip" "loki-$LOKI_ARCH"
 
 # Create Loki config
-cat > /etc/loki/local-config.yaml <<'LOKICONFIG'
+cat > /etc/loki/local-config.yaml <<LOKICONFIG
 auth_enabled: false
 
 server:
@@ -56,11 +56,20 @@ schema_config:
         prefix: index_
         period: 24h
 
+compactor:
+  working_directory: /var/lib/loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: filesystem
+
 limits_config:
   reject_old_samples: true
   reject_old_samples_max_age: 168h
   ingestion_rate_mb: 10
   ingestion_burst_size_mb: 20
+  retention_period: ${loki_retention_days * 24}h
 LOKICONFIG
 
 # Create systemd service
@@ -93,7 +102,7 @@ SyslogIdentifier=loki
 WantedBy=multi-user.target
 LOKISERVICE
 
-mkdir -p /var/lib/loki/{chunks,rules}
+mkdir -p /var/lib/loki/{chunks,rules,compactor}
 chown -R loki:loki /opt/monitoring/loki /var/lib/loki /etc/loki
 systemctl daemon-reload
 systemctl enable loki
