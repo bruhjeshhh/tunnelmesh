@@ -280,6 +280,14 @@ func (s *Server) setupRoutes() {
 	// Setup admin routes if enabled
 	if s.cfg.Admin.Enabled {
 		s.setupAdminRoutes()
+
+		// Setup monitoring reverse proxies if configured
+		if s.cfg.Admin.Monitoring.PrometheusURL != "" || s.cfg.Admin.Monitoring.GrafanaURL != "" {
+			s.SetupMonitoringProxies(MonitoringProxyConfig{
+				PrometheusURL: s.cfg.Admin.Monitoring.PrometheusURL,
+				GrafanaURL:    s.cfg.Admin.Monitoring.GrafanaURL,
+			})
+		}
 	}
 
 	// Setup UDP hole-punch coordination routes

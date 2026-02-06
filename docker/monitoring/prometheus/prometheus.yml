@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    metrics_path: /prometheus/metrics
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'tunnelmesh-peers'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    file_sd_configs:
+      - files:
+          - '/targets/peers.json'
+        refresh_interval: 30s

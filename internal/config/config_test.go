@@ -795,6 +795,63 @@ dns:
 	assert.Equal(t, []string{"webserver", "api.mynode", "db-primary"}, cfg.DNS.Aliases)
 }
 
+func TestLoadPeerConfig_MetricsEnabled_DefaultTrue(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config without metrics_enabled - should default to true
+	content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// MetricsEnabled should default to true (nil pointer means enabled)
+	assert.True(t, cfg.IsMetricsEnabled(), "metrics should be enabled by default")
+}
+
+func TestLoadPeerConfig_MetricsEnabled_ExplicitFalse(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config with metrics_enabled explicitly set to false
+	content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+metrics_enabled: false
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.False(t, cfg.IsMetricsEnabled(), "metrics should be disabled when explicitly set to false")
+}
+
+func TestLoadPeerConfig_MetricsEnabled_ExplicitTrue(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config with metrics_enabled explicitly set to true
+	content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+metrics_enabled: true
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.IsMetricsEnabled(), "metrics should be enabled when explicitly set to true")
+}
+
 // Log Level Configuration Tests
 
 func TestLoadServerConfig_WithLogLevel(t *testing.T) {

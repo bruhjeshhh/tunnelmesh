@@ -1,0 +1,348 @@
+package metrics
+
+import (
+	"context"
+	"time"
+
+	"github.com/tunnelmesh/tunnelmesh/internal/peer"
+	"github.com/tunnelmesh/tunnelmesh/internal/peer/connection"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
+)
+
+// ForwarderSnapshot holds the last-seen forwarder stats for delta calculation.
+type ForwarderSnapshot struct {
+	PacketsSent     uint64
+	PacketsReceived uint64
+	BytesSent       uint64
+	BytesReceived   uint64
+	DroppedNoRoute  uint64
+	DroppedNoTunnel uint64
+	DroppedNonIPv4  uint64
+	Errors          uint64
+	ExitPacketsSent uint64
+	ExitBytesSent   uint64
+}
+
+// Collector periodically collects metrics from the MeshNode.
+type Collector struct {
+	metrics *PeerMetrics
+	config  CollectorConfig
+
+	// References to collect from
+	forwarder       ForwarderStats
+	tunnelMgr       TunnelManager
+	connections     ConnectionManager
+	relay           RelayStatus
+	identity        *peer.PeerIdentity
+	allowsExit      bool
+	wgEnabled       bool
+	wgConcentrator  WGConcentrator
+
+	// Last snapshot for delta calculation
+	lastForwarder ForwarderSnapshot
+}
+
+// ForwarderStats interface for getting forwarder statistics.
+type ForwarderStats interface {
+	Stats() routing.ForwarderStats
+	ExitNode() string
+}
+
+// TunnelManager interface for getting tunnel statistics.
+type TunnelManager interface {
+	List() []string
+	CountHealthy() int
+}
+
+// ConnectionManager interface for getting connection information.
+type ConnectionManager interface {
+	AllInfo() []connection.ConnectionInfo
+}
+
+// RelayStatus interface for getting relay status.
+type RelayStatus interface {
+	IsConnected() bool
+}
+
+// WGConcentrator interface for WireGuard concentrator.
+type WGConcentrator interface {
+	IsDeviceRunning() bool
+	ClientCount() (total, enabled int)
+}
+
+// CollectorConfig holds configuration for the collector.
+type CollectorConfig struct {
+	Forwarder      ForwarderStats
+	TunnelMgr      TunnelManager
+	Connections    ConnectionManager
+	Relay          RelayStatus
+	Identity       *peer.PeerIdentity
+	AllowsExit     bool
+	WGEnabled      bool
+	WGConcentrator WGConcentrator
+}
+
+// NewCollector creates a new metrics collector.
+func NewCollector(m *PeerMetrics, cfg CollectorConfig) *Collector {
+	return &Collector{
+		metrics:        m,
+		config:         cfg,
+		forwarder:      cfg.Forwarder,
+		tunnelMgr:      cfg.TunnelMgr,
+		connections:    cfg.Connections,
+		relay:          cfg.Relay,
+		identity:       cfg.Identity,
+		allowsExit:     cfg.AllowsExit,
+		wgEnabled:      cfg.WGEnabled,
+		wgConcentrator: cfg.WGConcentrator,
+	}
+}
+
+// Collect updates all metrics from the current state.
+func (c *Collector) Collect() {
+	c.collectForwarderStats()
+	c.collectTunnelStats()
+	c.collectConnectionStats()
+	c.collectRelayStats()
+	c.collectExitNodeStats()
+	c.collectWireGuardStats()
+	c.collectGeolocationStats()
+}
+
+func (c *Collector) collectForwarderStats() {
+	if c.forwarder == nil {
+		return
+	}
+
+	stats := c.forwarder.Stats()
+
+	// Calculate deltas and add to counters
+	if stats.PacketsSent > c.lastForwarder.PacketsSent {
+		c.metrics.PacketsSent.Add(float64(stats.PacketsSent - c.lastForwarder.PacketsSent))
+	}
+	if stats.PacketsReceived > c.lastForwarder.PacketsReceived {
+		c.metrics.PacketsReceived.Add(float64(stats.PacketsReceived - c.lastForwarder.PacketsReceived))
+	}
+	if stats.BytesSent > c.lastForwarder.BytesSent {
+		c.metrics.BytesSent.Add(float64(stats.BytesSent - c.lastForwarder.BytesSent))
+	}
+	if stats.BytesReceived > c.lastForwarder.BytesReceived {
+		c.metrics.BytesReceived.Add(float64(stats.BytesReceived - c.lastForwarder.BytesReceived))
+	}
+	if stats.DroppedNoRoute > c.lastForwarder.DroppedNoRoute {
+		c.metrics.DroppedNoRoute.Add(float64(stats.DroppedNoRoute - c.lastForwarder.DroppedNoRoute))
+	}
+	if stats.DroppedNoTunnel > c.lastForwarder.DroppedNoTunnel {
+		c.metrics.DroppedNoTunnel.Add(float64(stats.DroppedNoTunnel - c.lastForwarder.DroppedNoTunnel))
+	}
+	if stats.DroppedNonIPv4 > c.lastForwarder.DroppedNonIPv4 {
+		c.metrics.DroppedNonIPv4.Add(float64(stats.DroppedNonIPv4 - c.lastForwarder.DroppedNonIPv4))
+	}
+	if stats.Errors > c.lastForwarder.Errors {
+		c.metrics.ForwarderErrors.Add(float64(stats.Errors - c.lastForwarder.Errors))
+	}
+
+	// Exit traffic stats
+	if stats.ExitPacketsSent > c.lastForwarder.ExitPacketsSent {
+		c.metrics.ExitPacketsSent.Add(float64(stats.ExitPacketsSent - c.lastForwarder.ExitPacketsSent))
+	}
+	if stats.ExitBytesSent > c.lastForwarder.ExitBytesSent {
+		c.metrics.ExitBytesSent.Add(float64(stats.ExitBytesSent - c.lastForwarder.ExitBytesSent))
+	}
+
+	// Store current for next delta
+	c.lastForwarder = ForwarderSnapshot{
+		PacketsSent:     stats.PacketsSent,
+		PacketsReceived: stats.PacketsReceived,
+		BytesSent:       stats.BytesSent,
+		BytesReceived:   stats.BytesReceived,
+		DroppedNoRoute:  stats.DroppedNoRoute,
+		DroppedNoTunnel: stats.DroppedNoTunnel,
+		DroppedNonIPv4:  stats.DroppedNonIPv4,
+		Errors:          stats.Errors,
+		ExitPacketsSent: stats.ExitPacketsSent,
+		ExitBytesSent:   stats.ExitBytesSent,
+	}
+}
+
+func (c *Collector) collectTunnelStats() {
+	if c.tunnelMgr == nil {
+		return
+	}
+
+	tunnels := c.tunnelMgr.List()
+	c.metrics.ActiveTunnels.Set(float64(len(tunnels)))
+	c.metrics.HealthyTunnels.Set(float64(c.tunnelMgr.CountHealthy()))
+}
+
+func (c *Collector) collectConnectionStats() {
+	if c.connections == nil {
+		return
+	}
+
+	for _, info := range c.connections.AllInfo() {
+		transport := info.TransportType
+		if transport == "" {
+			transport = "none"
+		}
+		c.metrics.ConnectionState.WithLabelValues(info.PeerName, transport).Set(float64(info.State))
+	}
+}
+
+func (c *Collector) collectRelayStats() {
+	if c.relay == nil {
+		c.metrics.RelayConnected.Set(0)
+		return
+	}
+
+	if c.relay.IsConnected() {
+		c.metrics.RelayConnected.Set(1)
+	} else {
+		c.metrics.RelayConnected.Set(0)
+	}
+}
+
+func (c *Collector) collectExitNodeStats() {
+	// Set allows exit traffic flag
+	if c.allowsExit {
+		c.metrics.AllowsExitTraffic.Set(1)
+	} else {
+		c.metrics.AllowsExitTraffic.Set(0)
+	}
+
+	// Check if exit node is configured
+	if c.forwarder == nil {
+		c.metrics.ExitNodeConfigured.Set(0)
+		return
+	}
+
+	exitNode := c.forwarder.ExitNode()
+	if exitNode != "" {
+		c.metrics.ExitNodeConfigured.Set(1)
+		c.metrics.ExitNodeInfo.WithLabelValues(exitNode).Set(1)
+	} else {
+		c.metrics.ExitNodeConfigured.Set(0)
+	}
+}
+
+func (c *Collector) collectWireGuardStats() {
+	if c.wgEnabled {
+		c.metrics.WireGuardEnabled.Set(1)
+	} else {
+		c.metrics.WireGuardEnabled.Set(0)
+		c.metrics.WireGuardDeviceRunning.Set(0)
+		c.metrics.WireGuardClientsTotal.Set(0)
+		c.metrics.WireGuardClientsEnabled.Set(0)
+		return
+	}
+
+	if c.wgConcentrator == nil {
+		c.metrics.WireGuardDeviceRunning.Set(0)
+		c.metrics.WireGuardClientsTotal.Set(0)
+		c.metrics.WireGuardClientsEnabled.Set(0)
+		return
+	}
+
+	if c.wgConcentrator.IsDeviceRunning() {
+		c.metrics.WireGuardDeviceRunning.Set(1)
+	} else {
+		c.metrics.WireGuardDeviceRunning.Set(0)
+	}
+
+	total, enabled := c.wgConcentrator.ClientCount()
+	c.metrics.WireGuardClientsTotal.Set(float64(total))
+	c.metrics.WireGuardClientsEnabled.Set(float64(enabled))
+}
+
+func (c *Collector) collectGeolocationStats() {
+	if c.identity == nil || c.identity.Location == nil {
+		return
+	}
+
+	loc := c.identity.Location
+	c.metrics.PeerLatitude.Set(loc.Latitude)
+	c.metrics.PeerLongitude.Set(loc.Longitude)
+
+	if loc.City != "" {
+		c.metrics.PeerLocationInfo.WithLabelValues(loc.City).Set(1)
+	}
+}
+
+// Run starts periodic metric collection.
+func (c *Collector) Run(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Collect immediately on start
+	c.Collect()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.Collect()
+		}
+	}
+}
+
+// NewWGConcentratorWrapper creates a new wrapper for WireGuard concentrator.
+// Pass nil for concentrator if WireGuard is not enabled.
+func NewWGConcentratorWrapper(
+	isDeviceRunning func() bool,
+	clientCount func() (total, enabled int),
+) WGConcentrator {
+	if isDeviceRunning == nil {
+		return nil
+	}
+	return &simpleWGWrapper{
+		isDeviceRunning: isDeviceRunning,
+		clientCount:     clientCount,
+	}
+}
+
+type simpleWGWrapper struct {
+	isDeviceRunning func() bool
+	clientCount     func() (total, enabled int)
+}
+
+func (w *simpleWGWrapper) IsDeviceRunning() bool {
+	return w.isDeviceRunning()
+}
+
+func (w *simpleWGWrapper) ClientCount() (total, enabled int) {
+	return w.clientCount()
+}
+
+// RelayWrapper wraps a PersistentRelay to implement RelayStatus interface.
+type RelayWrapper struct {
+	relay *tunnel.PersistentRelay
+}
+
+// NewRelayWrapper creates a new relay wrapper.
+func NewRelayWrapper(relay *tunnel.PersistentRelay) RelayStatus {
+	if relay == nil {
+		return nil
+	}
+	return &RelayWrapper{relay: relay}
+}
+
+func (w *RelayWrapper) IsConnected() bool {
+	return w.relay != nil && w.relay.IsConnected()
+}
+
+// TrackReconnect is called by the connection observer when a reconnect happens.
+func (c *Collector) TrackReconnect(targetPeer string) {
+	c.metrics.ReconnectCount.WithLabelValues(targetPeer).Inc()
+}
+
+// ReconnectObserver returns a connection observer that tracks reconnects.
+func (c *Collector) ReconnectObserver() connection.Observer {
+	return connection.ObserverFunc(func(t connection.Transition) {
+		// Track reconnections: transitioning from Reconnecting to Connected
+		if t.From == connection.StateReconnecting && t.To == connection.StateConnected {
+			c.TrackReconnect(t.PeerName)
+		}
+	})
+}

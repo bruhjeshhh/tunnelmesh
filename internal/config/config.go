@@ -14,10 +14,17 @@ import (
 
 // AdminConfig holds configuration for the admin web interface.
 type AdminConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	BindAddress   string `yaml:"bind_address"`     // Bind address for admin server (default: "127.0.0.1" - localhost only)
-	Port          int    `yaml:"port"`             // Port for admin server (default: 8080)
-	MeshOnlyAdmin *bool  `yaml:"mesh_only_admin"`  // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
+	Enabled       bool             `yaml:"enabled"`
+	BindAddress   string           `yaml:"bind_address"`    // Bind address for admin server (default: "127.0.0.1" - localhost only)
+	Port          int              `yaml:"port"`            // Port for admin server (default: 8080)
+	MeshOnlyAdmin *bool            `yaml:"mesh_only_admin"` // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
+	Monitoring    MonitoringConfig `yaml:"monitoring"`      // Reverse proxy config for Prometheus/Grafana
+}
+
+// MonitoringConfig holds configuration for reverse proxying to monitoring services.
+type MonitoringConfig struct {
+	PrometheusURL string `yaml:"prometheus_url"` // URL to proxy /prometheus/ to (e.g., "http://localhost:9090")
+	GrafanaURL    string `yaml:"grafana_url"`    // URL to proxy /grafana/ to (e.g., "http://localhost:3000")
 }
 
 // RelayConfig holds configuration for the relay server.
@@ -67,6 +74,8 @@ type PeerConfig struct {
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
 	HeartbeatInterval string              `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
+	MetricsEnabled    *bool               `yaml:"metrics_enabled"`    // Enable Prometheus metrics (default: true). Disable for 10Gbps+ high-performance networks.
+	MetricsPort       int                 `yaml:"metrics_port"`       // Prometheus metrics port on mesh IP (default: 9443)
 	LogLevel          string              `yaml:"log_level"`          // trace, debug, info, warn, error (default: info)
 	TUN               TUNConfig           `yaml:"tun"`
 	DNS               DNSConfig           `yaml:"dns"`
@@ -74,6 +83,7 @@ type PeerConfig struct {
 	Geolocation       GeolocationConfig   `yaml:"geolocation"`        // Manual geolocation coordinates
 	ExitNode          string              `yaml:"exit_node"`          // Name of peer to route internet traffic through
 	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this node to act as exit node for other peers
+	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -95,6 +105,14 @@ type GeolocationConfig struct {
 	Latitude  float64 `yaml:"latitude"`  // Manual latitude (-90 to 90)
 	Longitude float64 `yaml:"longitude"` // Manual longitude (-180 to 180)
 	City      string  `yaml:"city"`      // Optional city name for display
+}
+
+// LokiConfig holds configuration for shipping logs to Loki.
+type LokiConfig struct {
+	Enabled       bool   `yaml:"enabled"`        // Enable Loki log shipping
+	URL           string `yaml:"url"`            // Loki push URL (e.g., "http://10.99.0.1:3100")
+	BatchSize     int    `yaml:"batch_size"`     // Max entries before flush (default: 100)
+	FlushInterval string `yaml:"flush_interval"` // Flush interval (default: "5s")
 }
 
 // Validate checks if the geolocation coordinates are within valid ranges.
@@ -184,6 +202,18 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		if cfg.JoinMesh.DNS.CacheTTL == 0 {
 			cfg.JoinMesh.DNS.CacheTTL = 300
 		}
+		if cfg.JoinMesh.MetricsPort == 0 {
+			cfg.JoinMesh.MetricsPort = 9443
+		}
+		// Loki defaults for JoinMesh
+		if cfg.JoinMesh.Loki.Enabled {
+			if cfg.JoinMesh.Loki.BatchSize == 0 {
+				cfg.JoinMesh.Loki.BatchSize = 100
+			}
+			if cfg.JoinMesh.Loki.FlushInterval == "" {
+				cfg.JoinMesh.Loki.FlushInterval = "5s"
+			}
+		}
 		// Expand home directory in private key path
 		if strings.HasPrefix(cfg.JoinMesh.PrivateKey, "~/") {
 			homeDir, err := os.UserHomeDir()
@@ -231,12 +261,25 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	if cfg.HeartbeatInterval == "" {
 		cfg.HeartbeatInterval = "10s"
 	}
+	if cfg.MetricsPort == 0 {
+		cfg.MetricsPort = 9443
+	}
 
 	// Expand home directory in private key path
 	if strings.HasPrefix(cfg.PrivateKey, "~/") {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			cfg.PrivateKey = filepath.Join(homeDir, cfg.PrivateKey[2:])
+		}
+	}
+
+	// Loki defaults
+	if cfg.Loki.Enabled {
+		if cfg.Loki.BatchSize == 0 {
+			cfg.Loki.BatchSize = 100
+		}
+		if cfg.Loki.FlushInterval == "" {
+			cfg.Loki.FlushInterval = "5s"
 		}
 	}
 
@@ -290,6 +333,13 @@ func (c *ServerConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// IsMetricsEnabled returns whether Prometheus metrics collection is enabled.
+// Returns true by default (when MetricsEnabled is nil or explicitly true).
+// Disable for 10Gbps+ high-performance networks where atomic counter overhead matters.
+func (c *PeerConfig) IsMetricsEnabled() bool {
+	return c.MetricsEnabled == nil || *c.MetricsEnabled
 }
 
 // Validate checks if the peer configuration is valid.

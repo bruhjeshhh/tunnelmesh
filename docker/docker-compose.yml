@@ -18,7 +18,7 @@ services:
       mesh-control:
         ipv4_address: 172.28.0.10
     ports:
-      - "8880:8080"
+      - "8880:8080"   # Admin UI + Prometheus/Grafana proxies
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
@@ -31,7 +31,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     deploy:
-      replicas: 25
+      replicas: 5
     entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
@@ -51,6 +51,99 @@ services:
       - PING_INTERVAL=2
       - DISCOVERY_INTERVAL=20
 
+  # Monitoring stack - shares server's network namespace for mesh access
+  # Note: These use network_mode: "service:server" which binds to server's container.
+  # The restart: true ensures they restart when server restarts/recreates.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tunnelmesh-prometheus
+    # Share server's network namespace to access mesh IPs via TUN
+    network_mode: "service:server"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.listen-address=:9090'
+      - '--web.external-url=/prometheus/'
+      - '--web.route-prefix=/prometheus/'
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/targets:/targets:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      server:
+        condition: service_healthy
+        restart: true
+    restart: unless-stopped
+
+  sd-generator:
+    build:
+      context: ./monitoring/sd_generator
+      dockerfile: Dockerfile
+    container_name: tunnelmesh-sd-generator
+    # Share server's network to reach coord API and resolve mesh DNS
+    network_mode: "service:server"
+    environment:
+      - COORD_SERVER_URL=http://localhost:8080
+      - AUTH_TOKEN=docker-test-token-123
+      - POLL_INTERVAL=30s
+      - OUTPUT_FILE=/targets/peers.json
+      - METRICS_PORT=9443
+      - TLS_SKIP_VERIFY=true
+    volumes:
+      - ./monitoring/targets:/targets
+    depends_on:
+      server:
+        condition: service_healthy
+        restart: true
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tunnelmesh-grafana
+    # Share server's network namespace
+    network_mode: "service:server"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_HTTP_PORT=3000
+      - GF_SERVER_ROOT_URL=http://localhost:8880/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/tunnelmesh.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      server:
+        condition: service_healthy
+        restart: true
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    container_name: tunnelmesh-loki
+    # Share server's network namespace to receive logs from mesh peers
+    network_mode: "service:server"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    depends_on:
+      server:
+        condition: service_healthy
+        restart: true
+    restart: unless-stopped
+
 networks:
   mesh-control:
     driver: bridge
@@ -63,3 +156,6 @@ volumes:
     name: tunnelmesh-metrics-data
     labels:
       - "com.tunnelmesh.description=Stats history for dashboard charts"
+  prometheus-data:
+  grafana-data:
+  loki-data:
