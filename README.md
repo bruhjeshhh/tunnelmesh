@@ -27,6 +27,11 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 
 For a complete step-by-step setup guide including downloading releases, configuring servers and peers, and installing as a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 
+## Documentation
+
+- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation, configuration, and running as a service
+- **[Benchmarking & Stress Testing](docs/BENCHMARKING.md)** - Measure throughput, latency, and test mesh resilience with chaos testing
+
 ## Architecture
 
 ```
