@@ -1049,7 +1049,7 @@ footer {
     border-width: 2px;
 }
 
-.alert-tile {
+a.alert-tile {
     flex: 1;
     position: relative;
     overflow: hidden;
@@ -1059,9 +1059,11 @@ footer {
     min-height: 80px;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease;
+    text-decoration: none;
+    display: flex;
 }
 
-.alert-tile:hover {
+a.alert-tile:hover {
     background: var(--color-card-hover-bg);
     border-color: var(--color-card-hover-border);
     border-width: 2px;
