@@ -125,6 +125,10 @@ func TestWriter_Write_FlushesWhenBatchFull(t *testing.T) {
 		BatchSize: 3,
 	})
 
+	// Start background flush goroutine
+	w.Start()
+	defer w.Stop()
+
 	// Write exactly batch size entries
 	_, _ = w.Write([]byte(`{"level":"info","msg":"message 1"}`))
 	_, _ = w.Write([]byte(`{"level":"info","msg":"message 2"}`))

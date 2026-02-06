@@ -10,16 +10,6 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
 
-// WireGuardCollector provides WireGuard concentrator metrics.
-// This is an optional interface implemented by the WireGuard concentrator.
-type WireGuardCollector interface {
-	IsDeviceRunning() bool
-	Clients() []struct {
-		ID      string
-		Enabled bool
-	}
-}
-
 // ForwarderSnapshot holds the last-seen forwarder stats for delta calculation.
 type ForwarderSnapshot struct {
 	PacketsSent     uint64
@@ -340,16 +330,6 @@ func NewRelayWrapper(relay *tunnel.PersistentRelay) RelayStatus {
 
 func (w *RelayWrapper) IsConnected() bool {
 	return w.relay != nil && w.relay.IsConnected()
-}
-
-// SetRelay updates the relay reference (for reconnections).
-func (c *Collector) SetRelay(relay RelayStatus) {
-	c.relay = relay
-}
-
-// SetWGConcentrator updates the WireGuard concentrator reference.
-func (c *Collector) SetWGConcentrator(wg WGConcentrator) {
-	c.wgConcentrator = wg
 }
 
 // TrackReconnect is called by the connection observer when a reconnect happens.

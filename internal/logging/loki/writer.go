@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,6 +38,13 @@ type Writer struct {
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 	flushInterval time.Duration
+
+	// Concurrency control
+	flushing     int32         // atomic flag to prevent concurrent flushes
+	flushTrigger chan struct{} // buffered channel to limit goroutine spawning
+
+	// Error tracking
+	flushErrors uint64 // atomic counter for flush failures
 }
 
 type entry struct {
@@ -82,6 +92,7 @@ func NewWriter(cfg Config) *Writer {
 		ctx:           ctx,
 		cancel:        cancel,
 		flushInterval: cfg.FlushInterval,
+		flushTrigger:  make(chan struct{}, 1), // buffered to allow 1 pending flush
 	}
 }
 
@@ -104,8 +115,13 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 	w.mu.Unlock()
 
 	if shouldFlush {
-		// Flush in background to not block logging
-		go w.flush()
+		// Signal flush needed - non-blocking to avoid slowing down logging
+		select {
+		case w.flushTrigger <- struct{}{}:
+			// Flush will be picked up by the background goroutine
+		default:
+			// Flush already pending, skip
+		}
 	}
 
 	return len(p), nil
@@ -125,6 +141,8 @@ func (w *Writer) Start() {
 				return
 			case <-ticker.C:
 				w.flush()
+			case <-w.flushTrigger:
+				w.flush()
 			}
 		}
 	}()
@@ -139,7 +157,14 @@ func (w *Writer) Stop() {
 }
 
 // flush sends buffered entries to Loki.
+// Uses atomic flag to prevent concurrent flushes.
 func (w *Writer) flush() {
+	// Prevent concurrent flushes
+	if !atomic.CompareAndSwapInt32(&w.flushing, 0, 1) {
+		return // Another flush is in progress
+	}
+	defer atomic.StoreInt32(&w.flushing, 0)
+
 	w.mu.Lock()
 	if len(w.buffer) == 0 {
 		w.mu.Unlock()
@@ -171,7 +196,11 @@ func (w *Writer) flush() {
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		// Silently drop - don't want to cause logging loops
+		atomic.AddUint64(&w.flushErrors, 1)
+		// Log to stderr to avoid logging loops - only on first few errors
+		if w.flushErrors <= 3 {
+			fmt.Fprintf(os.Stderr, "loki: failed to marshal payload: %v\n", err)
+		}
 		return
 	}
 
@@ -181,20 +210,37 @@ func (w *Writer) flush() {
 
 	req, err := http.NewRequestWithContext(ctx, "POST", w.url+"/loki/api/v1/push", bytes.NewReader(data))
 	if err != nil {
+		atomic.AddUint64(&w.flushErrors, 1)
+		if w.flushErrors <= 3 {
+			fmt.Fprintf(os.Stderr, "loki: failed to create request: %v\n", err)
+		}
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := w.client.Do(req)
 	if err != nil {
-		// Loki unavailable - silently drop logs
-		// In a production system, you might want to implement retry logic
+		atomic.AddUint64(&w.flushErrors, 1)
+		// Log Loki connection errors (limited to avoid spam)
+		if w.flushErrors <= 3 {
+			fmt.Fprintf(os.Stderr, "loki: failed to send logs: %v\n", err)
+		}
 		return
 	}
 	defer resp.Body.Close()
 
-	// We don't check the response status - if Loki rejects the logs,
-	// we just drop them rather than causing issues with the application
+	// Check response status and log errors
+	if resp.StatusCode >= 400 {
+		atomic.AddUint64(&w.flushErrors, 1)
+		if w.flushErrors <= 3 {
+			fmt.Fprintf(os.Stderr, "loki: server returned status %d\n", resp.StatusCode)
+		}
+	}
+}
+
+// FlushErrors returns the count of flush errors (for monitoring/debugging).
+func (w *Writer) FlushErrors() uint64 {
+	return atomic.LoadUint64(&w.flushErrors)
 }
 
 // SetLabels updates the labels for future log entries.
