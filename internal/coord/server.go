@@ -281,7 +281,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/debug/trace", s.handleTrace)
 	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
-	s.mux.Handle("/metrics", promhttp.HandlerFor(CoordRegistry, promhttp.HandlerOpts{}))
+	s.mux.Handle("/metrics", promhttp.Handler())
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))

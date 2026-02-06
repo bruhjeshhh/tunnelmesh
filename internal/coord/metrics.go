@@ -5,12 +5,8 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
-
-// CoordRegistry is the Prometheus registry for coordinator metrics.
-var CoordRegistry = prometheus.NewRegistry()
 
 // coordMetricsOnce ensures metrics are only initialized once.
 var coordMetricsOnce sync.Once
@@ -19,6 +15,8 @@ var coordMetricsOnce sync.Once
 var coordMetricsInstance *CoordMetrics
 
 // CoordMetrics holds all Prometheus metrics for the coordinator.
+// These are registered with the default Prometheus registry so they're
+// exposed alongside peer metrics when running in join_mesh mode.
 type CoordMetrics struct {
 	// Peer RTT metrics
 	PeerRTTMs *prometheus.GaugeVec // tunnelmesh_coord_peer_rtt_ms{peer}
@@ -33,33 +31,29 @@ type CoordMetrics struct {
 	TotalHeartbeats prometheus.Counter
 }
 
-func init() {
-	// Register standard Go metrics
-	CoordRegistry.MustRegister(collectors.NewGoCollector())
-	CoordRegistry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-}
-
 // InitCoordMetrics initializes all coordinator metrics.
 // Metrics are only registered once; subsequent calls return the same instance.
+// Uses the default Prometheus registry so metrics are exposed on the peer's
+// /metrics endpoint when running in join_mesh mode.
 func InitCoordMetrics() *CoordMetrics {
 	coordMetricsOnce.Do(func() {
 		coordMetricsInstance = &CoordMetrics{
-			PeerRTTMs: promauto.With(CoordRegistry).NewGaugeVec(prometheus.GaugeOpts{
+			PeerRTTMs: promauto.NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tunnelmesh_coord_peer_rtt_ms",
 				Help: "RTT reported by peer to coordinator in milliseconds",
 			}, []string{"peer"}),
 
-			PeerLatencyMs: promauto.With(CoordRegistry).NewGaugeVec(prometheus.GaugeOpts{
+			PeerLatencyMs: promauto.NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tunnelmesh_coord_peer_latency_ms",
 				Help: "Latency between peers reported to coordinator in milliseconds",
 			}, []string{"source", "target"}),
 
-			OnlinePeers: promauto.With(CoordRegistry).NewGauge(prometheus.GaugeOpts{
+			OnlinePeers: promauto.NewGauge(prometheus.GaugeOpts{
 				Name: "tunnelmesh_coord_online_peers",
 				Help: "Number of currently online peers",
 			}),
 
-			TotalHeartbeats: promauto.With(CoordRegistry).NewCounter(prometheus.CounterOpts{
+			TotalHeartbeats: promauto.NewCounter(prometheus.CounterOpts{
 				Name: "tunnelmesh_coord_heartbeats_total",
 				Help: "Total heartbeats received by coordinator",
 			}),

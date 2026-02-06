@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -251,6 +252,9 @@ func (s *Server) setupAdminRoutes() {
 			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
 			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
 		}
+
+		// Expose metrics on admin interface for Prometheus scraping via mesh IP
+		s.adminMux.Handle("/metrics", promhttp.Handler())
 
 		s.adminMux.Handle("/", fileServer)
 	} else {
