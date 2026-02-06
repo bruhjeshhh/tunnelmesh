@@ -4,7 +4,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    # Prometheus is at localhost:9090 with /prometheus/ path prefix
+    # Prometheus serves at /prometheus/ path (--web.route-prefix)
     url: http://localhost:9090/prometheus
     isDefault: true
     editable: false

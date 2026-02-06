@@ -20,15 +20,18 @@ type Target struct {
 
 // Peer represents a peer from the coordination server API.
 type Peer struct {
-	Name   string `json:"name"`
-	MeshIP string `json:"mesh_ip"`
-	Online bool   `json:"online"`
+	Name     string    `json:"name"`
+	MeshIP   string    `json:"mesh_ip"`
+	LastSeen time.Time `json:"last_seen"`
 }
 
 // PeersResponse represents the API response from /api/v1/peers.
 type PeersResponse struct {
 	Peers []Peer `json:"peers"`
 }
+
+// Online threshold - peer is considered online if last_seen within this duration
+const onlineThreshold = 2 * time.Minute
 
 func main() {
 	coordURL := getEnv("COORD_SERVER_URL", "https://localhost:443")
@@ -97,9 +100,12 @@ func generateTargets(client *http.Client, coordURL, authToken, outputFile, metri
 		return fmt.Errorf("decode response: %w", err)
 	}
 
+	now := time.Now()
 	var targets []Target
 	for _, peer := range peersResp.Peers {
-		if !peer.Online || peer.MeshIP == "" {
+		// Check if peer is online (last_seen within threshold)
+		online := now.Sub(peer.LastSeen) < onlineThreshold
+		if !online || peer.MeshIP == "" {
 			continue
 		}
 		targets = append(targets, Target{

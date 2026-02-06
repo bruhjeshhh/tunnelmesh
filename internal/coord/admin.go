@@ -435,16 +435,22 @@ type MonitoringProxyConfig struct {
 
 // SetupMonitoringProxies registers reverse proxy handlers for Prometheus and Grafana.
 // These are registered on the main mux with /prometheus/ and /grafana/ prefixes.
+// Prometheus should be configured with --web.route-prefix=/prometheus/
+// Grafana should be configured with GF_SERVER_SERVE_FROM_SUB_PATH=true
 func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 	if cfg.PrometheusURL != "" {
 		promURL, err := url.Parse(cfg.PrometheusURL)
 		if err == nil {
-			proxy := httputil.NewSingleHostReverseProxy(promURL)
+			// Create custom reverse proxy that preserves the path
+			proxy := &httputil.ReverseProxy{
+				Director: func(req *http.Request) {
+					req.URL.Scheme = promURL.Scheme
+					req.URL.Host = promURL.Host
+					req.Host = promURL.Host
+					// Path already includes /prometheus/ prefix which Prometheus expects
+				},
+			}
 			s.mux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
-				r.URL.Path = strings.TrimPrefix(r.URL.Path, "/prometheus")
-				if r.URL.Path == "" {
-					r.URL.Path = "/"
-				}
 				proxy.ServeHTTP(w, r)
 			})
 		}
@@ -453,12 +459,16 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 	if cfg.GrafanaURL != "" {
 		grafanaURL, err := url.Parse(cfg.GrafanaURL)
 		if err == nil {
-			proxy := httputil.NewSingleHostReverseProxy(grafanaURL)
+			// Create custom reverse proxy that preserves the path
+			proxy := &httputil.ReverseProxy{
+				Director: func(req *http.Request) {
+					req.URL.Scheme = grafanaURL.Scheme
+					req.URL.Host = grafanaURL.Host
+					req.Host = grafanaURL.Host
+					// Path already includes /grafana/ prefix which Grafana expects
+				},
+			}
 			s.mux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
-				r.URL.Path = strings.TrimPrefix(r.URL.Path, "/grafana")
-				if r.URL.Path == "" {
-					r.URL.Path = "/"
-				}
 				proxy.ServeHTTP(w, r)
 			})
 		}
