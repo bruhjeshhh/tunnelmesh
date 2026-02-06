@@ -204,10 +204,10 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
         return a.name.localeCompare(b.name);
     });
 
-    // Split connected nodes evenly between left and right sides
+    // Split connected nodes evenly between right and left sides (index 0 on right)
     const midpoint = Math.ceil(connected.length / 2);
-    const leftNodes = connected.slice(0, midpoint);
-    const rightNodes = connected.slice(midpoint);
+    const rightNodes = connected.slice(0, midpoint);
+    const leftNodes = connected.slice(midpoint);
 
     // Create slots for each column
     layoutColumn(leftNodes, centerX - columnSpacing, centerY, stackInfo.left, slots, 'left');
