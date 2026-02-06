@@ -18,9 +18,7 @@ services:
       mesh-control:
         ipv4_address: 172.28.0.10
     ports:
-      - "8880:8080"   # Admin UI
-      - "9090:9090"   # Prometheus (via shared network)
-      - "3000:3000"   # Grafana (via shared network)
+      - "8880:8080"   # Admin UI + Prometheus/Grafana proxies
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
@@ -65,6 +63,8 @@ services:
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
       - '--web.listen-address=:9090'
+      - '--web.external-url=/prometheus/'
+      - '--web.route-prefix=/prometheus/'
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/targets:/targets:ro
@@ -108,6 +108,8 @@ services:
       - GF_AUTH_DISABLE_LOGIN_FORM=false
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_HTTP_PORT=3000
+      - GF_SERVER_ROOT_URL=http://localhost:8880/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro

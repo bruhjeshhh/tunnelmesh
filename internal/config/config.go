@@ -13,10 +13,17 @@ import (
 
 // AdminConfig holds configuration for the admin web interface.
 type AdminConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	BindAddress   string `yaml:"bind_address"`     // Bind address for admin server (default: "127.0.0.1" - localhost only)
-	Port          int    `yaml:"port"`             // Port for admin server (default: 8080)
-	MeshOnlyAdmin *bool  `yaml:"mesh_only_admin"`  // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
+	Enabled       bool             `yaml:"enabled"`
+	BindAddress   string           `yaml:"bind_address"`    // Bind address for admin server (default: "127.0.0.1" - localhost only)
+	Port          int              `yaml:"port"`            // Port for admin server (default: 8080)
+	MeshOnlyAdmin *bool            `yaml:"mesh_only_admin"` // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
+	Monitoring    MonitoringConfig `yaml:"monitoring"`      // Reverse proxy config for Prometheus/Grafana
+}
+
+// MonitoringConfig holds configuration for reverse proxying to monitoring services.
+type MonitoringConfig struct {
+	PrometheusURL string `yaml:"prometheus_url"` // URL to proxy /prometheus/ to (e.g., "http://localhost:9090")
+	GrafanaURL    string `yaml:"grafana_url"`    // URL to proxy /grafana/ to (e.g., "http://localhost:3000")
 }
 
 // RelayConfig holds configuration for the relay server.

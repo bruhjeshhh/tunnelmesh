@@ -9,6 +9,9 @@ admin:
   enabled: true
   bind_address: "0.0.0.0"    # External access at http://localhost:8880/admin/
   mesh_only_admin: false     # Use HTTP externally instead of HTTPS on mesh
+  monitoring:
+    prometheus_url: "http://localhost:9090/prometheus"
+    grafana_url: "http://localhost:3000"
 
 # WireGuard client management (enables admin panel WireGuard section)
 # wireguard:
