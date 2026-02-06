@@ -1,7 +1,6 @@
 package benchmark
 
 import (
-	"bytes"
 	"io"
 	"math/rand"
 	"sync"
@@ -14,9 +13,9 @@ import (
 
 // mockWriter is a simple io.Writer that records all writes.
 type mockWriter struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	writes [][]byte
+	mu         sync.Mutex
+	writes     [][]byte
+	totalBytes int
 }
 
 func newMockWriter() *mockWriter {
@@ -31,7 +30,8 @@ func (m *mockWriter) Write(p []byte) (int, error) {
 	cp := make([]byte, len(p))
 	copy(cp, p)
 	m.writes = append(m.writes, cp)
-	return m.buf.Write(p)
+	m.totalBytes += len(p)
+	return len(p), nil
 }
 
 func (m *mockWriter) WriteCount() int {
@@ -43,13 +43,17 @@ func (m *mockWriter) WriteCount() int {
 func (m *mockWriter) TotalBytes() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.buf.Len()
+	return m.totalBytes
 }
 
 func (m *mockWriter) Data() []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.buf.Bytes()
+	if len(m.writes) == 0 {
+		return nil
+	}
+	// Return the last write (most common use case)
+	return m.writes[len(m.writes)-1]
 }
 
 func TestTokenBucket_Basic(t *testing.T) {

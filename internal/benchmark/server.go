@@ -108,7 +108,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	log.Debug().Str("remote", conn.RemoteAddr().String()).Msg("benchmark connection accepted")
 
 	// Set read deadline for initial message
-	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
 
 	// Read start message
 	mt, data, err := ReadMessage(conn)
@@ -163,7 +163,7 @@ func (s *Server) handleUpload(ctx context.Context, conn net.Conn, size int64) {
 		}
 
 		// Set read deadline
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
 
 		mt, data, err := ReadMessage(conn)
 		if err != nil {
@@ -267,7 +267,7 @@ func (s *Server) handleDownload(ctx context.Context, conn net.Conn, size int64) 
 // handlePendingPings reads and responds to any pending ping messages.
 func (s *Server) handlePendingPings(conn net.Conn) {
 	// Set a short timeout to check for pings
-	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_ = conn.SetReadDeadline(time.Now().Add(PingCheckTimeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 
 	for {

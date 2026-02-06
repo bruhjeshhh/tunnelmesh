@@ -14,6 +14,11 @@ const (
 	DefaultSize    = 10 * 1024 * 1024 // 10 MB
 	DefaultTimeout = 120 * time.Second
 	ChunkSize      = 64 * 1024 // 64 KB chunks
+
+	// Timeout constants for network operations.
+	ReadTimeout        = 30 * time.Second
+	LatencyPingTimeout = 5 * time.Second
+	PingCheckTimeout   = 100 * time.Millisecond
 )
 
 // Direction constants for benchmark data flow.
@@ -131,10 +136,6 @@ type Result struct {
 	LatencyMinMs float64 `json:"latency_min_ms"`
 	LatencyMaxMs float64 `json:"latency_max_ms"`
 	LatencyAvgMs float64 `json:"latency_avg_ms"`
-
-	// Connection info
-	TransportType   string `json:"transport_type"`
-	ConnectionState string `json:"connection_state"`
 
 	// Status
 	Success bool   `json:"success"`

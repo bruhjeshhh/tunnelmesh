@@ -125,10 +125,8 @@ func (c *Client) runUpload(ctx context.Context, conn net.Conn, cfg Config, resul
 
 	// Wrap connection with chaos if configured
 	var writer io.Writer = conn
-	var chaosWriter *ChaosWriter
 	if cfg.Chaos.IsEnabled() {
-		chaosWriter = NewChaosWriter(conn, cfg.Chaos)
-		writer = chaosWriter
+		writer = NewChaosWriter(conn, cfg.Chaos)
 	}
 
 	// Send initial ping for latency baseline
@@ -158,18 +156,13 @@ func (c *Client) runUpload(ctx context.Context, conn net.Conn, cfg Config, resul
 			Data:   chunk[:dataSize],
 		}
 
-		// Use the potentially chaos-wrapped writer
-		if chaosWriter != nil {
-			// For chaos, we need to write the full message
-			var buf bytes.Buffer
-			_ = WriteMessage(&buf, MsgData, &dataMsg)
-			if _, err := writer.Write(buf.Bytes()); err != nil {
-				return fmt.Errorf("failed to send data: %w", err)
-			}
-		} else {
-			if err := WriteMessage(conn, MsgData, &dataMsg); err != nil {
-				return fmt.Errorf("failed to send data: %w", err)
-			}
+		// Write through potentially chaos-wrapped writer
+		var buf bytes.Buffer
+		if err := WriteMessage(&buf, MsgData, &dataMsg); err != nil {
+			return fmt.Errorf("failed to encode data: %w", err)
+		}
+		if _, err := writer.Write(buf.Bytes()); err != nil {
+			return fmt.Errorf("failed to send data: %w", err)
 		}
 
 		sent += dataSize
@@ -242,7 +235,7 @@ func (c *Client) runDownload(ctx context.Context, conn net.Conn, cfg Config, res
 		default:
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
 
 		mt, data, err := ReadMessage(conn)
 		if err != nil {
@@ -287,7 +280,7 @@ func (c *Client) measureLatency(conn net.Conn, seqNum uint32) (float64, error) {
 		return 0, err
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(LatencyPingTimeout))
 	mt, data, err := ReadMessage(conn)
 	if err != nil {
 		return 0, err

@@ -219,11 +219,6 @@ func printBenchmarkResult(r *benchmark.Result) {
 	fmt.Printf("    Min:        %.2f ms\n", r.LatencyMinMs)
 	fmt.Printf("    Avg:        %.2f ms\n", r.LatencyAvgMs)
 	fmt.Printf("    Max:        %.2f ms\n", r.LatencyMaxMs)
-
-	if r.TransportType != "" {
-		fmt.Println()
-		fmt.Printf("  Transport:    %s\n", r.TransportType)
-	}
 }
 
 func writeBenchmarkJSON(r *benchmark.Result, path string) error {

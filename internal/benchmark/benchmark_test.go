@@ -271,8 +271,6 @@ func TestResult_JSON(t *testing.T) {
 		LatencyMinMs:    1.5,
 		LatencyMaxMs:    15.2,
 		LatencyAvgMs:    5.3,
-		TransportType:   "ssh",
-		ConnectionState: "connected",
 		Success:         true,
 		Chaos: &ChaosConfig{
 			PacketLossPercent: 5.0,
