@@ -70,12 +70,7 @@ const state = {
     wgVisibleCount: ROWS_PER_PAGE,
     currentPeers: [],  // Store current peers data for pagination
     // Alerts state
-    alertsEnabled: false,
-    alertHistory: {
-        warning: [],
-        critical: [],
-        page: []
-    }
+    alertsEnabled: false
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -1141,7 +1136,6 @@ async function fetchWGClients() {
 }
 
 // Prometheus alerts polling
-const MAX_ALERT_HISTORY = 90; // 15 minutes at 10-second intervals
 
 async function checkPrometheusAvailable() {
     try {
@@ -1208,14 +1202,6 @@ function processAlertData(data) {
         }
     }
 
-    // Update history for sparklines
-    for (const severity of ['warning', 'critical', 'page']) {
-        state.alertHistory[severity].push(counts[severity]);
-        if (state.alertHistory[severity].length > MAX_ALERT_HISTORY) {
-            state.alertHistory[severity].shift();
-        }
-    }
-
     updateAlertTiles(counts);
 }
 
@@ -1223,7 +1209,6 @@ function updateAlertTiles(counts) {
     for (const severity of ['warning', 'critical', 'page']) {
         const countEl = document.getElementById(`alert-count-${severity}`);
         const tileEl = document.getElementById(`alert-tile-${severity}`);
-        const sparklineEl = document.getElementById(`alert-sparkline-${severity}`);
 
         if (countEl) countEl.textContent = counts[severity];
 
@@ -1234,35 +1219,6 @@ function updateAlertTiles(counts) {
                 tileEl.classList.remove('active');
             }
         }
-
-        if (sparklineEl) {
-            updateAlertSparkline(sparklineEl, state.alertHistory[severity]);
-        }
-    }
-}
-
-function updateAlertSparkline(svgEl, data) {
-    if (!data.length) return;
-
-    const width = 100;
-    const height = 40;
-    const padding = 2;
-
-    const maxVal = Math.max(...data, 1);
-    const points = data.map((val, i) => {
-        const x = (i / (MAX_ALERT_HISTORY - 1)) * width;
-        const y = height - padding - ((val / maxVal) * (height - 2 * padding));
-        return `${x},${y}`;
-    });
-
-    // Create area path (filled below the line)
-    const pathEl = svgEl.querySelector('.sparkline-path');
-    if (pathEl && points.length > 1) {
-        const linePath = `M${points.join(' L')}`;
-        const areaPath = `${linePath} L${width},${height} L0,${height} Z`;
-        pathEl.setAttribute('d', areaPath);
-        pathEl.style.fill = '#58a6ff';  // Match visualizer connection color
-        pathEl.style.fillOpacity = '0.15';
     }
 }
 
