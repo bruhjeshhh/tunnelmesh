@@ -580,7 +580,7 @@ function formatRate(rate) {
 // Chart functions
 
 function initCharts() {
-    const chartOptions = {
+    const baseChartOptions = {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
@@ -616,12 +616,20 @@ function initCharts() {
         }
     };
 
-    // Throughput chart
+    // Throughput chart with byte formatting on Y-axis
     if (dom.throughputChart) {
+        const throughputOptions = JSON.parse(JSON.stringify(baseChartOptions));
+        throughputOptions.scales.y.ticks = {
+            color: '#8b949e',
+            maxTicksLimit: 4,
+            callback: function(value) {
+                return formatBytes(value) + '/s';
+            }
+        };
         state.charts.throughput = new Chart(dom.throughputChart, {
             type: 'line',
             data: { datasets: [] },
-            options: chartOptions
+            options: throughputOptions
         });
     }
 
@@ -630,7 +638,7 @@ function initCharts() {
         state.charts.packets = new Chart(dom.packetsChart, {
             type: 'line',
             data: { datasets: [] },
-            options: chartOptions
+            options: baseChartOptions
         });
     }
 }
