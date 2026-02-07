@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -128,17 +130,19 @@ func main() {
 		Short: "TunnelMesh - P2P SSH tunnel mesh network",
 		Long: `TunnelMesh creates encrypted P2P tunnels between peers using SSH.
 
-QUICK START - Create a new mesh:
+QUICK START - Run a coordinator (with local peer):
 
-  # 1. On the coordinator server:
-  tunnelmesh init --server
-  tunnelmesh serve --config server.yaml
+  # 1. Generate config (server + peer combined):
+  tunnelmesh init --server --peer
 
-  # 2. Create your identity (once per user):
+  # 2. Create your identity:
   tunnelmesh user setup
 
-  # 3. Register with the mesh (first user becomes admin):
-  tunnelmesh user register
+  # 3. Start the coordinator:
+  tunnelmesh serve --config server.yaml
+
+  # 4. Register as admin (first user):
+  tunnelmesh user register --server https://localhost:8443
 
 QUICK START - Join an existing mesh:
 
@@ -253,12 +257,29 @@ It does not route traffic - peers connect directly to each other.`,
 	}
 	rootCmd.AddCommand(versionCmd)
 
-	// Init command - generate keys
+	// Init command - generate keys and config
 	initCmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize tunnelmesh (generate keys)",
-		RunE:  runInit,
+		Short: "Initialize tunnelmesh (generate keys and config)",
+		Long: `Initialize TunnelMesh by generating SSH keys and example configuration files.
+
+Examples:
+  # Generate SSH keys only
+  tunnelmesh init
+
+  # Generate server config (coordinator)
+  tunnelmesh init --server
+
+  # Generate peer config
+  tunnelmesh init --peer
+
+  # Generate both (server that also joins as peer)
+  tunnelmesh init --server --peer`,
+		RunE: runInit,
 	}
+	initCmd.Flags().Bool("server", false, "Generate server.yaml config")
+	initCmd.Flags().Bool("peer", false, "Generate peer.yaml config")
+	initCmd.Flags().StringP("output", "o", ".", "Output directory for config files")
 	rootCmd.AddCommand(initCmd)
 
 	// Service command - manage system service
@@ -646,6 +667,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 func runInit(cmd *cobra.Command, args []string) error {
 	setupLogging()
 
+	genServer, _ := cmd.Flags().GetBool("server")
+	genPeer, _ := cmd.Flags().GetBool("peer")
+	outputDir, _ := cmd.Flags().GetString("output")
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("get home dir: %w", err)
@@ -654,19 +679,151 @@ func runInit(cmd *cobra.Command, args []string) error {
 	keyDir := filepath.Join(homeDir, ".tunnelmesh")
 	keyPath := filepath.Join(keyDir, "id_ed25519")
 
-	// Check if key already exists
-	if _, err := os.Stat(keyPath); err == nil {
-		log.Info().Str("path", keyPath).Msg("keys already exist")
-		return nil
+	// Generate keys if they don't exist
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		if err := config.GenerateKeyPair(keyPath); err != nil {
+			return fmt.Errorf("generate keys: %w", err)
+		}
+		fmt.Printf("SSH keys generated: %s\n", keyPath)
+	} else {
+		fmt.Printf("SSH keys exist: %s\n", keyPath)
 	}
 
-	if err := config.GenerateKeyPair(keyPath); err != nil {
-		return fmt.Errorf("generate keys: %w", err)
+	// Generate auth token for configs
+	authToken := generateAuthToken()
+
+	// Generate server config
+	if genServer {
+		serverPath := filepath.Join(outputDir, "server.yaml")
+		if err := writeServerConfig(serverPath, authToken, genPeer); err != nil {
+			return fmt.Errorf("write server config: %w", err)
+		}
+		fmt.Printf("Server config generated: %s\n", serverPath)
 	}
 
-	log.Info().Str("path", keyPath).Msg("keys generated")
-	log.Info().Str("path", keyPath+".pub").Msg("public key")
+	// Generate peer config
+	if genPeer && !genServer {
+		// Only generate standalone peer config if not combined with server
+		peerPath := filepath.Join(outputDir, "peer.yaml")
+		if err := writePeerConfig(peerPath, authToken); err != nil {
+			return fmt.Errorf("write peer config: %w", err)
+		}
+		fmt.Printf("Peer config generated: %s\n", peerPath)
+	}
+
+	if genServer {
+		fmt.Println("\nNext steps:")
+		fmt.Println("  1. Edit server.yaml with your settings")
+		fmt.Println("  2. tunnelmesh user setup")
+		fmt.Println("  3. tunnelmesh serve --config server.yaml")
+		fmt.Println("  4. tunnelmesh user register --server https://localhost:8443")
+	} else if genPeer {
+		fmt.Println("\nNext steps:")
+		fmt.Println("  1. Edit peer.yaml with server URL and token")
+		fmt.Println("  2. tunnelmesh user setup")
+		fmt.Println("  3. tunnelmesh join --config peer.yaml --context <name>")
+		fmt.Println("  4. tunnelmesh user register")
+	}
+
 	return nil
+}
+
+func generateAuthToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func writeServerConfig(path, authToken string, includePeer bool) error {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "coordinator"
+	}
+
+	config := fmt.Sprintf(`# TunnelMesh Server Configuration
+# Generated by: tunnelmesh init --server
+
+# Listen address for the coordination server
+listen: ":8443"
+
+# Authentication token - peers must provide this to register
+auth_token: "%s"
+
+# Mesh network CIDR - IP addresses assigned to peers
+mesh_cidr: "172.30.0.0/16"
+
+# Domain suffix for mesh hostnames
+domain_suffix: ".tunnelmesh"
+
+# Admin web interface
+admin:
+  enabled: true
+
+# WebSocket relay for peers that can't establish direct connections
+relay:
+  enabled: true
+
+# S3-compatible object storage
+s3:
+  enabled: true
+  listen: ":9000"
+`, authToken)
+
+	if includePeer {
+		config += fmt.Sprintf(`
+# Server also runs as a mesh peer
+join_mesh:
+  name: "%s"
+  ssh_port: 2222
+  private_key: "~/.tunnelmesh/id_ed25519"
+  tun:
+    name: tun-mesh0
+    mtu: 1400
+  dns:
+    enabled: true
+    listen: "127.0.0.53:5353"
+`, hostname)
+	}
+
+	return os.WriteFile(path, []byte(config), 0600)
+}
+
+func writePeerConfig(path, authToken string) error {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "mynode"
+	}
+
+	config := fmt.Sprintf(`# TunnelMesh Peer Configuration
+# Generated by: tunnelmesh init --peer
+
+# Your node's name in the mesh network
+name: "%s"
+
+# Coordination server URL (update this!)
+server: "https://coord.example.com:8443"
+
+# Authentication token (get from coordinator admin)
+auth_token: "%s"
+
+# SSH server port for incoming peer connections
+ssh_port: 2222
+
+# Path to SSH private key
+private_key: "~/.tunnelmesh/id_ed25519"
+
+# TUN interface configuration
+tun:
+  name: "tun-mesh0"
+  mtu: 1400
+
+# Local DNS resolver
+dns:
+  enabled: true
+  listen: "127.0.0.53:5353"
+`, hostname, authToken)
+
+	return os.WriteFile(path, []byte(config), 0600)
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {

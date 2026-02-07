@@ -80,16 +80,24 @@ recover your identity on other devices or if your local data is lost.`,
 	registerCmd := &cobra.Command{
 		Use:   "register",
 		Short: "Register with current mesh",
-		Long: `Register your identity with the currently active mesh context.
+		Long: `Register your identity with a mesh coordinator.
 
 This connects to the coordinator and registers your public key.
 The first user to register becomes an admin.
 
-You must have:
-1. An identity (run 'tunnelmesh user setup' first)
-2. An active context (run 'tunnelmesh context use <name>')`,
+You can either:
+1. Use an active context (run 'tunnelmesh context use <name>')
+2. Specify the server directly with --server (for coordinator admins)
+
+Examples:
+  # Register using active context
+  tunnelmesh user register
+
+  # Register directly with a server (coordinator admin)
+  tunnelmesh user register --server https://localhost:8443`,
 		RunE: runUserRegister,
 	}
+	registerCmd.Flags().String("server", "", "Server URL to register with (bypasses context)")
 	userCmd.AddCommand(registerCmd)
 
 	return userCmd
@@ -268,25 +276,44 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load identity: %w", err)
 	}
 
-	// Load context store
-	store, err := context.Load()
-	if err != nil {
-		return fmt.Errorf("load context: %w", err)
+	// Get server URL - either from --server flag or from active context
+	serverFlag, _ := cmd.Flags().GetString("server")
+	var serverURL string
+	var activeCtx *context.Context
+	var contextName string
+
+	if serverFlag != "" {
+		// Direct server registration (for coordinator admins)
+		serverURL = serverFlag
+		contextName = "direct"
+	} else {
+		// Load context store
+		store, err := context.Load()
+		if err != nil {
+			return fmt.Errorf("load context: %w", err)
+		}
+
+		activeCtx = store.GetActive()
+		if activeCtx == nil {
+			return fmt.Errorf("no active context. Run 'tunnelmesh context use <name>' or use --server flag")
+		}
+
+		// Load the peer config to get the server address
+		if activeCtx.ConfigPath == "" {
+			return fmt.Errorf("context %q has no config path", activeCtx.Name)
+		}
+
+		peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
+		if err != nil {
+			return fmt.Errorf("load peer config: %w", err)
+		}
+
+		serverURL = peerCfg.Server
+		contextName = activeCtx.Name
 	}
 
-	activeCtx := store.GetActive()
-	if activeCtx == nil {
-		return fmt.Errorf("no active context. Run 'tunnelmesh context use <name>' first")
-	}
-
-	// Load the peer config to get the server address and auth token
-	if activeCtx.ConfigPath == "" {
-		return fmt.Errorf("context %q has no config path", activeCtx.Name)
-	}
-
-	peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
-	if err != nil {
-		return fmt.Errorf("load peer config: %w", err)
+	if !strings.HasPrefix(serverURL, "http") {
+		serverURL = "https://" + serverURL
 	}
 
 	// Sign the user ID to prove ownership
@@ -309,10 +336,6 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build the registration URL
-	serverURL := peerCfg.Server
-	if !strings.HasPrefix(serverURL, "http") {
-		serverURL = "https://" + serverURL
-	}
 	registerURL := strings.TrimSuffix(serverURL, "/") + "/api/v1/user/register"
 
 	// Create HTTP client with TLS config that skips verification for self-signed certs
@@ -331,7 +354,7 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	fmt.Printf("Registering with %s...\n", activeCtx.Name)
+	fmt.Printf("Registering with %s...\n", contextName)
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -357,11 +380,15 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("parse response: %w", err)
 	}
 
-	// Save registration to context directory
-	regPath := auth.DefaultRegistrationPath(activeCtx.Name)
+	// Save registration
+	regPath := auth.DefaultRegistrationPath(contextName)
+	meshDomain := ""
+	if activeCtx != nil {
+		meshDomain = activeCtx.Domain
+	}
 	reg := &auth.Registration{
 		UserID:       regResp.UserID,
-		MeshDomain:   activeCtx.Domain,
+		MeshDomain:   meshDomain,
 		RegisteredAt: time.Now().UTC(),
 		Roles:        regResp.Roles,
 		S3AccessKey:  regResp.S3AccessKey,
@@ -372,12 +399,15 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save registration: %w", err)
 	}
 
-	// Update context with registration info
-	activeCtx.UserID = regResp.UserID
-	activeCtx.RegistrationPath = regPath
-	store.Add(*activeCtx)
-	if err := store.Save(); err != nil {
-		fmt.Printf("Warning: failed to update context store: %v\n", err)
+	// Update context with registration info (if using a context)
+	if activeCtx != nil {
+		store, _ := context.Load()
+		activeCtx.UserID = regResp.UserID
+		activeCtx.RegistrationPath = regPath
+		store.Add(*activeCtx)
+		if err := store.Save(); err != nil {
+			fmt.Printf("Warning: failed to update context store: %v\n", err)
+		}
 	}
 
 	// Print result
