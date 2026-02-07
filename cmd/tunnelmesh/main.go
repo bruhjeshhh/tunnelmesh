@@ -854,7 +854,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	if socketPath == "" {
 		socketPath = control.DefaultSocketPath()
 	}
-	ctrlServer := control.NewServer(socketPath, filter)
+	ctrlServer := control.NewServer(socketPath, filter, cfg.Name)
 	if err := ctrlServer.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start control socket, CLI commands may not work")
 	} else {

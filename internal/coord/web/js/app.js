@@ -1820,6 +1820,12 @@ async function addFilterRule() {
         return;
     }
 
+    // Prevent self-targeting: a peer can't filter traffic from itself
+    if (sourcePeer && destPeer !== '__all__' && sourcePeer === destPeer) {
+        showToast('A peer cannot filter traffic from itself', 'warning');
+        return;
+    }
+
     try {
         const resp = await fetch('api/filter/rules', {
             method: 'POST',

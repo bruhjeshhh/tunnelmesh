@@ -83,22 +83,25 @@ type FilterRuleDetail struct {
 
 // Server is a Unix socket control server.
 type Server struct {
-	socketPath string
-	filter     *routing.PacketFilter
-	listener   net.Listener
-	mu         sync.RWMutex
-	ctx        context.Context
-	cancel     context.CancelFunc
+	socketPath    string
+	filter        *routing.PacketFilter
+	localPeerName string
+	listener      net.Listener
+	mu            sync.RWMutex
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // NewServer creates a new control server.
-func NewServer(socketPath string, filter *routing.PacketFilter) *Server {
+// localPeerName is the name of the local peer, used for validation.
+func NewServer(socketPath string, filter *routing.PacketFilter, localPeerName string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
-		socketPath: socketPath,
-		filter:     filter,
-		ctx:        ctx,
-		cancel:     cancel,
+		socketPath:    socketPath,
+		filter:        filter,
+		localPeerName: localPeerName,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
@@ -253,6 +256,11 @@ func (s *Server) handleFilterAdd(filter *routing.PacketFilter, payload json.RawM
 		return Response{Success: false, Error: "protocol must be 'tcp' or 'udp'"}
 	}
 	action := routing.ParseFilterAction(req.Action)
+
+	// Prevent self-targeting: a peer can't filter traffic from itself
+	if req.SourcePeer != "" && req.SourcePeer == s.localPeerName {
+		return Response{Success: false, Error: "a peer cannot filter traffic from itself"}
+	}
 
 	// Calculate expiry
 	var expires int64

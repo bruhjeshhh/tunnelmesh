@@ -633,11 +633,19 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		s.jsonError(w, "action must be 'allow' or 'deny'", http.StatusBadRequest)
 		return
 	}
+	// Prevent self-targeting: a peer can't have a rule filtering traffic from itself
+	if req.SourcePeer != "" && req.SourcePeer == req.PeerName {
+		s.jsonError(w, "a peer cannot filter traffic from itself", http.StatusBadRequest)
+		return
+	}
 
 	// Push the rule to peer(s) via relay
 	if req.PeerName == "__all__" {
-		// Broadcast to all connected peers
+		// Broadcast to all connected peers (skip self-referencing rules)
 		for _, peerName := range s.relay.GetConnectedPeerNames() {
+			if req.SourcePeer != "" && req.SourcePeer == peerName {
+				continue // Skip: peer can't filter traffic from itself
+			}
 			s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 		}
 	} else {
@@ -668,11 +676,19 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 		s.jsonError(w, "protocol must be 'tcp' or 'udp'", http.StatusBadRequest)
 		return
 	}
+	// Prevent self-targeting
+	if req.SourcePeer != "" && req.SourcePeer == req.PeerName {
+		s.jsonError(w, "a peer cannot filter traffic from itself", http.StatusBadRequest)
+		return
+	}
 
 	// Push the rule removal to peer(s) via relay
 	if req.PeerName == "__all__" {
-		// Broadcast to all connected peers
+		// Broadcast to all connected peers (skip self-referencing rules)
 		for _, peerName := range s.relay.GetConnectedPeerNames() {
+			if req.SourcePeer != "" && req.SourcePeer == peerName {
+				continue
+			}
 			s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
 		}
 	} else {

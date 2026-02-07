@@ -16,7 +16,7 @@ func TestServer_StartStop(t *testing.T) {
 	socketPath := filepath.Join(dir, "test.sock")
 
 	filter := routing.NewPacketFilter(true)
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 
 	err := server.Start()
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestClient_FilterList(t *testing.T) {
 		{Port: 80, Protocol: routing.ProtoTCP, Action: routing.ActionAllow},
 	})
 
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 	require.NoError(t, server.Start())
 	defer func() { _ = server.Stop() }()
 
@@ -65,7 +65,7 @@ func TestClient_FilterAdd(t *testing.T) {
 
 	filter := routing.NewPacketFilter(true)
 
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 	require.NoError(t, server.Start())
 	defer func() { _ = server.Stop() }()
 
@@ -93,7 +93,7 @@ func TestClient_FilterAddWithTTL(t *testing.T) {
 
 	filter := routing.NewPacketFilter(true)
 
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 	require.NoError(t, server.Start())
 	defer func() { _ = server.Stop() }()
 
@@ -121,7 +121,7 @@ func TestClient_FilterRemove(t *testing.T) {
 		Port: 8080, Protocol: routing.ProtoTCP, Action: routing.ActionAllow,
 	})
 
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 	require.NoError(t, server.Start())
 	defer func() { _ = server.Stop() }()
 
@@ -150,7 +150,7 @@ func TestClient_InvalidProtocol(t *testing.T) {
 
 	filter := routing.NewPacketFilter(true)
 
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 	require.NoError(t, server.Start())
 	defer func() { _ = server.Stop() }()
 
@@ -169,7 +169,7 @@ func TestClient_MissingPort(t *testing.T) {
 
 	filter := routing.NewPacketFilter(true)
 
-	server := NewServer(socketPath, filter)
+	server := NewServer(socketPath, filter, "test-peer")
 	require.NoError(t, server.Start())
 	defer func() { _ = server.Stop() }()
 
