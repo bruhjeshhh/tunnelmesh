@@ -65,6 +65,7 @@ header .brand {
 header .logo {
     width: 54px;
     height: 54px;
+    border-radius: 22.37%; /* Apple squircle approximation */
 }
 
 header h1 {
