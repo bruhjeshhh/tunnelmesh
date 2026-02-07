@@ -935,7 +935,8 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 
 	// Save/update context if --context flag is set
-	if joinContext != "" {
+	// Skip when running as a service to avoid overwriting user's context file with root ownership
+	if joinContext != "" && !serviceRun {
 		store, err := meshctx.Load()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to load context store")
