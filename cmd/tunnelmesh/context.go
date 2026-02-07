@@ -59,39 +59,43 @@ Examples:
 
 	// List subcommand
 	listCmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all contexts",
-		RunE:  runContextList,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List all contexts",
+		RunE:    runContextList,
 	}
 	contextCmd.AddCommand(listCmd)
 
 	// Use subcommand
 	useCmd := &cobra.Command{
-		Use:   "use <name>",
-		Short: "Switch to a context",
-		Long:  `Switch the active context. This also reconfigures the system DNS resolver.`,
-		Args:  cobra.ExactArgs(1),
-		RunE:  runContextUse,
+		Use:     "use <name>",
+		Aliases: []string{"switch"},
+		Short:   "Switch to a context",
+		Long:    `Switch the active context. This also reconfigures the system DNS resolver.`,
+		Args:    cobra.ExactArgs(1),
+		RunE:    runContextUse,
 	}
 	contextCmd.AddCommand(useCmd)
 
 	// Show subcommand
 	showCmd := &cobra.Command{
-		Use:   "show [name]",
-		Short: "Show context details",
-		Long:  `Show details for a context. If no name is provided, shows the active context.`,
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runContextShow,
+		Use:     "show [name]",
+		Aliases: []string{"get", "info"},
+		Short:   "Show context details",
+		Long:    `Show details for a context. If no name is provided, shows the active context.`,
+		Args:    cobra.MaximumNArgs(1),
+		RunE:    runContextShow,
 	}
 	contextCmd.AddCommand(showCmd)
 
 	// Delete subcommand
 	deleteCmd := &cobra.Command{
-		Use:   "delete <name>",
-		Short: "Delete a context",
-		Long:  `Delete a context. Prompts to stop service and clean up if running.`,
-		Args:  cobra.ExactArgs(1),
-		RunE:  runContextDelete,
+		Use:     "delete <name>",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete a context",
+		Long:    `Delete a context. Prompts to stop service and clean up if running.`,
+		Args:    cobra.ExactArgs(1),
+		RunE:    runContextDelete,
 	}
 	contextCmd.AddCommand(deleteCmd)
 

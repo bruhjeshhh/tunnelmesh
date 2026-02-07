@@ -14,6 +14,7 @@ type Context struct {
 	Name       string `json:"name"`
 	ConfigPath string `json:"config_path"`
 	Server     string `json:"server,omitempty"`
+	AuthToken  string `json:"auth_token,omitempty"` // Stored for rejoining without --token flag
 	Domain     string `json:"domain,omitempty"`
 	MeshIP     string `json:"mesh_ip,omitempty"`
 	DNSListen  string `json:"dns_listen,omitempty"`
@@ -64,7 +65,7 @@ func Load() (*Store, error) {
 }
 
 // LoadFromPath reads the context store from a specific path.
-// Returns an empty store if the file doesn't exist.
+// Returns an empty store if the file doesn't exist or is unreadable.
 func LoadFromPath(path string) (*Store, error) {
 	store := &Store{
 		Contexts: make(map[string]Context),
@@ -72,7 +73,8 @@ func LoadFromPath(path string) (*Store, error) {
 	}
 
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) || os.IsPermission(err) {
+		// File doesn't exist or we can't read it - return empty store
 		return store, nil
 	}
 	if err != nil {
