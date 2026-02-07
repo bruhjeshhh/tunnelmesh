@@ -354,17 +354,12 @@ func runContextDelete(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Prompt to remove CA from system trust store
+	// Remove CA from system trust store
 	if trusted, _ := IsCATrusted(); trusted {
-		fmt.Print("Remove CA certificate from system trust store? [y/N]: ")
-		response, _ := reader.ReadString('\n')
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response == "y" || response == "yes" {
-			if err := RemoveCA(); err != nil {
-				fmt.Printf("Warning: failed to remove CA certificate: %v\n", err)
-			} else {
-				fmt.Printf("CA certificate removed from system trust store.\n")
-			}
+		if err := RemoveCA(); err != nil {
+			fmt.Printf("Warning: failed to remove CA certificate: %v\n", err)
+		} else {
+			fmt.Printf("CA certificate removed from system trust store.\n")
 		}
 	}
 

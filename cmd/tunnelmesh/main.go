@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -988,24 +987,9 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 		log.Info().Str("ca", tlsMgr.CAPath()).Msg("CA certificate stored")
 
-		// Always prompt to install/reinstall CA since the server may have changed
-		trusted, _ := IsCATrusted()
-		if trusted {
-			fmt.Println("\nA TunnelMesh CA certificate is already installed in your system trust store.")
-			fmt.Println("If this server has a different CA, you should reinstall to avoid HTTPS errors.")
-			fmt.Print("Reinstall CA certificate? [Y/n]: ")
-		} else {
-			fmt.Println("\nThe mesh CA certificate is not installed in your system trust store.")
-			fmt.Println("This is required for HTTPS connections to mesh services without browser warnings.")
-			fmt.Print("Install CA certificate now? [Y/n]: ")
-		}
-		var response string
-		_, _ = fmt.Scanln(&response)
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response == "" || response == "y" || response == "yes" {
-			if err := InstallCA(caPEM, ""); err != nil {
-				log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
-			}
+		// Install/reinstall CA certificate automatically
+		if err := InstallCA(caPEM, ""); err != nil {
+			log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
 		}
 	}
 
@@ -1941,18 +1925,12 @@ func runLeave(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Prompt to remove CA from system trust store
+	// Remove CA from system trust store
 	if trusted, _ := IsCATrusted(); trusted {
-		fmt.Print("Remove CA certificate from system trust store? [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		response, _ := reader.ReadString('\n')
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response == "y" || response == "yes" {
-			if err := RemoveCA(); err != nil {
-				log.Warn().Err(err).Msg("failed to remove CA certificate")
-			} else {
-				log.Info().Msg("CA certificate removed from system trust store")
-			}
+		if err := RemoveCA(); err != nil {
+			log.Warn().Err(err).Msg("failed to remove CA certificate")
+		} else {
+			log.Info().Msg("CA certificate removed from system trust store")
 		}
 	}
 
