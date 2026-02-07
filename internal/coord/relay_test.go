@@ -411,6 +411,133 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	assert.Len(t, ackData, 1, "ack should be 1 byte for old clients without timestamp")
 }
 
+func TestRelayManager_QueryFilterRules(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "172.30.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Relay:        config.RelayConfig{Enabled: true},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	peerName := "test-peer"
+	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
+
+	conn := connectRelay(t, ts.URL, peerName, jwtToken)
+	defer func() { _ = conn.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Query filter rules in a goroutine (it blocks waiting for response)
+	responseChan := make(chan []byte)
+	errChan := make(chan error)
+	go func() {
+		rules, err := srv.relay.QueryFilterRules(peerName, 5*time.Second)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		responseChan <- rules
+	}()
+
+	// Read the query request
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, data, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	// Verify query format: [MsgTypeFilterRulesQuery][reqID:4]
+	assert.Equal(t, MsgTypeFilterRulesQuery, data[0], "should receive filter rules query")
+	require.Len(t, data, 5, "query should be 5 bytes")
+	reqID := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+
+	// Send mock response with filter rules
+	mockRules := []struct {
+		Port       uint16 `json:"port"`
+		Protocol   string `json:"protocol"`
+		Action     string `json:"action"`
+		SourcePeer string `json:"source_peer"`
+		Source     string `json:"source"`
+	}{
+		{Port: 22, Protocol: "tcp", Action: "allow", SourcePeer: "", Source: "coordinator"},
+		{Port: 80, Protocol: "tcp", Action: "allow", SourcePeer: "", Source: "config"},
+		{Port: 443, Protocol: "tcp", Action: "allow", SourcePeer: "", Source: "service"},
+	}
+	rulesJSON, _ := json.Marshal(mockRules)
+
+	// Build reply: [MsgTypeFilterRulesReply][reqID:4][rules JSON]
+	reply := make([]byte, 5+len(rulesJSON))
+	reply[0] = MsgTypeFilterRulesReply
+	reply[1] = byte(reqID >> 24)
+	reply[2] = byte(reqID >> 16)
+	reply[3] = byte(reqID >> 8)
+	reply[4] = byte(reqID)
+	copy(reply[5:], rulesJSON)
+
+	err = conn.WriteMessage(websocket.BinaryMessage, reply)
+	require.NoError(t, err)
+
+	// Wait for response
+	select {
+	case rules := <-responseChan:
+		// Verify the response matches what we sent
+		assert.Equal(t, rulesJSON, rules, "should receive the same rules JSON")
+	case err := <-errChan:
+		t.Fatalf("unexpected error: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for filter rules response")
+	}
+}
+
+func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "172.30.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Relay:        config.RelayConfig{Enabled: true},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	peerName := "test-peer"
+	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
+
+	conn := connectRelay(t, ts.URL, peerName, jwtToken)
+	defer func() { _ = conn.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Query filter rules with short timeout - don't respond
+	_, err = srv.relay.QueryFilterRules(peerName, 100*time.Millisecond)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+}
+
+func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "172.30.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Relay:        config.RelayConfig{Enabled: true},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	// Query filter rules for non-existent peer
+	_, err = srv.relay.QueryFilterRules("nonexistent-peer", 1*time.Second)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
 func TestRelayManager_StoresReportedLatency(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",

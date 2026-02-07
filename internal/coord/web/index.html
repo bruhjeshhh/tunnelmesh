@@ -165,6 +165,87 @@
             </div>
         </section>
 
+        <section id="filter-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Internal Packet Filter</h2>
+                <button id="add-filter-rule-btn" class="btn-primary" onclick="event.stopPropagation(); openFilterModal();">+ Add Rule</button>
+            </div>
+            <div class="collapsible-content">
+                <div class="filter-peer-select">
+                    <label for="filter-peer">Peer:</label>
+                    <select id="filter-peer" onchange="onFilterPeerChange()">
+                    </select>
+                </div>
+                <div id="filter-info" style="display: none;">
+                    <p class="filter-policy">Default Policy: <strong id="filter-default-policy">--</strong></p>
+                </div>
+                <div id="filter-temp-warning" class="filter-warning" style="display: none;">
+                    ⚠ Temporary rules will be lost when the peer restarts.
+                </div>
+                <table id="filter-rules">
+                    <thead>
+                        <tr>
+                            <th>Port</th>
+                            <th>Protocol</th>
+                            <th>Action</th>
+                            <th>From Peer</th>
+                            <th>Source</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="filter-rules-body"></tbody>
+                </table>
+                <div id="no-filter-rules" class="empty-state" style="display: none;">
+                    No filter rules configured for this peer.
+                </div>
+            </div>
+        </section>
+
+        <!-- Packet Filter Modal -->
+        <div id="filter-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Add Filter Rule</h3>
+                    <button class="modal-close" onclick="closeFilterModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="filter-rule-port">Port</label>
+                        <input type="number" id="filter-rule-port" min="1" max="65535" placeholder="e.g., 22, 80, 443">
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-protocol">Protocol</label>
+                        <select id="filter-rule-protocol">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-action">Action</label>
+                        <select id="filter-rule-action">
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-source-peer">From Peer</label>
+                        <select id="filter-rule-source-peer">
+                            <option value="">Any peer (global rule)</option>
+                        </select>
+                        <small class="form-hint">Select a specific peer to restrict this rule to traffic from that peer</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-dest-peer">To Peer</label>
+                        <select id="filter-rule-dest-peer">
+                            <option value="__all__">All peers</option>
+                        </select>
+                        <small class="form-hint">Send this rule to all connected peers or a specific peer</small>
+                    </div>
+                    <button class="btn-primary" onclick="addFilterRule()">Add Rule</button>
+                </div>
+            </div>
+        </div>
+
         <section id="dns-section">
             <h2 class="section-toggle" onclick="toggleSection(this)">DNS Records</h2>
             <div class="collapsible-content">

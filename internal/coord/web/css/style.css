@@ -370,14 +370,14 @@ main {
     color: var(--color-accent-green);
 }
 
-#peers-section, #dns-section, #wireguard-section {
+#peers-section, #dns-section, #wireguard-section, #filter-section {
     background: var(--color-bg-primary);
     padding: 0;
     border: 1px solid var(--color-border-primary);
     margin-bottom: 1.5rem;
 }
 
-#peers-section h2, #dns-section h2, #wireguard-section h2 {
+#peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -393,7 +393,6 @@ main {
     align-items: center;
     padding: 1rem;
     background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border-primary);
 }
 
 .section-header h2 {
@@ -404,7 +403,8 @@ main {
 }
 
 /* Override h2 styles when inside section-header (has button beside it) */
-#wireguard-section .section-header h2 {
+#wireguard-section .section-header h2,
+#filter-section .section-header h2 {
     border-bottom: none;
 }
 
@@ -1318,4 +1318,148 @@ a.logs-container {
 #no-logs {
     padding: 2rem;
     text-align: center;
+}
+
+/* Packet Filter Section */
+.filter-peer-select {
+    padding: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.filter-peer-select label {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+}
+
+.filter-peer-select select {
+    padding: 0.5rem;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 0;
+    color: var(--color-text-primary);
+    font-size: 0.875rem;
+    min-width: 200px;
+}
+
+.filter-peer-select select:focus {
+    outline: none;
+    border-color: var(--color-accent-blue);
+    box-shadow: none;
+}
+
+#filter-info {
+    padding: 0.75rem 1rem;
+}
+
+/* Filter section uses square corners for all interactive elements */
+#filter-section .btn-primary,
+#filter-section .btn-danger,
+#filter-section select {
+    border-radius: 0;
+}
+
+#filter-section .btn-primary:focus,
+#filter-section .btn-danger:focus,
+#filter-section select:focus {
+    box-shadow: none;
+}
+
+.filter-policy {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+}
+
+.policy-deny {
+    color: var(--color-text-secondary);
+}
+
+.policy-allow {
+    color: var(--color-text-secondary);
+}
+
+/* Action badges - muted badge style with square corners */
+.action-badge {
+    display: inline-block;
+    padding: 0.1rem 0.3rem;
+    border-radius: 0;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.action-badge.allow {
+    background: rgba(139, 148, 158, 0.15);
+    color: var(--color-text-secondary);
+    border: 1px solid rgba(139, 148, 158, 0.3);
+}
+
+.action-badge.deny {
+    background: rgba(139, 148, 158, 0.15);
+    color: var(--color-text-secondary);
+    border: 1px solid rgba(139, 148, 158, 0.3);
+}
+
+/* Muted text utility */
+.text-muted {
+    color: var(--color-text-secondary);
+}
+
+/* Form select styling (shared) */
+.form-group select {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 6px;
+    color: var(--color-text-primary);
+    font-size: 0.875rem;
+}
+
+.form-group select:focus {
+    outline: none;
+    border-color: var(--color-accent-blue);
+    box-shadow: 0 0 0 2px var(--color-focus-ring);
+}
+
+/* Filter modal styling - square corners to match filter section */
+#filter-modal .modal-content {
+    border-radius: 0;
+}
+
+#filter-modal .form-group input,
+#filter-modal .form-group select {
+    border-radius: 0;
+}
+
+#filter-modal .form-group input:focus,
+#filter-modal .form-group select:focus {
+    box-shadow: none;
+}
+
+#filter-modal .btn-primary {
+    border-radius: 0;
+}
+
+#filter-modal .btn-primary:focus {
+    box-shadow: none;
+}
+
+#filter-modal .form-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+/* Filter temporary rules warning */
+.filter-warning {
+    padding: 0.5rem 1rem;
+    margin: 0;
+    background: rgba(210, 153, 34, 0.1);
+    border-bottom: 1px solid rgba(210, 153, 34, 0.3);
+    color: #d29922;
+    font-size: 0.8rem;
 }

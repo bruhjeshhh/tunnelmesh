@@ -26,6 +26,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/admin"
 	"github.com/tunnelmesh/tunnelmesh/internal/benchmark"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/control"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
@@ -40,6 +41,7 @@ import (
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
 	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
+	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 	"golang.org/x/crypto/ssh"
 )
@@ -235,6 +237,9 @@ It does not route traffic - peers connect directly to each other.`,
 
 	// Benchmark command - speed test between peers
 	rootCmd.AddCommand(newBenchmarkCmd())
+
+	// Filter command - manage packet filter rules
+	rootCmd.AddCommand(newFilterCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -828,6 +833,34 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 	node.Forwarder = forwarder
 
+	// Initialize packet filter from config
+	filter := routing.NewPacketFilter(cfg.Filter.IsDefaultDeny())
+	if len(cfg.Filter.Rules) > 0 {
+		filterRules := make([]routing.FilterRule, 0, len(cfg.Filter.Rules))
+		for _, r := range cfg.Filter.Rules {
+			filterRules = append(filterRules, routing.FilterRule{
+				Port:     r.Port,
+				Protocol: r.ProtocolNumber(),
+				Action:   routing.ParseFilterAction(r.Action),
+			})
+		}
+		filter.SetPeerConfigRules(filterRules)
+		log.Info().Int("rules", len(filterRules)).Msg("loaded filter rules from config")
+	}
+	forwarder.SetFilter(filter)
+
+	// Start control socket for CLI commands
+	socketPath := cfg.ControlSocket
+	if socketPath == "" {
+		socketPath = control.DefaultSocketPath()
+	}
+	ctrlServer := control.NewServer(socketPath, filter, cfg.Name)
+	if err := ctrlServer.Start(); err != nil {
+		log.Warn().Err(err).Msg("failed to start control socket, CLI commands may not work")
+	} else {
+		defer func() { _ = ctrlServer.Stop() }()
+	}
+
 	// Configure exit node settings
 	if tunDev != nil {
 		// Parse mesh CIDR for split-tunnel detection
@@ -1086,6 +1119,72 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		// Set the relay on the forwarder for fallback routing
 		forwarder.SetRelay(node.PersistentRelay)
 		log.Info().Msg("persistent relay enabled for instant connectivity")
+
+		// Set up filter rule sync handlers
+		node.PersistentRelay.SetFilterRulesSyncHandler(func(rules []tunnel.FilterRuleWire) {
+			// Convert wire rules to routing filter rules and set as coordinator rules
+			filterRules := make([]routing.FilterRule, 0, len(rules))
+			for _, r := range rules {
+				filterRules = append(filterRules, routing.FilterRule{
+					Port:     r.Port,
+					Protocol: routing.ProtocolFromString(r.Protocol),
+					Action:   routing.ParseFilterAction(r.Action),
+				})
+			}
+			filter.SetCoordinatorRules(filterRules)
+			log.Info().Int("rules", len(rules)).Msg("synced coordinator filter rules")
+		})
+
+		node.PersistentRelay.SetFilterRuleAddHandler(func(rule tunnel.FilterRuleWire) {
+			filter.AddTemporaryRule(routing.FilterRule{
+				Port:     rule.Port,
+				Protocol: routing.ProtocolFromString(rule.Protocol),
+				Action:   routing.ParseFilterAction(rule.Action),
+			})
+			log.Info().
+				Uint16("port", rule.Port).
+				Str("protocol", rule.Protocol).
+				Str("action", rule.Action).
+				Msg("added temporary filter rule from coordinator")
+		})
+
+		node.PersistentRelay.SetFilterRuleRemoveHandler(func(port uint16, protocol string) {
+			filter.RemoveTemporaryRule(port, routing.ProtocolFromString(protocol))
+			log.Info().
+				Uint16("port", port).
+				Str("protocol", protocol).
+				Msg("removed temporary filter rule from coordinator")
+		})
+
+		// Service ports handler - auto-allow coordinator service ports
+		node.PersistentRelay.SetServicePortsHandler(func(ports []uint16) {
+			rules := make([]routing.FilterRule, len(ports))
+			for i, port := range ports {
+				rules[i] = routing.FilterRule{
+					Port:     port,
+					Protocol: routing.ProtoTCP, // Service ports are typically TCP
+					Action:   routing.ActionAllow,
+				}
+			}
+			filter.SetServiceRules(rules)
+			log.Info().Int("ports", len(ports)).Msg("added coordinator service ports to filter")
+		})
+
+		// Handler for coordinator to query our current filter rules
+		node.PersistentRelay.SetGetFilterRulesHandler(func() []tunnel.FilterRuleWithSourceWire {
+			allRules := filter.ListRules()
+			wireRules := make([]tunnel.FilterRuleWithSourceWire, 0, len(allRules))
+			for _, r := range allRules {
+				wireRules = append(wireRules, tunnel.FilterRuleWithSourceWire{
+					Port:       r.Rule.Port,
+					Protocol:   routing.ProtocolToString(r.Rule.Protocol),
+					Action:     r.Rule.Action.String(),
+					SourcePeer: r.Rule.SourcePeer,
+					Source:     r.Source.String(),
+				})
+			}
+			return wireRules
+		})
 	}
 
 	// Initialize WireGuard concentrator if enabled
@@ -1337,6 +1436,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		AllowsExit:          cfg.AllowExitTraffic,
 		WGEnabled:           cfg.WireGuard.Enabled,
 		WGConcentrator:      wgWrapper,
+		Filter:              filter,
 	})
 
 	// Register reconnect observer for metrics

@@ -1038,3 +1038,225 @@ func TestApplyLogLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterConfig_IsDefaultDeny(t *testing.T) {
+	tests := []struct {
+		name   string
+		config FilterConfig
+		want   bool
+	}{
+		{
+			name:   "nil defaults to true",
+			config: FilterConfig{},
+			want:   true,
+		},
+		{
+			name:   "explicit true",
+			config: FilterConfig{DefaultDeny: boolPtr(true)},
+			want:   true,
+		},
+		{
+			name:   "explicit false",
+			config: FilterConfig{DefaultDeny: boolPtr(false)},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.config.IsDefaultDeny())
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func TestFilterConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  FilterConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "empty rules is valid",
+			config:  FilterConfig{},
+			wantErr: false,
+		},
+		{
+			name: "valid TCP allow rule",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "tcp", Action: "allow"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid UDP deny rule",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 53, Protocol: "udp", Action: "deny"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple valid rules",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "tcp", Action: "allow"},
+					{Port: 80, Protocol: "tcp", Action: "allow"},
+					{Port: 443, Protocol: "tcp", Action: "allow"},
+					{Port: 53, Protocol: "udp", Action: "allow"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "case insensitive protocol",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "TCP", Action: "allow"},
+					{Port: 53, Protocol: "UDP", Action: "allow"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing port",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 0, Protocol: "tcp", Action: "allow"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "port is required",
+		},
+		{
+			name: "invalid protocol",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "icmp", Action: "allow"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "protocol must be 'tcp' or 'udp'",
+		},
+		{
+			name: "invalid action",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "tcp", Action: "block"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "action must be 'allow' or 'deny'",
+		},
+		{
+			name: "empty action",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "tcp", Action: ""},
+				},
+			},
+			wantErr: true,
+			errMsg:  "action must be 'allow' or 'deny'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadPeerConfig_WithFilter(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "mynode"
+server: "https://coord.example.com"
+auth_token: "peer-token"
+filter:
+  default_deny: true
+  rules:
+    - port: 22
+      protocol: tcp
+      action: allow
+    - port: 80
+      protocol: tcp
+      action: allow
+    - port: 53
+      protocol: udp
+      action: allow
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Filter.IsDefaultDeny())
+	assert.Len(t, cfg.Filter.Rules, 3)
+	assert.Equal(t, uint16(22), cfg.Filter.Rules[0].Port)
+	assert.Equal(t, "tcp", cfg.Filter.Rules[0].Protocol)
+	assert.Equal(t, uint8(6), cfg.Filter.Rules[0].ProtocolNumber())
+	assert.Equal(t, "allow", cfg.Filter.Rules[0].Action)
+}
+
+func TestLoadServerConfig_WithFilter(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":8080"
+auth_token: "test-token"
+filter:
+  default_deny: true
+  rules:
+    - port: 22
+      protocol: tcp
+      action: allow
+    - port: 9443
+      protocol: tcp
+      action: allow
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Filter.IsDefaultDeny())
+	assert.Len(t, cfg.Filter.Rules, 2)
+}
+
+func TestFilterRule_ProtocolNumber(t *testing.T) {
+	tests := []struct {
+		protocol string
+		want     uint8
+	}{
+		{"tcp", 6},
+		{"TCP", 6},
+		{"udp", 17},
+		{"UDP", 17},
+		{"icmp", 0},
+		{"", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.protocol, func(t *testing.T) {
+			rule := FilterRule{Protocol: tt.protocol}
+			assert.Equal(t, tt.want, rule.ProtocolNumber())
+		})
+	}
+}

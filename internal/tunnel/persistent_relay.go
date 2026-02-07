@@ -39,6 +39,23 @@ func httpToWSURL(httpURL string) (string, error) {
 // ErrNotConnected is returned when an operation requires a relay connection but none exists.
 var ErrNotConnected = errors.New("not connected to relay")
 
+// FilterRuleWire is the wire format for a filter rule (matches coord/relay.go).
+type FilterRuleWire struct {
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	SourcePeer string `json:"source_peer"` // Source peer (empty = any peer)
+}
+
+// FilterRuleWithSourceWire is a filter rule with its origin source for display.
+type FilterRuleWithSourceWire struct {
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	SourcePeer string `json:"source_peer"` // Source peer (empty = any peer)
+	Source     string `json:"source"`      // "coordinator", "config", "temporary", or "service"
+}
+
 // relayPacketPool pools relay packet buffers to reduce GC pressure.
 var relayPacketPool = sync.Pool{
 	New: func() interface{} {
@@ -64,6 +81,14 @@ const (
 	MsgTypeHeartbeatAck    byte = 0x21 // Server -> Client: heartbeat acknowledged
 	MsgTypeRelayNotify     byte = 0x22 // Server -> Client: relay request notification
 	MsgTypeHolePunchNotify byte = 0x23 // Server -> Client: hole-punch request notification
+
+	// Packet filter message types
+	MsgTypeFilterRulesSync   byte = 0x30 // Server -> Client: full sync of coordinator rules
+	MsgTypeFilterRuleAdd     byte = 0x31 // Server -> Client: add single temporary rule
+	MsgTypeFilterRuleRemove  byte = 0x32 // Server -> Client: remove single rule
+	MsgTypeServicePortNotify byte = 0x33 // Server -> Client: coordinator service port announcement
+	MsgTypeFilterRulesQuery  byte = 0x34 // Server -> Client: request current filter rules
+	MsgTypeFilterRulesReply  byte = 0x35 // Client -> Server: response with filter rules
 )
 
 // PersistentRelay maintains a persistent connection to the coordination server
@@ -87,12 +112,17 @@ type PersistentRelay struct {
 	incoming   map[string]*peerQueue // peerName -> queue of incoming packets
 
 	// Callbacks (protected by mu)
-	onPacket          func(sourcePeer string, data []byte)
-	onPeerReconnected func(peerName string)                          // Called when server notifies a peer reconnected
-	onAPIRequest      func(reqID uint32, method string, body []byte) // Called when server sends API request
-	onRelayNotify     func(waitingPeers []string)                    // Called when server notifies of relay requests
-	onHolePunchNotify func(requestingPeers []string)                 // Called when server notifies of hole-punch requests
-	onReconnectError  func(err error)                                // Called when reconnection fails (for re-registration)
+	onPacket           func(sourcePeer string, data []byte)
+	onPeerReconnected  func(peerName string)                          // Called when server notifies a peer reconnected
+	onAPIRequest       func(reqID uint32, method string, body []byte) // Called when server sends API request
+	onRelayNotify      func(waitingPeers []string)                    // Called when server notifies of relay requests
+	onHolePunchNotify  func(requestingPeers []string)                 // Called when server notifies of hole-punch requests
+	onReconnectError   func(err error)                                // Called when reconnection fails (for re-registration)
+	onFilterRulesSync  func(rules []FilterRuleWire)                   // Called when server syncs coordinator filter rules
+	onFilterRuleAdd    func(rule FilterRuleWire)                      // Called when server pushes a single rule add
+	onFilterRuleRemove func(port uint16, protocol string)             // Called when server removes a rule
+	onServicePorts     func(ports []uint16)                           // Called when server announces service ports
+	getFilterRules     func() []FilterRuleWithSourceWire              // Returns all filter rules with their sources
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -535,6 +565,172 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 		if handler != nil {
 			handler(peers)
 		}
+
+	case MsgTypeFilterRulesSync:
+		// Format: [MsgTypeFilterRulesSync][rules_len:2][rules JSON]
+		if len(data) < 3 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: filter rules sync too short")
+			return
+		}
+		rulesLen := int(data[1])<<8 | int(data[2])
+		if len(data) < 3+rulesLen {
+			log.Debug().Int("len", len(data)).Int("expected", rulesLen).Msg("persistent relay: filter rules truncated")
+			return
+		}
+		rulesJSON := data[3 : 3+rulesLen]
+
+		var rules []FilterRuleWire
+		if err := json.Unmarshal(rulesJSON, &rules); err != nil {
+			log.Debug().Err(err).Msg("persistent relay: failed to unmarshal filter rules")
+			return
+		}
+
+		log.Debug().Int("rules", len(rules)).Msg("received coordinator filter rules sync")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onFilterRulesSync
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(rules)
+		}
+
+	case MsgTypeFilterRuleAdd:
+		// Format: [MsgTypeFilterRuleAdd][rule_len:2][rule JSON]
+		if len(data) < 3 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: filter rule add too short")
+			return
+		}
+		ruleLen := int(data[1])<<8 | int(data[2])
+		if len(data) < 3+ruleLen {
+			log.Debug().Int("len", len(data)).Int("expected", ruleLen).Msg("persistent relay: filter rule add truncated")
+			return
+		}
+		ruleJSON := data[3 : 3+ruleLen]
+
+		var rule FilterRuleWire
+		if err := json.Unmarshal(ruleJSON, &rule); err != nil {
+			log.Debug().Err(err).Msg("persistent relay: failed to unmarshal filter rule")
+			return
+		}
+
+		log.Debug().
+			Uint16("port", rule.Port).
+			Str("protocol", rule.Protocol).
+			Str("action", rule.Action).
+			Msg("received filter rule add")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onFilterRuleAdd
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(rule)
+		}
+
+	case MsgTypeFilterRuleRemove:
+		// Format: [MsgTypeFilterRuleRemove][port:2][protocol_len:1][protocol]
+		if len(data) < 4 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: filter rule remove too short")
+			return
+		}
+		port := uint16(data[1])<<8 | uint16(data[2])
+		protoLen := int(data[3])
+		if len(data) < 4+protoLen {
+			log.Debug().Int("len", len(data)).Int("proto_len", protoLen).Msg("persistent relay: filter rule remove truncated")
+			return
+		}
+		protocol := string(data[4 : 4+protoLen])
+
+		log.Debug().Uint16("port", port).Str("protocol", protocol).Msg("received filter rule remove")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onFilterRuleRemove
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(port, protocol)
+		}
+
+	case MsgTypeServicePortNotify:
+		// Format: [MsgTypeServicePortNotify][count:1][port:2]...
+		if len(data) < 2 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: service port notify too short")
+			return
+		}
+		count := int(data[1])
+		if len(data) < 2+count*2 {
+			log.Debug().Int("len", len(data)).Int("count", count).Msg("persistent relay: service port notify truncated")
+			return
+		}
+		ports := make([]uint16, count)
+		for i := 0; i < count; i++ {
+			ports[i] = uint16(data[2+i*2])<<8 | uint16(data[2+i*2+1])
+		}
+
+		log.Debug().Int("count", len(ports)).Msg("received coordinator service ports")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onServicePorts
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(ports)
+		}
+
+	case MsgTypeFilterRulesQuery:
+		// Format: [MsgTypeFilterRulesQuery][reqID:4]
+		if len(data) < 5 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: filter rules query too short")
+			return
+		}
+		reqID := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+
+		log.Debug().Uint32("req_id", reqID).Msg("received filter rules query")
+
+		// Get all filter rules via callback
+		p.mu.RLock()
+		handler := p.getFilterRules
+		p.mu.RUnlock()
+
+		var rules []FilterRuleWithSourceWire
+		if handler != nil {
+			rules = handler()
+		}
+
+		// Marshal and send response
+		rulesJSON, err := json.Marshal(rules)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to marshal filter rules for query response")
+			return
+		}
+
+		// Build response: [MsgTypeFilterRulesReply][reqID:4][rules JSON]
+		reply := make([]byte, 5+len(rulesJSON))
+		reply[0] = MsgTypeFilterRulesReply
+		reply[1] = byte(reqID >> 24)
+		reply[2] = byte(reqID >> 16)
+		reply[3] = byte(reqID >> 8)
+		reply[4] = byte(reqID)
+		copy(reply[5:], rulesJSON)
+
+		// Send reply
+		p.mu.RLock()
+		writeChan := p.writeChan
+		p.mu.RUnlock()
+
+		if writeChan != nil {
+			select {
+			case writeChan <- writeRequest{data: reply}:
+				log.Debug().Uint32("req_id", reqID).Int("rules", len(rules)).Msg("sent filter rules reply")
+			default:
+				log.Debug().Uint32("req_id", reqID).Msg("failed to send filter rules reply: channel full")
+			}
+		}
 	}
 }
 
@@ -665,6 +861,46 @@ func (p *PersistentRelay) SetReconnectErrorHandler(handler func(err error)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onReconnectError = handler
+}
+
+// SetFilterRulesSyncHandler sets a callback for coordinator filter rules sync.
+// This is called when the coordinator sends its global filter rules on connect.
+func (p *PersistentRelay) SetFilterRulesSyncHandler(handler func(rules []FilterRuleWire)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onFilterRulesSync = handler
+}
+
+// SetFilterRuleAddHandler sets a callback for filter rule additions.
+// This is called when the admin panel adds a temporary rule.
+func (p *PersistentRelay) SetFilterRuleAddHandler(handler func(rule FilterRuleWire)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onFilterRuleAdd = handler
+}
+
+// SetFilterRuleRemoveHandler sets a callback for filter rule removals.
+// This is called when the admin panel removes a rule.
+func (p *PersistentRelay) SetFilterRuleRemoveHandler(handler func(port uint16, protocol string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onFilterRuleRemove = handler
+}
+
+// SetServicePortsHandler sets a callback for coordinator service port announcements.
+// This is called when the coordinator announces which ports it exposes.
+func (p *PersistentRelay) SetServicePortsHandler(handler func(ports []uint16)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onServicePorts = handler
+}
+
+// SetGetFilterRulesHandler sets a callback to retrieve all filter rules with their sources.
+// This is called when the coordinator queries for the peer's current filter rules.
+func (p *PersistentRelay) SetGetFilterRulesHandler(handler func() []FilterRuleWithSourceWire) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.getFilterRules = handler
 }
 
 // SendHeartbeat sends a heartbeat with stats to the coordination server.

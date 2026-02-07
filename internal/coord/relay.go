@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -73,6 +74,14 @@ const (
 	MsgTypeHeartbeatAck    byte = 0x21 // Server -> Client: heartbeat acknowledged
 	MsgTypeRelayNotify     byte = 0x22 // Server -> Client: relay request notification
 	MsgTypeHolePunchNotify byte = 0x23 // Server -> Client: hole-punch request notification
+
+	// Packet filter message types
+	MsgTypeFilterRulesSync   byte = 0x30 // Server -> Client: full sync of coordinator rules
+	MsgTypeFilterRuleAdd     byte = 0x31 // Server -> Client: add single temporary rule
+	MsgTypeFilterRuleRemove  byte = 0x32 // Server -> Client: remove single rule
+	MsgTypeServicePortNotify byte = 0x33 // Server -> Client: coordinator service port announcement
+	MsgTypeFilterRulesQuery  byte = 0x34 // Server -> Client: request current filter rules
+	MsgTypeFilterRulesReply  byte = 0x35 // Client -> Server: response with filter rules
 )
 
 var upgrader = websocket.Upgrader{
@@ -199,6 +208,81 @@ func (r *relayManager) handleAPIResponse(data []byte) {
 	}
 }
 
+// QueryFilterRules sends a filter rules query to a peer and waits for response.
+// Returns the JSON-encoded filter rules or error if timeout/peer not connected.
+func (r *relayManager) QueryFilterRules(peerName string, timeout time.Duration) ([]byte, error) {
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("peer not connected: %s", peerName)
+	}
+
+	// Allocate request ID and response channel (reuse apiRequests map)
+	r.apiRequestsMu.Lock()
+	reqID := r.nextReqID
+	r.nextReqID++
+	respChan := make(chan []byte, 1)
+	r.apiRequests[reqID] = respChan
+	r.apiRequestsMu.Unlock()
+
+	defer func() {
+		r.apiRequestsMu.Lock()
+		delete(r.apiRequests, reqID)
+		r.apiRequestsMu.Unlock()
+	}()
+
+	// Build request: [MsgTypeFilterRulesQuery][reqID:4]
+	msg := make([]byte, 5)
+	msg[0] = MsgTypeFilterRulesQuery
+	msg[1] = byte(reqID >> 24)
+	msg[2] = byte(reqID >> 16)
+	msg[3] = byte(reqID >> 8)
+	msg[4] = byte(reqID)
+
+	// Send request via async write channel
+	select {
+	case pc.writeChan <- msg:
+		// Message queued
+	default:
+		return nil, fmt.Errorf("query filter rules: write channel full")
+	}
+
+	// Wait for response
+	select {
+	case resp := <-respChan:
+		return resp, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("filter rules query timeout")
+	}
+}
+
+// handleFilterRulesReply processes a filter rules response from a peer.
+func (r *relayManager) handleFilterRulesReply(data []byte) {
+	if len(data) < 5 {
+		log.Debug().Msg("filter rules reply too short")
+		return
+	}
+
+	reqID := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+	body := data[5:]
+
+	r.apiRequestsMu.Lock()
+	respChan, ok := r.apiRequests[reqID]
+	r.apiRequestsMu.Unlock()
+
+	if ok {
+		select {
+		case respChan <- body:
+		default:
+			log.Debug().Uint32("req_id", reqID).Msg("filter rules reply channel full")
+		}
+	} else {
+		log.Debug().Uint32("req_id", reqID).Msg("filter rules reply for unknown request")
+	}
+}
+
 // RegisterPersistent registers a peer's persistent relay connection.
 func (r *relayManager) RegisterPersistent(peerName string, conn *websocket.Conn) *persistentConn {
 	r.mu.Lock()
@@ -280,6 +364,17 @@ func (r *relayManager) GetPersistent(peerName string) (*persistentConn, bool) {
 	defer r.mu.Unlock()
 	pc, ok := r.persistent[peerName]
 	return pc, ok
+}
+
+// GetConnectedPeerNames returns the names of all connected peers.
+func (r *relayManager) GetConnectedPeerNames() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := make([]string, 0, len(r.persistent))
+	for name := range r.persistent {
+		names = append(names, name)
+	}
+	return names
 }
 
 // BroadcastPeerReconnected notifies all other connected peers that a peer has reconnected.
@@ -473,6 +568,182 @@ func (r *relayManager) NotifyHolePunch(peerName string, requestingPeers []string
 	}
 }
 
+// FilterRuleWire is the wire format for a filter rule.
+type FilterRuleWire struct {
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	SourcePeer string `json:"source_peer"` // Source peer (empty = any peer)
+}
+
+// PushFilterRules sends the full set of coordinator filter rules to a peer.
+// This is called when a peer connects to sync the global rules.
+func (r *relayManager) PushFilterRules(peerName string, rules []config.FilterRule) {
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		log.Debug().Str("peer", peerName).Msg("cannot push filter rules: peer not connected")
+		return
+	}
+
+	// Convert to wire format
+	wireRules := make([]FilterRuleWire, len(rules))
+	for i, r := range rules {
+		wireRules[i] = FilterRuleWire{
+			Port:       r.Port,
+			Protocol:   r.Protocol,
+			Action:     r.Action,
+			SourcePeer: r.SourcePeer,
+		}
+	}
+
+	// Build message: [MsgTypeFilterRulesSync][rules_len:2][rules JSON]
+	rulesJSON, err := json.Marshal(wireRules)
+	if err != nil {
+		log.Error().Err(err).Str("peer", peerName).Msg("failed to marshal filter rules")
+		return
+	}
+
+	msg := make([]byte, 3+len(rulesJSON))
+	msg[0] = MsgTypeFilterRulesSync
+	msg[1] = byte(len(rulesJSON) >> 8)
+	msg[2] = byte(len(rulesJSON))
+	copy(msg[3:], rulesJSON)
+
+	// Non-blocking send to write channel
+	select {
+	case pc.writeChan <- msg:
+		log.Debug().
+			Str("peer", peerName).
+			Int("rules", len(rules)).
+			Msg("pushed filter rules to peer")
+	default:
+		log.Debug().
+			Str("peer", peerName).
+			Msg("failed to push filter rules: channel full")
+	}
+}
+
+// PushFilterRuleAdd sends a single filter rule add to a peer.
+// Used when admin panel adds a temporary rule.
+func (r *relayManager) PushFilterRuleAdd(peerName string, port uint16, protocol, action, sourcePeer string) {
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		log.Debug().Str("peer", peerName).Msg("cannot push filter rule add: peer not connected")
+		return
+	}
+
+	rule := FilterRuleWire{
+		Port:       port,
+		Protocol:   protocol,
+		Action:     action,
+		SourcePeer: sourcePeer,
+	}
+
+	ruleJSON, err := json.Marshal(rule)
+	if err != nil {
+		log.Error().Err(err).Str("peer", peerName).Msg("failed to marshal filter rule")
+		return
+	}
+
+	// Build message: [MsgTypeFilterRuleAdd][rule_len:2][rule JSON]
+	msg := make([]byte, 3+len(ruleJSON))
+	msg[0] = MsgTypeFilterRuleAdd
+	msg[1] = byte(len(ruleJSON) >> 8)
+	msg[2] = byte(len(ruleJSON))
+	copy(msg[3:], ruleJSON)
+
+	select {
+	case pc.writeChan <- msg:
+		log.Debug().
+			Str("peer", peerName).
+			Uint16("port", port).
+			Str("protocol", protocol).
+			Str("action", action).
+			Str("source_peer", sourcePeer).
+			Msg("pushed filter rule add to peer")
+	default:
+		log.Debug().
+			Str("peer", peerName).
+			Msg("failed to push filter rule add: channel full")
+	}
+}
+
+// PushFilterRuleRemove sends a filter rule removal to a peer.
+func (r *relayManager) PushFilterRuleRemove(peerName string, port uint16, protocol, sourcePeer string) {
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		log.Debug().Str("peer", peerName).Msg("cannot push filter rule remove: peer not connected")
+		return
+	}
+
+	// Build message: [MsgTypeFilterRuleRemove][port:2][protocol_len:1][protocol][source_peer_len:1][source_peer]
+	msg := make([]byte, 5+len(protocol)+len(sourcePeer))
+	msg[0] = MsgTypeFilterRuleRemove
+	msg[1] = byte(port >> 8)
+	msg[2] = byte(port)
+	msg[3] = byte(len(protocol))
+	copy(msg[4:4+len(protocol)], protocol)
+	msg[4+len(protocol)] = byte(len(sourcePeer))
+	copy(msg[5+len(protocol):], sourcePeer)
+
+	select {
+	case pc.writeChan <- msg:
+		log.Debug().
+			Str("peer", peerName).
+			Uint16("port", port).
+			Str("protocol", protocol).
+			Str("source_peer", sourcePeer).
+			Msg("pushed filter rule remove to peer")
+	default:
+		log.Debug().
+			Str("peer", peerName).
+			Msg("failed to push filter rule remove: channel full")
+	}
+}
+
+// PushServicePorts sends coordinator service port announcements to a peer.
+// This tells the peer which ports the coordinator exposes (admin, metrics, etc).
+func (r *relayManager) PushServicePorts(peerName string, ports []uint16) {
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		log.Debug().Str("peer", peerName).Msg("cannot push service ports: peer not connected")
+		return
+	}
+
+	// Build message: [MsgTypeServicePortNotify][count:1][port:2]...
+	msg := make([]byte, 2+len(ports)*2)
+	msg[0] = MsgTypeServicePortNotify
+	msg[1] = byte(len(ports))
+	for i, port := range ports {
+		msg[2+i*2] = byte(port >> 8)
+		msg[2+i*2+1] = byte(port)
+	}
+
+	select {
+	case pc.writeChan <- msg:
+		log.Debug().
+			Str("peer", peerName).
+			Int("count", len(ports)).
+			Msg("pushed service ports to peer")
+	default:
+		log.Debug().
+			Str("peer", peerName).
+			Msg("failed to push service ports: channel full")
+	}
+}
+
 // setupRelayRoutes registers the relay WebSocket endpoint.
 func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {
@@ -545,6 +816,16 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 	// Notify other peers that this peer has (re)connected
 	// This allows them to invalidate stale direct tunnels
 	go s.relay.BroadcastPeerReconnected(peerName)
+
+	// Push coordinator filter rules to the peer
+	if len(s.cfg.Filter.Rules) > 0 {
+		go s.relay.PushFilterRules(peerName, s.cfg.Filter.Rules)
+	}
+
+	// Push coordinator service ports (so peers auto-allow access to admin, metrics, etc.)
+	if servicePorts := s.getServicePorts(); len(servicePorts) > 0 {
+		go s.relay.PushServicePorts(peerName, servicePorts)
+	}
 
 	// Set up ping/pong handlers for keepalive
 	conn.SetPongHandler(func(string) error {
@@ -733,6 +1014,10 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 	case MsgTypeAPIResponse:
 		// API response from concentrator
 		s.relay.handleAPIResponse(data)
+
+	case MsgTypeFilterRulesReply:
+		// Filter rules response from peer
+		s.relay.handleFilterRulesReply(data)
 
 	default:
 		log.Debug().Str("peer", sourcePeer).Uint8("type", msgType).Msg("unknown persistent relay message type")

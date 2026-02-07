@@ -19,6 +19,7 @@ type ForwarderSnapshot struct {
 	DroppedNoRoute  uint64
 	DroppedNoTunnel uint64
 	DroppedNonIPv4  uint64
+	DroppedFiltered uint64 // Total drops (for logging, not per-peer)
 	Errors          uint64
 	ExitPacketsSent uint64
 	ExitBytesSent   uint64
@@ -40,6 +41,7 @@ type Collector struct {
 	allowsExit          bool
 	wgEnabled           bool
 	wgConcentrator      WGConcentrator
+	filter              FilterStatus
 
 	// Last snapshot for delta calculation
 	lastForwarder ForwarderSnapshot
@@ -83,6 +85,12 @@ type WGConcentrator interface {
 	ClientCount() (total, enabled int)
 }
 
+// FilterStatus interface for getting packet filter status.
+type FilterStatus interface {
+	IsDefaultDeny() bool
+	RuleCountBySource() routing.RuleCounts
+}
+
 // CollectorConfig holds configuration for the collector.
 type CollectorConfig struct {
 	Forwarder           ForwarderStats
@@ -95,6 +103,7 @@ type CollectorConfig struct {
 	AllowsExit          bool
 	WGEnabled           bool
 	WGConcentrator      WGConcentrator
+	Filter              FilterStatus
 }
 
 // NewCollector creates a new metrics collector.
@@ -112,6 +121,7 @@ func NewCollector(m *PeerMetrics, cfg CollectorConfig) *Collector {
 		allowsExit:          cfg.AllowsExit,
 		wgEnabled:           cfg.WGEnabled,
 		wgConcentrator:      cfg.WGConcentrator,
+		filter:              cfg.Filter,
 	}
 }
 
@@ -125,6 +135,7 @@ func (c *Collector) Collect() {
 	c.collectExitNodeStats()
 	c.collectWireGuardStats()
 	c.collectGeolocationStats()
+	c.collectFilterStats()
 }
 
 func (c *Collector) collectForwarderStats() {
@@ -160,6 +171,9 @@ func (c *Collector) collectForwarderStats() {
 		c.metrics.ForwarderErrors.Add(float64(stats.Errors - c.lastForwarder.Errors))
 	}
 
+	// Note: Packet filter drops by protocol/peer are tracked via callback (TrackFilterDrop)
+	// The forwarder calls SetOnFilterDrop with a callback that uses TrackFilterDrop
+
 	// Exit traffic stats
 	if stats.ExitPacketsSent > c.lastForwarder.ExitPacketsSent {
 		c.metrics.ExitPacketsSent.Add(float64(stats.ExitPacketsSent - c.lastForwarder.ExitPacketsSent))
@@ -177,6 +191,7 @@ func (c *Collector) collectForwarderStats() {
 		DroppedNoRoute:  stats.DroppedNoRoute,
 		DroppedNoTunnel: stats.DroppedNoTunnel,
 		DroppedNonIPv4:  stats.DroppedNonIPv4,
+		DroppedFiltered: stats.DroppedFiltered,
 		Errors:          stats.Errors,
 		ExitPacketsSent: stats.ExitPacketsSent,
 		ExitBytesSent:   stats.ExitBytesSent,
@@ -305,6 +320,32 @@ func (c *Collector) collectGeolocationStats() {
 	}
 }
 
+func (c *Collector) collectFilterStats() {
+	if c.filter == nil {
+		// No filter configured - set defaults
+		c.metrics.FilterDefaultDeny.Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("coordinator").Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("config").Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("temporary").Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("service").Set(0)
+		return
+	}
+
+	// Default deny mode
+	if c.filter.IsDefaultDeny() {
+		c.metrics.FilterDefaultDeny.Set(1)
+	} else {
+		c.metrics.FilterDefaultDeny.Set(0)
+	}
+
+	// Rule counts by source
+	counts := c.filter.RuleCountBySource()
+	c.metrics.FilterRulesTotal.WithLabelValues("coordinator").Set(float64(counts.Coordinator))
+	c.metrics.FilterRulesTotal.WithLabelValues("config").Set(float64(counts.PeerConfig))
+	c.metrics.FilterRulesTotal.WithLabelValues("temporary").Set(float64(counts.Temporary))
+	c.metrics.FilterRulesTotal.WithLabelValues("service").Set(float64(counts.Service))
+}
+
 // Run starts periodic metric collection.
 func (c *Collector) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
@@ -378,6 +419,20 @@ func (w *RelayWrapper) GetLastRTT() time.Duration {
 // TrackReconnect is called by the connection observer when a reconnect happens.
 func (c *Collector) TrackReconnect(targetPeer string) {
 	c.metrics.ReconnectCount.WithLabelValues(targetPeer).Inc()
+}
+
+// TrackFilterDrop increments the dropped packet counter for the given protocol and source peer.
+// Protocol should be 6 for TCP, 17 for UDP.
+// sourcePeer is always available since all incoming paths provide peer context:
+// - HandleRelayPacket has sourcePeer from the relay message
+// - HandleTunnel has peerName from the tunnel association
+func (c *Collector) TrackFilterDrop(protocol uint8, sourcePeer string) {
+	c.metrics.DroppedFiltered.WithLabelValues(routing.ProtocolToString(protocol), sourcePeer).Inc()
+}
+
+// FilterDropCallback returns a callback function for the forwarder to call on filter drops.
+func (c *Collector) FilterDropCallback() func(protocol uint8, sourcePeer string) {
+	return c.TrackFilterDrop
 }
 
 // ReconnectObserver returns a connection observer that tracks reconnects.
