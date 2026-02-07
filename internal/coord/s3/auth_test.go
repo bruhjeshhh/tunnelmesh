@@ -140,7 +140,7 @@ func TestRBACAuthorizerAuthorize(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer "+accessKey)
 
-	userID, err := rbac.AuthorizeRequest(req, "get", "buckets", "")
+	userID, err := rbac.AuthorizeRequest(req, "get", "buckets", "", "")
 	require.NoError(t, err)
 	assert.Equal(t, "alice", userID)
 }
@@ -158,7 +158,7 @@ func TestRBACAuthorizerBasicAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/my-bucket", nil)
 	req.SetBasicAuth(accessKey, secretKey)
 
-	userID, err := rbac.AuthorizeRequest(req, "get", "buckets", "my-bucket")
+	userID, err := rbac.AuthorizeRequest(req, "get", "buckets", "my-bucket", "")
 	require.NoError(t, err)
 	assert.Equal(t, "bob", userID)
 }
@@ -170,7 +170,7 @@ func TestRBACAuthorizerDeniedNoAuth(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	_, err := rbac.AuthorizeRequest(req, "get", "buckets", "")
+	_, err := rbac.AuthorizeRequest(req, "get", "buckets", "", "")
 	assert.ErrorIs(t, err, ErrAccessDenied)
 }
 
@@ -182,7 +182,7 @@ func TestRBACAuthorizerDeniedUnknownUser(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer unknownaccesskey")
 
-	_, err := rbac.AuthorizeRequest(req, "get", "buckets", "")
+	_, err := rbac.AuthorizeRequest(req, "get", "buckets", "", "")
 	assert.ErrorIs(t, err, ErrAccessDenied)
 }
 
@@ -199,7 +199,7 @@ func TestRBACAuthorizerDeniedNoPermission(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/my-bucket", nil)
 	req.Header.Set("Authorization", "Bearer "+accessKey)
 
-	_, err = rbac.AuthorizeRequest(req, "delete", "buckets", "my-bucket")
+	_, err = rbac.AuthorizeRequest(req, "delete", "buckets", "my-bucket", "")
 	assert.ErrorIs(t, err, ErrAccessDenied)
 }
 
@@ -219,11 +219,11 @@ func TestRBACAuthorizerScopedPermission(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+accessKey)
 
 	// Can write to my-bucket
-	_, err = rbac.AuthorizeRequest(req, "put", "objects", "my-bucket")
+	_, err = rbac.AuthorizeRequest(req, "put", "objects", "my-bucket", "")
 	require.NoError(t, err)
 
 	// Cannot write to other-bucket
-	_, err = rbac.AuthorizeRequest(req, "put", "objects", "other-bucket")
+	_, err = rbac.AuthorizeRequest(req, "put", "objects", "other-bucket", "")
 	assert.ErrorIs(t, err, ErrAccessDenied)
 }
 
@@ -231,7 +231,7 @@ func TestAllowAllAuthorizer(t *testing.T) {
 	authz := &AllowAllAuthorizer{UserID: "test-user"}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	userID, err := authz.AuthorizeRequest(req, "get", "buckets", "")
+	userID, err := authz.AuthorizeRequest(req, "get", "buckets", "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "test-user", userID)

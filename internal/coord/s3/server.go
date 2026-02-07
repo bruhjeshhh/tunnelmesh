@@ -22,8 +22,14 @@ type Server struct {
 // Authorizer is the interface for checking S3 permissions.
 type Authorizer interface {
 	// AuthorizeRequest authenticates and authorizes an S3 request.
+	// The objectKey parameter enables object-level prefix permission checks.
 	// Returns the user ID if authorized, or an error if not.
-	AuthorizeRequest(r *http.Request, verb, resource, bucket string) (userID string, err error)
+	AuthorizeRequest(r *http.Request, verb, resource, bucket, objectKey string) (userID string, err error)
+
+	// GetAllowedPrefixes returns the object prefixes a user can access in a bucket.
+	// Returns nil if user has unrestricted access (no filtering needed).
+	// Returns empty slice if user has no access to the bucket.
+	GetAllowedPrefixes(userID, bucket string) []string
 }
 
 // NewServer creates a new S3 server.
@@ -87,7 +93,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authorize: list buckets
-	userID, err := s.authorizer.AuthorizeRequest(r, "list", "buckets", "")
+	userID, err := s.authorizer.AuthorizeRequest(r, "list", "buckets", "", "")
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -157,7 +163,7 @@ func (s *Server) handleObject(w http.ResponseWriter, r *http.Request, bucket, ke
 
 // createBucket handles PUT /{bucket}.
 func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	userID, err := s.authorizer.AuthorizeRequest(r, "create", "buckets", bucket)
+	userID, err := s.authorizer.AuthorizeRequest(r, "create", "buckets", bucket, "")
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -177,7 +183,7 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, bucket str
 
 // deleteBucket handles DELETE /{bucket}.
 func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "delete", "buckets", bucket)
+	_, err := s.authorizer.AuthorizeRequest(r, "delete", "buckets", bucket, "")
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -200,7 +206,7 @@ func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, bucket str
 
 // headBucket handles HEAD /{bucket}.
 func (s *Server) headBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "get", "buckets", bucket)
+	_, err := s.authorizer.AuthorizeRequest(r, "get", "buckets", bucket, "")
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -220,7 +226,7 @@ func (s *Server) headBucket(w http.ResponseWriter, r *http.Request, bucket strin
 
 // listObjects handles GET /{bucket} (V1).
 func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket)
+	userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -243,6 +249,12 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 		}
 		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
 		return
+	}
+
+	// Filter objects by allowed prefixes
+	allowedPrefixes := s.authorizer.GetAllowedPrefixes(userID, bucket)
+	if allowedPrefixes != nil {
+		objects = filterByPrefixes(objects, allowedPrefixes)
 	}
 
 	resp := ListBucketResult{
@@ -268,7 +280,7 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 
 // listObjectsV2 handles GET /{bucket}?list-type=2.
 func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket)
+	userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -300,6 +312,12 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 		return
 	}
 
+	// Filter objects by allowed prefixes
+	allowedPrefixes := s.authorizer.GetAllowedPrefixes(userID, bucket)
+	if allowedPrefixes != nil {
+		objects = filterByPrefixes(objects, allowedPrefixes)
+	}
+
 	resp := ListBucketResultV2{
 		Name:                  bucket,
 		Prefix:                prefix,
@@ -325,7 +343,7 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 
 // getObject handles GET /{bucket}/{key}.
 func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket)
+	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket, key)
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -367,7 +385,7 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 // putObject handles PUT /{bucket}/{key}.
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "put", "objects", bucket)
+	_, err := s.authorizer.AuthorizeRequest(r, "put", "objects", bucket, key)
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -409,7 +427,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 // deleteObject handles DELETE /{bucket}/{key}.
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "delete", "objects", bucket)
+	_, err := s.authorizer.AuthorizeRequest(r, "delete", "objects", bucket, key)
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -434,7 +452,7 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, ke
 
 // headObject handles HEAD /{bucket}/{key}.
 func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket)
+	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket, key)
 	if err != nil {
 		s.handleAuthError(w, err)
 		return
@@ -497,6 +515,25 @@ func (s *Server) writeXML(w http.ResponseWriter, status int, v interface{}) {
 	if err := xml.NewEncoder(w).Encode(v); err != nil {
 		log.Error().Err(err).Msg("Failed to encode XML response")
 	}
+}
+
+// filterByPrefixes filters objects to only include those matching any of the allowed prefixes.
+// If prefixes is empty, no objects match (returns empty slice).
+func filterByPrefixes(objects []ObjectMeta, prefixes []string) []ObjectMeta {
+	if len(prefixes) == 0 {
+		return []ObjectMeta{}
+	}
+
+	result := make([]ObjectMeta, 0, len(objects))
+	for _, obj := range objects {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(obj.Key, prefix) {
+				result = append(result, obj)
+				break
+			}
+		}
+	}
+	return result
 }
 
 // XML response types

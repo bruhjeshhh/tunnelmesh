@@ -1,17 +1,19 @@
 package auth
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 )
 
-// RoleBinding binds a user to a role with optional bucket scope.
+// RoleBinding binds a user to a role with optional bucket and object prefix scope.
 type RoleBinding struct {
-	Name        string `json:"name"`                   // Unique binding name
-	UserID      string `json:"user_id"`                // User being granted access
-	RoleName    string `json:"role_name"`              // Role being granted
-	BucketScope string `json:"bucket_scope,omitempty"` // Optional: scope to specific bucket
+	Name         string `json:"name"`                    // Unique binding name
+	UserID       string `json:"user_id"`                 // User being granted access
+	RoleName     string `json:"role_name"`               // Role being granted
+	BucketScope  string `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
+	ObjectPrefix string `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
 }
 
 // NewRoleBinding creates a new role binding.
@@ -31,6 +33,20 @@ func (rb *RoleBinding) AppliesToBucket(bucketName string) bool {
 		return true
 	}
 	return rb.BucketScope == bucketName
+}
+
+// AppliesToObject checks if this binding applies to a bucket and object key.
+// Empty key (bucket-level operations like list) always passes the prefix check.
+func (rb *RoleBinding) AppliesToObject(bucket, key string) bool {
+	// Check bucket scope first
+	if rb.BucketScope != "" && rb.BucketScope != bucket {
+		return false
+	}
+	// Check object prefix (empty key = bucket-level op, always allowed)
+	if rb.ObjectPrefix != "" && key != "" {
+		return strings.HasPrefix(key, rb.ObjectPrefix)
+	}
+	return true
 }
 
 // BindingStore manages role bindings in memory.

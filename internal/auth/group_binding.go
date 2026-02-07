@@ -1,17 +1,19 @@
 package auth
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 )
 
-// GroupBinding binds a group to a role with optional bucket scope.
+// GroupBinding binds a group to a role with optional bucket and object prefix scope.
 type GroupBinding struct {
-	Name        string `json:"name"`                   // Unique binding name
-	GroupName   string `json:"group_name"`             // Group being granted access
-	RoleName    string `json:"role_name"`              // Role being granted
-	BucketScope string `json:"bucket_scope,omitempty"` // Optional: scope to specific bucket
+	Name         string `json:"name"`                    // Unique binding name
+	GroupName    string `json:"group_name"`              // Group being granted access
+	RoleName     string `json:"role_name"`               // Role being granted
+	BucketScope  string `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
+	ObjectPrefix string `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
 }
 
 // NewGroupBinding creates a new group binding.
@@ -31,6 +33,20 @@ func (gb *GroupBinding) AppliesToBucket(bucketName string) bool {
 		return true
 	}
 	return gb.BucketScope == bucketName
+}
+
+// AppliesToObject checks if this binding applies to a bucket and object key.
+// Empty key (bucket-level operations like list) always passes the prefix check.
+func (gb *GroupBinding) AppliesToObject(bucket, key string) bool {
+	// Check bucket scope first
+	if gb.BucketScope != "" && gb.BucketScope != bucket {
+		return false
+	}
+	// Check object prefix (empty key = bucket-level op, always allowed)
+	if gb.ObjectPrefix != "" && key != "" {
+		return strings.HasPrefix(key, gb.ObjectPrefix)
+	}
+	return true
 }
 
 // GroupBindingStore manages group bindings in memory.
