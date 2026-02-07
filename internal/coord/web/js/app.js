@@ -1748,7 +1748,8 @@ function populateSourcePeerSelect() {
     select.innerHTML = '<option value="">Any peer (global rule)</option>';
 
     // Add all known peers
-    const sortedPeers = [...state.data.peers].sort((a, b) => a.name.localeCompare(b.name));
+    const peers = state.currentPeers || [];
+    const sortedPeers = [...peers].sort((a, b) => a.name.localeCompare(b.name));
     sortedPeers.forEach(peer => {
         const opt = document.createElement('option');
         opt.value = peer.name;
@@ -1765,7 +1766,8 @@ function populateDestPeerSelect() {
     select.innerHTML = '<option value="__all__">All peers</option>';
 
     // Add all known peers
-    const sortedPeers = [...state.data.peers].sort((a, b) => a.name.localeCompare(b.name));
+    const peers = state.currentPeers || [];
+    const sortedPeers = [...peers].sort((a, b) => a.name.localeCompare(b.name));
     sortedPeers.forEach(peer => {
         const opt = document.createElement('option');
         opt.value = peer.name;
