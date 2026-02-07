@@ -1,14 +1,22 @@
-// Constants
-const HEARTBEAT_INTERVAL_MS = 10000;    // 10 seconds between heartbeats
-const POLL_INTERVAL_MS = 10000;         // Polling fallback interval
-const SSE_RETRY_DELAY_MS = 2000;        // Base delay for SSE reconnection
-const MAX_SSE_RETRIES = 3;              // Max SSE reconnection attempts
-const ROWS_PER_PAGE = 7;                // Default pagination size
-const MAX_HISTORY_POINTS = 20;          // Max sparkline history points per peer
-const MAX_CHART_POINTS = 360;           // 1 hour at 10-second intervals
-const TOAST_DURATION_MS = 4000;         // Toast notification duration
-const TOAST_FADE_MS = 300;              // Toast fade-out animation duration
-const QUANTIZE_INTERVAL_MS = 10000;     // Timestamp quantization interval
+// Import constants from TM.utils (loaded via lib/utils.js)
+const {
+    HEARTBEAT_INTERVAL_MS,
+    POLL_INTERVAL_MS,
+    SSE_RETRY_DELAY_MS,
+    MAX_SSE_RETRIES,
+    ROWS_PER_PAGE,
+    MAX_HISTORY_POINTS,
+    MAX_CHART_POINTS,
+    TOAST_DURATION_MS,
+    TOAST_FADE_MS,
+    QUANTIZE_INTERVAL_MS
+} = TM.utils.CONSTANTS;
+
+// Import utilities from TM modules
+const { escapeHtml } = TM.utils;
+const { formatBytes, formatRate, formatLatency, formatLastSeen, formatNumber } = TM.format;
+const { updatePaginationUI, createPaginationController } = TM.pagination;
+const { createSparklineSVG, createSparklinePath } = TM.table;
 
 // Toggle collapsible section
 function toggleSection(header) {
@@ -23,21 +31,8 @@ window.toggleSection = toggleSection;
 // Cached DOM elements (populated on DOMContentLoaded)
 const dom = {};
 
-// Simple event bus for cross-component communication
-const events = {
-    listeners: {},
-    on(event, fn) {
-        (this.listeners[event] ||= []).push(fn);
-    },
-    off(event, fn) {
-        if (this.listeners[event]) {
-            this.listeners[event] = this.listeners[event].filter(f => f !== fn);
-        }
-    },
-    emit(event, data) {
-        this.listeners[event]?.forEach(fn => fn(data));
-    }
-};
+// Use event bus from TM.events module
+const events = TM.events;
 
 // Dashboard state - track history per peer
 const state = {
@@ -637,26 +632,7 @@ function setupDnsGroupHighlight() {
     });
 }
 
-function formatBytes(bytes) {
-    if (bytes === 0 || bytes === undefined || bytes === null) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-    const clampedI = Math.min(i, sizes.length - 1);
-    return parseFloat((bytes / Math.pow(k, clampedI)).toFixed(1)) + ' ' + sizes[clampedI];
-}
-
-function formatRate(rate) {
-    if (rate === 0 || rate === undefined || rate === null) return '0';
-    return rate.toFixed(1);
-}
-
-function formatLatency(ms) {
-    if (ms === 0 || ms === undefined || ms === null) return '-';
-    if (ms < 1) return '<1 ms';
-    if (ms < 1000) return Math.round(ms) + ' ms';
-    return (ms / 1000).toFixed(1) + ' s';
-}
+// formatBytes, formatRate, formatLatency imported from TM.format
 
 // Chart functions
 
@@ -1112,16 +1088,7 @@ function rebuildChartDatasets() {
     }
 }
 
-function formatNumber(num) {
-    if (num === undefined || num === null) return '0';
-    return num.toLocaleString();
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+// formatNumber, escapeHtml imported from TM.format and TM.utils
 
 function formatAdvertisedIPs(peer) {
     const parts = [];
@@ -1385,13 +1352,7 @@ function formatLogJson(obj) {
     return '{' + parts.join(',') + '}';
 }
 
-function escapeHtml(str) {
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
+// escapeHtml imported from TM.utils (duplicate removed)
 
 async function fetchAlerts() {
     if (!state.alertsEnabled) return;
@@ -1521,17 +1482,7 @@ function updateWGClientsTable() {
     });
 }
 
-function formatLastSeen(timestamp) {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffSec = Math.floor(diffMs / 1000);
-
-    if (diffSec < 60) return 'Just now';
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-    return date.toLocaleDateString();
-}
+// formatLastSeen imported from TM.format
 
 function showAddWGClientModal() {
     if (!state.wgConcentratorConnected) {
