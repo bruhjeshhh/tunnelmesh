@@ -183,12 +183,11 @@ docker-up: docker-build
 	$(DOCKER_COMPOSE) up -d
 	@echo "TunnelMesh Docker environment started"
 	@echo "Use 'make docker-logs' to follow logs"
-	@echo "Opening admin interface..."
-	@sleep 2
-	@open http://localhost:8880/admin/
 	@echo ""
 	@echo "=== Join from this machine ==="
-	@echo "sudo ./bin/tunnelmesh join --server http://localhost:8880 --token docker-test-token-123 --context docker"
+	@echo "sudo ./bin/tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker"
+	@echo ""
+	@echo "Admin panel accessible at https://server-node.tunnelmesh/ from within the mesh"
 
 docker-down:
 	$(DOCKER_COMPOSE) down

@@ -18,6 +18,7 @@ services:
       mesh-control:
         ipv4_address: 172.28.0.10
     ports:
+      - "8081:8080"   # Coordination API (peers connect here)
       - "6060:6060"   # pprof (when PPROF_ADDR is set)
     environment:
       - PPROF_ADDR=localhost:6060  # Enable pprof for memory profiling
