@@ -155,28 +155,12 @@ tunnelmesh serve --config server.yaml
 tunnelmesh serve --config server.yaml --locations
 ```
 
-**Example server.yaml:**
-```yaml
-listen: ":8080"
-auth_token: "your-secure-token"
-mesh_cidr: "172.30.0.0/16"
-domain_suffix: ".tunnelmesh"
-
-admin:
-  enabled: true
-
-# Optional: server also joins as a peer
-join_mesh:
-  name: "coordinator"
-  private_key: "~/.tunnelmesh/id_ed25519"
-  allow_exit_traffic: true
-  tun:
-    name: "tun-mesh0"
-    mtu: 1400
-  dns:
-    enabled: true
-    listen: "127.0.0.53:5353"
+**Generate a config:**
+```bash
+tunnelmesh init --server --peer --output server.yaml
 ```
+
+See [server.yaml.example](../server.yaml.example) for all configuration options.
 
 ---
 
@@ -243,52 +227,12 @@ sudo tunnelmesh join \
   --wireguard
 ```
 
-**Example peer.yaml:**
-```yaml
-name: "my-laptop"
-server: "https://tunnelmesh.example.com"
-auth_token: "your-secure-token"
-ssh_port: 2222
-private_key: "~/.tunnelmesh/id_ed25519"
-
-# Exit node configuration
-exit_node: "server-node"        # Route internet through this peer
-allow_exit_traffic: false       # Don't allow others to use us as exit
-
-# Manual location (optional)
-location:
-  latitude: 52.3676
-  longitude: 4.9041
-  city: "Amsterdam"
-
-# TUN interface
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-
-# Local DNS resolver
-dns:
-  enabled: true
-  listen: "127.0.0.53:5353"
-  cache_ttl: 300
-  aliases:
-    - "laptop"              # laptop.tunnelmesh -> this peer
-    - "dev.myname"          # dev.myname.tunnelmesh -> this peer
-
-# WireGuard concentrator (optional)
-wireguard:
-  enabled: false
-  listen_port: 51820
-  endpoint: ""              # Public endpoint for clients
-
-# Metrics
-metrics_port: 9090
-
-# Loki log shipping (optional)
-loki:
-  enabled: false
-  url: "http://loki:3100"
+**Generate a config:**
+```bash
+tunnelmesh init --peer --output peer.yaml
 ```
+
+See [peer.yaml.example](../peer.yaml.example) for all configuration options.
 
 ---
 
@@ -784,105 +728,18 @@ TunnelMesh searches for config files in order:
 3. `tunnelmesh.yaml` in current directory
 4. `peer.yaml` in current directory
 
-### Complete Server Configuration
+### Configuration Reference
 
-```yaml
-# Network configuration
-listen: ":8080"                    # HTTP listen address
-mesh_cidr: "172.30.0.0/16"        # Mesh network range
-domain_suffix: ".tunnelmesh"       # DNS suffix
+For complete configuration options with documentation:
 
-# Authentication
-auth_token: "your-64-char-hex-token"
+- **Server:** See [server.yaml.example](../server.yaml.example)
+- **Peer:** See [peer.yaml.example](../peer.yaml.example)
 
-# Data storage
-data_dir: "/var/lib/tunnelmesh"
-
-# Logging
-log_level: "info"                  # debug, info, warn, error
-
-# Feature flags
-locations: false                   # Enable IP geolocation
-
-# Admin interface
-admin:
-  enabled: true
-  port: 443                        # HTTPS port for admin (when join_mesh enabled)
-
-# Optional: Server also joins as mesh peer
-join_mesh:
-  name: "coordinator"
-  private_key: "~/.tunnelmesh/id_ed25519"
-  allow_exit_traffic: true
-
-  tun:
-    name: "tun-mesh0"
-    mtu: 1400
-
-  dns:
-    enabled: true
-    listen: "127.0.0.53:5353"
-    cache_ttl: 300
-    aliases:
-      - "coord"
-      - "server"
-```
-
-### Complete Peer Configuration
-
-```yaml
-# Identity
-name: "my-peer"
-private_key: "~/.tunnelmesh/id_ed25519"
-
-# Server connection
-server: "https://tunnelmesh.example.com"
-auth_token: "your-64-char-hex-token"
-
-# Transport
-ssh_port: 2222
-
-# Exit node settings
-exit_node: ""                      # Peer to route internet through
-allow_exit_traffic: false          # Allow others to use as exit
-
-# Manual geolocation
-location:
-  latitude: 0.0
-  longitude: 0.0
-  city: ""
-
-# TUN interface
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-
-# DNS
-dns:
-  enabled: true
-  listen: "127.0.0.53:5353"
-  cache_ttl: 300
-  aliases: []
-
-# WireGuard concentrator
-wireguard:
-  enabled: false
-  listen_port: 51820
-  endpoint: ""
-  data_dir: ""
-
-# Metrics
-metrics_port: 9090
-
-# Logging
-log_level: "info"
-
-# Loki integration
-loki:
-  enabled: false
-  url: ""
-  batch_size: 100
-  flush_interval: "5s"
+Generate config files with:
+```bash
+tunnelmesh init --server --peer    # Both configs
+tunnelmesh init --server           # Server only
+tunnelmesh init --peer             # Peer only
 ```
 
 ---
@@ -898,25 +755,12 @@ Set up TunnelMesh for personal use with a cloud server and laptop.
 # On your cloud server
 sudo mkdir -p /etc/tunnelmesh
 
-cat > /etc/tunnelmesh/server.yaml << 'EOF'
-listen: ":8080"
-auth_token: "$(openssl rand -hex 32)"
-mesh_cidr: "172.30.0.0/16"
-admin:
-  enabled: true
-join_mesh:
-  name: "cloud-server"
-  private_key: "/root/.tunnelmesh/id_ed25519"
-  allow_exit_traffic: true
-  tun:
-    name: "tun-mesh0"
-    mtu: 1400
-  dns:
-    enabled: true
-    listen: "127.0.0.53:5353"
-EOF
+# Generate config (server + peer mode for exit node capability)
+tunnelmesh init --server --peer --output /etc/tunnelmesh/server.yaml
 
-tunnelmesh init
+# Edit: set auth_token, enable allow_exit_traffic in join_mesh section
+sudo nano /etc/tunnelmesh/server.yaml
+
 tunnelmesh context create vpn --config /etc/tunnelmesh/server.yaml --mode serve
 sudo tunnelmesh service install
 sudo tunnelmesh service start
@@ -925,22 +769,12 @@ sudo tunnelmesh service start
 **Step 2: Connect laptop**
 ```bash
 # On your laptop
-tunnelmesh init
+tunnelmesh init --peer --output ~/.tunnelmesh/vpn.yaml
 
-cat > ~/.tunnelmesh/vpn.yaml << 'EOF'
-name: "my-laptop"
-server: "http://your-server-ip:8080"
-auth_token: "same-token-from-server"
-exit_node: "cloud-server"
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-dns:
-  enabled: true
-  listen: "127.0.0.53:5353"
-EOF
+# Edit: set server, auth_token, exit_node: "cloud-server"
+nano ~/.tunnelmesh/vpn.yaml
 
-# Join and save as context (prompts to install CA cert if missing)
+# Join and save as context
 sudo tunnelmesh join --config ~/.tunnelmesh/vpn.yaml --context vpn
 ```
 
@@ -963,13 +797,10 @@ Connect a development team for direct machine access.
 **Step 1: Deploy minimal coordinator**
 ```bash
 # On a small cloud instance
-cat > server.yaml << 'EOF'
-listen: ":8080"
-auth_token: "team-secret-token"
-mesh_cidr: "172.30.0.0/16"
-admin:
-  enabled: true
-EOF
+tunnelmesh init --server --output server.yaml
+
+# Edit: set auth_token
+nano server.yaml
 
 tunnelmesh context create team --config server.yaml --mode serve
 sudo tunnelmesh service install
@@ -1008,18 +839,10 @@ Access home network from anywhere.
 ```bash
 # Deploy to cloud (see terraform docs)
 # Or manually:
-cat > server.yaml << 'EOF'
-listen: ":8080"
-auth_token: "your-token"
-mesh_cidr: "172.30.0.0/16"
-admin:
-  enabled: true
-join_mesh:
-  name: "cloud"
-  wireguard:
-    enabled: true
-    listen_port: 51820
-EOF
+tunnelmesh init --server --peer --output server.yaml
+
+# Edit: set auth_token, enable wireguard in join_mesh section
+nano server.yaml
 
 sudo tunnelmesh serve --config server.yaml
 ```
@@ -1027,16 +850,10 @@ sudo tunnelmesh serve --config server.yaml
 **Step 2: Home server joins**
 ```bash
 # On your home server (Raspberry Pi, NAS, etc.)
-cat > peer.yaml << 'EOF'
-name: "homelab"
-server: "https://cloud.example.com"
-auth_token: "your-token"
-dns:
-  aliases:
-    - "nas"
-    - "plex"
-    - "homeassistant"
-EOF
+tunnelmesh init --peer --output peer.yaml
+
+# Edit: set name, server, auth_token, add dns.aliases for services
+nano peer.yaml
 
 sudo tunnelmesh join --config peer.yaml --context homelab
 sudo tunnelmesh service install

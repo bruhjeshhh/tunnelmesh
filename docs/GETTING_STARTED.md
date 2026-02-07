@@ -73,25 +73,11 @@ tunnelmesh version
 # Create config directory
 sudo mkdir -p /etc/tunnelmesh
 
-# Create server configuration
-sudo tee /etc/tunnelmesh/server.yaml << 'EOF'
-# Coordination server configuration
-listen: ":8080"
+# Generate server configuration
+tunnelmesh init --server --output /etc/tunnelmesh/server.yaml
 
-# Authentication token - peers must use this same token
-# IMPORTANT: Change this to a secure random value!
-auth_token: "change-me-to-a-secure-token"
-
-# IP range for mesh network (peers get IPs from this range)
-mesh_cidr: "172.30.0.0/16"
-
-# Domain suffix for mesh DNS resolution
-domain_suffix: ".tunnelmesh"
-
-# Enable the admin web dashboard
-admin:
-  enabled: true
-EOF
+# Edit and set a secure auth token
+sudo nano /etc/tunnelmesh/server.yaml
 ```
 
 #### Windows (PowerShell as Administrator)
@@ -100,25 +86,11 @@ EOF
 # Create config directory
 New-Item -ItemType Directory -Force -Path "C:\ProgramData\TunnelMesh"
 
-# Create server configuration
-@"
-# Coordination server configuration
-listen: ":8080"
+# Generate server configuration
+tunnelmesh init --server --output "C:\ProgramData\TunnelMesh\server.yaml"
 
-# Authentication token - peers must use this same token
-# IMPORTANT: Change this to a secure random value!
-auth_token: "change-me-to-a-secure-token"
-
-# IP range for mesh network
-mesh_cidr: "172.30.0.0/16"
-
-# Domain suffix for mesh DNS resolution
-domain_suffix: ".tunnelmesh"
-
-# Enable the admin web dashboard
-admin:
-  enabled: true
-"@ | Out-File -FilePath "C:\ProgramData\TunnelMesh\server.yaml" -Encoding UTF8
+# Edit and set a secure auth token
+notepad "C:\ProgramData\TunnelMesh\server.yaml"
 ```
 
 ---
@@ -207,40 +179,14 @@ This creates:
 # Create config directory
 sudo mkdir -p /etc/tunnelmesh
 
-# Create peer configuration
-sudo tee /etc/tunnelmesh/peer.yaml << 'EOF'
-# Unique name for this peer (appears in admin dashboard)
-name: "my-peer-name"
+# Generate peer configuration
+tunnelmesh init --peer --output /etc/tunnelmesh/peer.yaml
 
-# Coordination server URL
-server: "http://your-server-ip:8080"
-
-# Must match the server's auth_token
-auth_token: "change-me-to-a-secure-token"
-
-# SSH port for incoming peer connections
-ssh_port: 2222
-
-# Path to SSH private key
-private_key: "/root/.tunnelmesh/id_ed25519"
-
-# TUN interface configuration
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-
-# Local DNS resolver for .tunnelmesh domains
-dns:
-  enabled: true
-  listen: "127.0.0.53:5353"
-EOF
-```
-
-**Important:** Update these values:
-- `name`: A unique identifier for this peer
-- `server`: The URL of your coordination server
-- `auth_token`: Must match the server's token
-- `private_key`: Path to the SSH key (use full path for service mode)
+# Edit and configure:
+#   - name: unique identifier for this peer
+#   - server: URL of your coordination server
+#   - auth_token: must match server's token
+sudo nano /etc/tunnelmesh/peer.yaml
 
 #### Windows (PowerShell as Administrator)
 
@@ -248,33 +194,14 @@ EOF
 # Create config directory
 New-Item -ItemType Directory -Force -Path "C:\ProgramData\TunnelMesh"
 
-# Create peer configuration
-@"
-# Unique name for this peer
-name: "my-windows-peer"
+# Generate peer configuration
+tunnelmesh init --peer --output "C:\ProgramData\TunnelMesh\peer.yaml"
 
-# Coordination server URL
-server: "http://your-server-ip:8080"
-
-# Must match the server's auth_token
-auth_token: "change-me-to-a-secure-token"
-
-# SSH port for incoming peer connections
-ssh_port: 2222
-
-# Path to SSH private key
-private_key: "C:\Users\YourUser\.tunnelmesh\id_ed25519"
-
-# TUN interface configuration
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-
-# Local DNS resolver
-dns:
-  enabled: true
-  listen: "127.0.0.1:5353"
-"@ | Out-File -FilePath "C:\ProgramData\TunnelMesh\peer.yaml" -Encoding UTF8
+# Edit and configure:
+#   - name: unique identifier for this peer
+#   - server: URL of your coordination server
+#   - auth_token: must match server's token
+notepad "C:\ProgramData\TunnelMesh\peer.yaml"
 ```
 
 ---
