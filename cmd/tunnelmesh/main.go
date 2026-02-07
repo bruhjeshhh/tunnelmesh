@@ -829,7 +829,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required")
+		return fmt.Errorf("server, token, and name are required\nHint: run with --server and --token flags to update context credentials")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -931,6 +931,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				Name:       joinContext,
 				ConfigPath: cfgFile,
 				Server:     cfg.Server,
+				AuthToken:  cfg.AuthToken,
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
 				DNSListen:  cfg.DNS.Listen,
@@ -1948,19 +1949,42 @@ func loadConfig() (*config.PeerConfig, error) {
 		return config.LoadPeerConfig(cfgFile)
 	}
 
+	homeDir, _ := os.UserHomeDir()
+
 	// Check for active context
 	store, err := meshctx.Load()
 	if err == nil && store.HasActive() {
 		activeCtx := store.GetActive()
-		if activeCtx != nil && activeCtx.ConfigPath != "" {
-			if _, err := os.Stat(activeCtx.ConfigPath); err == nil {
-				return config.LoadPeerConfig(activeCtx.ConfigPath)
+		if activeCtx != nil {
+			// If context has a config file, load it
+			if activeCtx.ConfigPath != "" {
+				if _, err := os.Stat(activeCtx.ConfigPath); err == nil {
+					return config.LoadPeerConfig(activeCtx.ConfigPath)
+				}
+			}
+			// If context has server info but no config file, use context values
+			// This happens when joining with --server/--token flags instead of --config
+			if activeCtx.Server != "" {
+				return &config.PeerConfig{
+					Server:     activeCtx.Server,
+					AuthToken:  activeCtx.AuthToken,
+					SSHPort:    2222,
+					PrivateKey: filepath.Join(homeDir, ".tunnelmesh", "id_ed25519"),
+					TUN: config.TUNConfig{
+						Name: "tun-mesh0",
+						MTU:  1400,
+					},
+					DNS: config.DNSConfig{
+						Enabled:  true,
+						Listen:   activeCtx.DNSListen,
+						CacheTTL: 300,
+					},
+				}, nil
 			}
 		}
 	}
 
 	// Try default locations
-	homeDir, _ := os.UserHomeDir()
 	defaults := []string{
 		filepath.Join(homeDir, ".tunnelmesh", "config.yaml"),
 		"tunnelmesh.yaml",
