@@ -60,7 +60,8 @@ Global rules pushed to all peers when they connect:
 
 ```yaml
 filter:
-  default_deny: true   # Block all unless allowed (recommended)
+  # default_deny defaults to true (whitelist mode) if not specified
+  # Set to false only if you want blacklist mode (allow all unless denied)
   rules:
     # Allow SSH across the entire mesh
     - port: 22
@@ -271,7 +272,7 @@ ICMP traffic (ping, traceroute) is **always allowed** through the filter for dia
 
 ## Best Practices
 
-1. **Start with default-deny**: Set `default_deny: true` in coordinator config to enforce whitelist mode across all peers.
+1. **Default is secure**: The filter defaults to `default_deny: true` (whitelist mode) if not specified. Only set `default_deny: false` if you explicitly want blacklist mode.
 
 2. **Use coordinator for mesh-wide rules**: Common ports like SSH and metrics should be allowed at the coordinator level.
 

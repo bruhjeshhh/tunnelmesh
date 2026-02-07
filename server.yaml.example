@@ -42,7 +42,7 @@ relay:
 
 # Packet filter - global rules pushed to all peers on connect
 # filter:
-#   default_deny: true   # Block all ports unless explicitly allowed
+#   default_deny: true   # Block all ports unless explicitly allowed (this is the default)
 #   rules:
 #     - port: 22
 #       protocol: tcp
