@@ -158,6 +158,20 @@ tunnelmesh filter remove --port 22 --protocol tcp --source-peer badpeer
 
 **Note**: Only temporary rules (added via CLI or admin panel) can be removed. Rules from config files must be removed by editing the config.
 
+### Multiple Instances
+
+When running multiple TunnelMesh instances on the same machine, use the `--socket` flag to target the correct instance:
+
+```bash
+# Default instance (uses ~/.tunnelmesh/control.sock)
+tunnelmesh filter list
+
+# Secondary instance (specify custom socket path)
+tunnelmesh filter list --socket ~/.tunnelmesh-secondary/control.sock
+```
+
+Each TunnelMesh instance uses a separate control socket for CLI communication.
+
 ## Admin Dashboard
 
 The admin panel provides a "Packet Filter" section for managing rules:

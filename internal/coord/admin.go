@@ -554,9 +554,11 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For now, we return the coordinator's global filter rules
-	// In a full implementation, we'd query the peer's current rules via the relay
-	rules := make([]FilterRuleInfo, 0, len(s.cfg.Filter.Rules))
+	// Calculate capacity for rules: coordinator rules + service ports
+	servicePorts := s.getServicePorts()
+	rules := make([]FilterRuleInfo, 0, len(s.cfg.Filter.Rules)+len(servicePorts))
+
+	// Add coordinator rules from config
 	for _, r := range s.cfg.Filter.Rules {
 		rules = append(rules, FilterRuleInfo{
 			Port:       r.Port,
@@ -565,6 +567,18 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 			Source:     "coordinator",
 			Expires:    0,
 			SourcePeer: r.SourcePeer,
+		})
+	}
+
+	// Add service port rules (auto-generated for coordinator services)
+	for _, port := range servicePorts {
+		rules = append(rules, FilterRuleInfo{
+			Port:       port,
+			Protocol:   "tcp",
+			Action:     "allow",
+			Source:     "service",
+			Expires:    0,
+			SourcePeer: "",
 		})
 	}
 
