@@ -1622,7 +1622,7 @@ function populateFilterPeerSelect(peers) {
     if (!dom.filterPeerSelect) return;
 
     const currentValue = dom.filterPeerSelect.value;
-    dom.filterPeerSelect.innerHTML = '<option value="">-- Select a peer --</option>';
+    dom.filterPeerSelect.innerHTML = '';
 
     peers.forEach(peer => {
         const opt = document.createElement('option');
@@ -1631,9 +1631,15 @@ function populateFilterPeerSelect(peers) {
         dom.filterPeerSelect.appendChild(opt);
     });
 
-    // Restore selection if it still exists
+    // Restore selection if it still exists, otherwise use global selection or first peer
     if (currentValue && peers.some(p => p.name === currentValue)) {
         dom.filterPeerSelect.value = currentValue;
+    } else if (state.selectedNodeId && peers.some(p => p.name === state.selectedNodeId)) {
+        dom.filterPeerSelect.value = state.selectedNodeId;
+        loadFilterRules();
+    } else if (peers.length > 0 && !dom.filterPeerSelect.value) {
+        dom.filterPeerSelect.value = peers[0].name;
+        loadFilterRules();
     }
 }
 
@@ -1686,7 +1692,7 @@ function renderFilterRules(data) {
             if (data.error) {
                 dom.noFilterRules.innerHTML = `<span class="text-warning">⚠ ${data.error}</span>`;
             } else {
-                dom.noFilterRules.textContent = 'No filter rules configured. Select a peer to view their rules.';
+                dom.noFilterRules.textContent = 'No filter rules configured for this peer.';
             }
         }
         return;
@@ -1910,6 +1916,31 @@ function initMap() {
     });
 }
 
+// Initialize filter panel
+function initFilterPanel() {
+    // Subscribe filter to selection events
+    events.on('nodeSelected', (nodeId) => {
+        if (dom.filterPeerSelect && nodeId) {
+            // Check if the peer exists in the dropdown
+            const options = Array.from(dom.filterPeerSelect.options);
+            if (options.some(opt => opt.value === nodeId)) {
+                dom.filterPeerSelect.value = nodeId;
+                loadFilterRules();
+            }
+        }
+    });
+}
+
+// Handle filter peer selection change - emit global selection event
+function onFilterPeerChange() {
+    const peerName = dom.filterPeerSelect?.value;
+    if (peerName) {
+        selectNode(peerName);
+    }
+    loadFilterRules();
+}
+window.onFilterPeerChange = onFilterPeerChange;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     // Cache DOM elements first
@@ -1920,6 +1951,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize map (for geolocation display)
     initMap();
+
+    // Initialize filter panel
+    initFilterPanel();
 
     // Initialize charts
     initCharts();

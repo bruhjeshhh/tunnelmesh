@@ -172,9 +172,8 @@
             </div>
             <div class="collapsible-content">
                 <div class="filter-peer-select">
-                    <label for="filter-peer">Select Peer:</label>
-                    <select id="filter-peer" onchange="loadFilterRules()">
-                        <option value="">-- Select a peer --</option>
+                    <label for="filter-peer">Peer:</label>
+                    <select id="filter-peer" onchange="onFilterPeerChange()">
                     </select>
                 </div>
                 <div id="filter-info" style="display: none;">
@@ -194,7 +193,7 @@
                     <tbody id="filter-rules-body"></tbody>
                 </table>
                 <div id="no-filter-rules" class="empty-state" style="display: none;">
-                    No filter rules configured. Select a peer to view their rules.
+                    No filter rules configured for this peer.
                 </div>
             </div>
         </section>
