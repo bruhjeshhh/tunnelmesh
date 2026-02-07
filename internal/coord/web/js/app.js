@@ -1834,6 +1834,14 @@ async function addFilterRule() {
         return;
     }
 
+    // Confirm before pushing to all peers
+    if (destPeer === '__all__') {
+        const sourceDesc = sourcePeer ? ` from ${sourcePeer}` : '';
+        if (!confirm(`Push "${action} ${port}/${protocol.toUpperCase()}${sourceDesc}" to ALL connected peers?`)) {
+            return;
+        }
+    }
+
     try {
         const resp = await fetch('api/filter/rules', {
             method: 'POST',
