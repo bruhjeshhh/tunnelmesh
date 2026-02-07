@@ -16,6 +16,10 @@ pre-commit:
       glob: "internal/coord/web/js/**/*.js"
       run: biome check internal/coord/web/js/
       fail_text: "Fix JS linting errors: run 'biome check --write internal/coord/web/js/'"
+    js-test:
+      glob: "internal/coord/web/js/**/*.js"
+      run: cd internal/coord/web && bun test
+      fail_text: "JS tests failed"
 
 pre-push:
   parallel: true
