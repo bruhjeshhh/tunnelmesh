@@ -152,90 +152,38 @@ The admin interface has **no built-in authentication** - access control is based
 
 ## Configuration
 
+Generate configs with `tunnelmesh init --server --peer` or see the full [server.yaml.example](server.yaml.example) and [peer.yaml.example](peer.yaml.example) for all options.
+
 ### Server Configuration
 
 ```yaml
-# HTTP server address
-listen: ":8080"
-
-# Token for peer authentication
 auth_token: "your-secure-token"
 
-# Mesh network CIDR for IP allocation
-mesh_cidr: "172.30.0.0/16"
-
-# Domain suffix for hostnames
-domain_suffix: ".tunnelmesh"
-
-# Enable node location tracking (optional, disabled by default)
-# WARNING: Uses external IP geolocation API (ip-api.com)
-locations: false
-
-# Admin web interface
 admin:
   enabled: true
 
-# Service ports to auto-allow on peers (pushed through packet filter)
-# Default: [9443] for Prometheus metrics scraping
-service_ports: [9443]
+relay:
+  enabled: true
 
-# Optional: server participates as a mesh node
+s3:
+  enabled: true
+
+# Server also runs as a mesh peer
 join_mesh:
-  name: "server-node"
-  private_key: "~/.tunnelmesh/id_ed25519"
-  allow_exit_traffic: true  # Allow clients to route internet through this node
-  tun:
-    name: "tun-mesh0"
-    mtu: 1400
+  name: "coordinator"
   dns:
     enabled: true
-    listen: "127.0.0.53:5353"
-    cache_ttl: 300
-    aliases:
-      - "coordinator"       # coordinator.tunnelmesh -> this node's IP
 ```
 
 ### Peer Configuration
 
 ```yaml
-# Unique node name
 name: "mynode"
-
-# Coordination server URL
-server: "http://coord.example.com:8080"
-
-# Must match server auth_token
+server: "https://coord.example.com:8443"
 auth_token: "your-secure-token"
 
-# SSH server port for incoming peer connections
-ssh_port: 2222
-
-# Path to SSH private key
-private_key: "~/.tunnelmesh/id_ed25519"
-
-# Exit node settings (optional)
-exit_node: "server-node"      # Route internet traffic through this peer
-allow_exit_traffic: false     # Set true to allow others to use this node as exit
-
-# Manual location (optional, overrides IP geolocation)
-location:
-  latitude: 52.3676
-  longitude: 4.9041
-
-# TUN interface settings
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-
-# Local DNS resolver
 dns:
   enabled: true
-  listen: "127.0.0.53:5353"
-  cache_ttl: 300
-  # Custom DNS aliases for this node (resolved mesh-wide)
-  aliases:
-    - "webserver"           # webserver.tunnelmesh -> this node's IP
-    - "api.mynode"          # api.mynode.tunnelmesh -> this node's IP
 ```
 
 ### Transport Layer
@@ -338,29 +286,34 @@ The tool searches for config files in the following order:
 ## CLI Quick Reference
 
 ```bash
-# First time setup
-tunnelmesh init                    # Generate SSH keys
+# Coordinator setup (server + peer)
+tunnelmesh init --server --peer    # Generate config
+tunnelmesh user setup              # Create identity
+tunnelmesh serve -c server.yaml    # Start coordinator
+tunnelmesh user register --server https://localhost:8443  # Register as admin
 
-# Run coordination server
-sudo tunnelmesh serve -c server.yaml
-
-# Join mesh as peer (saves config as named context)
-sudo tunnelmesh join -c peer.yaml --context home
+# Peer setup (joining existing mesh)
+tunnelmesh user setup              # Create identity (once)
+tunnelmesh join --server coord.example.com --token <token> --context work
+tunnelmesh user register           # Get S3 credentials
 
 # Manage contexts
 tunnelmesh context list            # List all contexts
 tunnelmesh context use work        # Switch active context
 
-# Check status (uses active context)
+# Check status
 tunnelmesh status                  # Connection status
 tunnelmesh peers                   # List all peers
 
-# System service (uses active context)
+# S3 bucket management
+tunnelmesh buckets list            # List buckets
+tunnelmesh buckets create my-data  # Create bucket
+tunnelmesh buckets objects my-data # List objects
+
+# System service
 sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
-
-**Context management:** After joining with `--context`, TunnelMesh remembers your configuration. Commands automatically use the active context—no need to specify `-c` every time.
 
 See **[CLI Reference](docs/CLI.md)** for complete documentation, all flags, and walkthroughs.
 
