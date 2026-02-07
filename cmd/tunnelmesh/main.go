@@ -479,12 +479,11 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 
 	log.Info().
 		Str("server", cfg.Server).
-		Str("name", cfg.Name).
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required in config")
+	if cfg.Server == "" || cfg.AuthToken == "" {
+		return fmt.Errorf("server and token are required in config")
 	}
 
 	// Log network interface information for debugging
@@ -803,8 +802,6 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if authToken != "" {
 		cfg.AuthToken = authToken
 	}
-	// Always use system hostname as node name
-	cfg.Name, _ = os.Hostname()
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
@@ -822,8 +819,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required\nHint: run with --server and --token flags to update context credentials")
+	if cfg.Server == "" || cfg.AuthToken == "" {
+		return fmt.Errorf("server and token are required\nHint: run with --server and --token flags to update context credentials")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -851,8 +848,11 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 }
 
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
-	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required")
+	// Always use system hostname as node name
+	cfg.Name, _ = os.Hostname()
+
+	if cfg.Server == "" || cfg.AuthToken == "" {
+		return fmt.Errorf("server and token are required")
 	}
 
 	// Apply configured log level from config file
