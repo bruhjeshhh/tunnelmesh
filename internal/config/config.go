@@ -74,6 +74,7 @@ type PeerConfig struct {
 	AuthToken         string              `yaml:"auth_token"`
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
+	ControlSocket     string              `yaml:"control_socket"`     // Unix socket path for CLI commands (default: /var/run/tunnelmesh.sock)
 	HeartbeatInterval string              `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
 	MetricsEnabled    *bool               `yaml:"metrics_enabled"`    // Enable Prometheus metrics (default: true). Disable for 10Gbps+ high-performance networks.
 	MetricsPort       int                 `yaml:"metrics_port"`       // Prometheus metrics port on mesh IP (default: 9443)

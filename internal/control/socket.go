@@ -18,11 +18,7 @@ import (
 
 // DefaultSocketPath returns the default control socket path.
 func DefaultSocketPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "/tmp/tunnelmesh.sock"
-	}
-	return filepath.Join(home, ".tunnelmesh", "control.sock")
+	return "/var/run/tunnelmesh.sock"
 }
 
 // Request types for control commands.

@@ -192,6 +192,5 @@ func TestClient_ConnectionRefused(t *testing.T) {
 
 func TestDefaultSocketPath(t *testing.T) {
 	path := DefaultSocketPath()
-	assert.Contains(t, path, "tunnelmesh")
-	assert.Contains(t, path, "control.sock")
+	assert.Equal(t, "/var/run/tunnelmesh.sock", path)
 }
