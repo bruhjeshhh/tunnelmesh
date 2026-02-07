@@ -386,8 +386,11 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	// Create RBAC authorizer for S3
 	rbacAuth := s3.NewRBACAuthorizer(s.s3Credentials, s.s3Authorizer)
 
+	// Initialize S3 metrics
+	s3Metrics := s3.InitS3Metrics(nil)
+
 	// Create S3 server
-	s.s3Server = s3.NewServer(store, rbacAuth)
+	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
 
 	// Create system store for internal coordinator data
 	// Use a service user ID for the coordinator

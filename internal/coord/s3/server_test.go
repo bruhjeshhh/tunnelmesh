@@ -37,7 +37,7 @@ func newTestServer(t *testing.T) (*Server, *Store) {
 	t.Helper()
 	store := newTestStore(t)
 	auth := &mockAuthorizer{userID: "alice", allowAll: true}
-	server := NewServer(store, auth)
+	server := NewServer(store, auth, nil) // nil metrics for tests
 	return server, store
 }
 
@@ -419,7 +419,7 @@ func TestListObjectsBucketNotFound(t *testing.T) {
 func TestAccessDenied(t *testing.T) {
 	store := newTestStore(t)
 	auth := &mockAuthorizer{denyAll: true}
-	server := NewServer(store, auth)
+	server := NewServer(store, auth, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()

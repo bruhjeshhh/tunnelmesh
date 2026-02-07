@@ -16,6 +16,7 @@ import (
 type Server struct {
 	store      *Store
 	authorizer Authorizer
+	metrics    *S3Metrics
 }
 
 // Authorizer is the interface for checking S3 permissions.
@@ -26,10 +27,12 @@ type Authorizer interface {
 }
 
 // NewServer creates a new S3 server.
-func NewServer(store *Store, authorizer Authorizer) *Server {
+// If metrics is nil, metrics will not be recorded.
+func NewServer(store *Store, authorizer Authorizer, metrics *S3Metrics) *Server {
 	return &Server{
 		store:      store,
 		authorizer: authorizer,
+		metrics:    metrics,
 	}
 }
 
@@ -353,8 +356,12 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 		w.Header().Set(k, v)
 	}
 
-	if _, err := io.Copy(w, reader); err != nil {
+	n, err := io.Copy(w, reader)
+	if err != nil {
 		log.Error().Err(err).Msg("Failed to stream object")
+	}
+	if s.metrics != nil && n > 0 {
+		s.metrics.RecordDownload(n)
 	}
 }
 
@@ -394,6 +401,10 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 	w.Header().Set("ETag", meta.ETag)
 	w.WriteHeader(http.StatusOK)
+
+	if s.metrics != nil && meta.Size > 0 {
+		s.metrics.RecordUpload(meta.Size)
+	}
 }
 
 // deleteObject handles DELETE /{bucket}/{key}.
