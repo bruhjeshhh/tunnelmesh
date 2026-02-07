@@ -118,6 +118,7 @@ function initDOMCache() {
     dom.filterModal = document.getElementById('filter-modal');
     dom.filterInfo = document.getElementById('filter-info');
     dom.filterDefaultPolicy = document.getElementById('filter-default-policy');
+    dom.filterTempWarning = document.getElementById('filter-temp-warning');
     dom.addFilterRuleBtn = document.getElementById('add-filter-rule-btn');
 
     // Chart canvases
@@ -1697,6 +1698,7 @@ function renderFilterRules(data) {
 
     if (!data.rules || data.rules.length === 0) {
         dom.filterRulesBody.innerHTML = '';
+        if (dom.filterTempWarning) dom.filterTempWarning.style.display = 'none';
         if (dom.noFilterRules) {
             dom.noFilterRules.style.display = 'block';
             // Show error message if peer query failed
@@ -1710,6 +1712,12 @@ function renderFilterRules(data) {
     }
 
     if (dom.noFilterRules) dom.noFilterRules.style.display = 'none';
+
+    // Check for temporary rules and show warning if any exist
+    const hasTemporaryRules = data.rules.some(r => r.source === 'temporary');
+    if (dom.filterTempWarning) {
+        dom.filterTempWarning.style.display = hasTemporaryRules ? 'block' : 'none';
+    }
 
     // Sort rules: coordinator first, then config, temporary, service
     const sourceOrder = { 'coordinator': 0, 'config': 1, 'temporary': 2, 'service': 3 };
