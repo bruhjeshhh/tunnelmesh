@@ -1689,7 +1689,14 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	// Show ready message
 	fmt.Fprintf(os.Stderr, "\n  ✓ Connected to mesh as %s (%s)\n", cfg.Name, resp.MeshIP)
+	fmt.Fprintf(os.Stderr, "  Opening https://this.tm in 3 seconds...\n")
 	fmt.Fprintf(os.Stderr, "  Press CTRL+C to disconnect\n\n")
+
+	// Open browser to mesh dashboard after delay
+	go func() {
+		time.Sleep(3 * time.Second)
+		openBrowser("https://this.tm")
+	}()
 
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
@@ -2379,4 +2386,18 @@ func removeWindowsResolver(domain string) error {
 
 	log.Info().Msg("Windows NRPT rule removed")
 	return nil
+}
+
+// openBrowser opens the specified URL in the default browser.
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default: // linux, freebsd, etc.
+		cmd = exec.Command("xdg-open", url)
+	}
+	_ = cmd.Start()
 }
