@@ -317,11 +317,21 @@ func runBenchmark(cfg Config, peer peerInfo, chaos benchmark.ChaosConfig, chaosN
 	fmt.Printf("  [%d] %s -> %s (%s, %s, %s)\n",
 		activeNum, cfg.LocalPeer, peer.Name, direction, bytesize.Format(cfg.Size), chaosDesc)
 
+	// Calculate timeout based on bandwidth limit (with 2x headroom for latency/jitter)
+	timeout := 180 * time.Second
+	if chaos.BandwidthBps > 0 {
+		// Time = Size / Bandwidth, with 2x headroom
+		transferTime := time.Duration(float64(cfg.Size) / float64(chaos.BandwidthBps) * float64(time.Second) * 2)
+		if transferTime > timeout {
+			timeout = transferTime
+		}
+	}
+
 	benchCfg := benchmark.Config{
 		PeerName:  peer.Name,
 		Size:      cfg.Size,
 		Direction: direction,
-		Timeout:   180 * time.Second, // Longer timeout for bandwidth-limited tests
+		Timeout:   timeout,
 		Port:      benchmark.DefaultPort,
 		Chaos:     chaos,
 	}

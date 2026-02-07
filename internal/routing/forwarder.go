@@ -64,6 +64,7 @@ type ForwarderStats struct {
 	DroppedNoRoute  uint64
 	DroppedNoTunnel uint64
 	DroppedNonIPv4  uint64
+	DroppedFiltered uint64 // Packets dropped by packet filter
 	Errors          uint64
 	ExitPacketsSent uint64 // Packets sent through exit node
 	ExitBytesSent   uint64 // Bytes sent through exit node
@@ -84,6 +85,7 @@ type Forwarder struct {
 	tun                TUNDevice
 	relay              RelayPacketSender // Optional persistent relay for fallback
 	wgHandler          WGPacketHandler   // Optional WireGuard handler for local WG clients
+	filter             *PacketFilter     // Optional packet filter for incoming traffic
 	bufPool            *PacketBufferPool
 	zeroCopyPool       *ZeroCopyBufferPool // Pool for zero-copy buffers
 	framePool          *sync.Pool          // Pool for frame buffers (header + MTU)
@@ -92,6 +94,7 @@ type Forwarder struct {
 	tunMu              sync.RWMutex
 	relayMu            sync.RWMutex
 	wgMu               sync.RWMutex
+	filterMu           sync.RWMutex
 	localIP            net.IP
 	localIPMu          sync.RWMutex
 	onDeadTunnel       func(peerName string) // Callback when tunnel write fails
@@ -190,6 +193,21 @@ func (f *Forwarder) SetWGHandler(handler WGPacketHandler) {
 	defer f.wgMu.Unlock()
 	f.wgHandler = handler
 	log.Debug().Bool("handler_set", handler != nil).Msg("forwarder WG handler updated")
+}
+
+// SetFilter sets the packet filter for incoming traffic.
+func (f *Forwarder) SetFilter(filter *PacketFilter) {
+	f.filterMu.Lock()
+	defer f.filterMu.Unlock()
+	f.filter = filter
+	log.Debug().Bool("filter_set", filter != nil).Msg("forwarder packet filter updated")
+}
+
+// Filter returns the current packet filter.
+func (f *Forwarder) Filter() *PacketFilter {
+	f.filterMu.RLock()
+	defer f.filterMu.RUnlock()
+	return f.filter
 }
 
 // SetOnDeadTunnel sets a callback that is called when a tunnel write fails.
@@ -519,8 +537,19 @@ func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeN
 }
 
 // ReceivePacket writes a received packet to the TUN device.
+// Incoming packets are filtered by the packet filter before delivery.
 func (f *Forwarder) ReceivePacket(packet []byte) error {
 	collectStats := atomic.LoadUint32(&f.statsEnabled) == 1
+
+	// Apply packet filter to incoming traffic
+	f.filterMu.RLock()
+	filter := f.filter
+	f.filterMu.RUnlock()
+
+	if filter != nil && filter.ShouldDrop(packet) {
+		f.incStat(collectStats, &f.stats.DroppedFiltered)
+		return nil // Silently drop filtered packets
+	}
 
 	f.tunMu.RLock()
 	tun := f.tun
@@ -748,6 +777,7 @@ func (f *Forwarder) Stats() ForwarderStats {
 		DroppedNoRoute:  atomic.LoadUint64(&f.stats.DroppedNoRoute),
 		DroppedNoTunnel: atomic.LoadUint64(&f.stats.DroppedNoTunnel),
 		DroppedNonIPv4:  atomic.LoadUint64(&f.stats.DroppedNonIPv4),
+		DroppedFiltered: atomic.LoadUint64(&f.stats.DroppedFiltered),
 		Errors:          atomic.LoadUint64(&f.stats.Errors),
 		ExitPacketsSent: atomic.LoadUint64(&f.stats.ExitPacketsSent),
 		ExitBytesSent:   atomic.LoadUint64(&f.stats.ExitBytesSent),

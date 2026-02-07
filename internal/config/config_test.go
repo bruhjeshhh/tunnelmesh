@@ -1038,3 +1038,193 @@ func TestApplyLogLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterConfig_IsDefaultDeny(t *testing.T) {
+	tests := []struct {
+		name   string
+		config FilterConfig
+		want   bool
+	}{
+		{
+			name:   "nil defaults to true",
+			config: FilterConfig{},
+			want:   true,
+		},
+		{
+			name:   "explicit true",
+			config: FilterConfig{DefaultDeny: boolPtr(true)},
+			want:   true,
+		},
+		{
+			name:   "explicit false",
+			config: FilterConfig{DefaultDeny: boolPtr(false)},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.config.IsDefaultDeny())
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func TestFilterConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  FilterConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "empty rules is valid",
+			config:  FilterConfig{},
+			wantErr: false,
+		},
+		{
+			name: "valid TCP allow rule",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: 6, Action: "allow"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid UDP deny rule",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 53, Protocol: 17, Action: "deny"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple valid rules",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: 6, Action: "allow"},
+					{Port: 80, Protocol: 6, Action: "allow"},
+					{Port: 443, Protocol: 6, Action: "allow"},
+					{Port: 53, Protocol: 17, Action: "allow"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing port",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 0, Protocol: 6, Action: "allow"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "port is required",
+		},
+		{
+			name: "invalid protocol",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: 1, Action: "allow"}, // ICMP not supported
+				},
+			},
+			wantErr: true,
+			errMsg:  "protocol must be 6 (TCP) or 17 (UDP)",
+		},
+		{
+			name: "invalid action",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: 6, Action: "block"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "action must be 'allow' or 'deny'",
+		},
+		{
+			name: "empty action",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: 6, Action: ""},
+				},
+			},
+			wantErr: true,
+			errMsg:  "action must be 'allow' or 'deny'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadPeerConfig_WithFilter(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "mynode"
+server: "https://coord.example.com"
+auth_token: "peer-token"
+filter:
+  default_deny: true
+  rules:
+    - port: 22
+      protocol: 6
+      action: allow
+    - port: 80
+      protocol: 6
+      action: allow
+    - port: 53
+      protocol: 17
+      action: allow
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Filter.IsDefaultDeny())
+	assert.Len(t, cfg.Filter.Rules, 3)
+	assert.Equal(t, uint16(22), cfg.Filter.Rules[0].Port)
+	assert.Equal(t, uint8(6), cfg.Filter.Rules[0].Protocol)
+	assert.Equal(t, "allow", cfg.Filter.Rules[0].Action)
+}
+
+func TestLoadServerConfig_WithFilter(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":8080"
+auth_token: "test-token"
+filter:
+  default_deny: true
+  rules:
+    - port: 22
+      protocol: 6
+      action: allow
+    - port: 9443
+      protocol: 6
+      action: allow
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Filter.IsDefaultDeny())
+	assert.Len(t, cfg.Filter.Rules, 2)
+}

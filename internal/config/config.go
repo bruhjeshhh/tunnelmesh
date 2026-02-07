@@ -63,6 +63,7 @@ type ServerConfig struct {
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
+	Filter            FilterConfig          `yaml:"filter"` // Global packet filter rules for all peers
 	JoinMesh          *PeerConfig           `yaml:"join_mesh,omitempty"`
 }
 
@@ -83,6 +84,7 @@ type PeerConfig struct {
 	Geolocation       GeolocationConfig   `yaml:"geolocation"`        // Manual geolocation coordinates
 	ExitNode          string              `yaml:"exit_node"`          // Name of peer to route internet traffic through
 	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this node to act as exit node for other peers
+	Filter            FilterConfig        `yaml:"filter"`             // Local packet filter rules
 	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
 }
 
@@ -113,6 +115,42 @@ type LokiConfig struct {
 	URL           string `yaml:"url"`            // Loki push URL (e.g., "http://172.30.0.1:3100")
 	BatchSize     int    `yaml:"batch_size"`     // Max entries before flush (default: 100)
 	FlushInterval string `yaml:"flush_interval"` // Flush interval (default: "5s")
+}
+
+// FilterRule represents a single packet filter rule for config files.
+type FilterRule struct {
+	Port     uint16 `yaml:"port"`     // Port number (1-65535)
+	Protocol uint8  `yaml:"protocol"` // 6=TCP, 17=UDP
+	Action   string `yaml:"action"`   // "allow" or "deny"
+}
+
+// FilterConfig holds packet filter configuration.
+// When default_deny is true (whitelist mode), all ports are blocked unless explicitly allowed.
+type FilterConfig struct {
+	DefaultDeny *bool        `yaml:"default_deny"` // Block all by default (default: true)
+	Rules       []FilterRule `yaml:"rules"`        // Filter rules
+}
+
+// IsDefaultDeny returns whether the filter defaults to denying traffic.
+// Returns true by default (whitelist mode) if not explicitly set.
+func (f *FilterConfig) IsDefaultDeny() bool {
+	return f.DefaultDeny == nil || *f.DefaultDeny
+}
+
+// Validate checks if filter configuration is valid.
+func (f *FilterConfig) Validate() error {
+	for i, rule := range f.Rules {
+		if rule.Port == 0 {
+			return fmt.Errorf("filter.rules[%d].port is required", i)
+		}
+		if rule.Protocol != 6 && rule.Protocol != 17 {
+			return fmt.Errorf("filter.rules[%d].protocol must be 6 (TCP) or 17 (UDP), got %d", i, rule.Protocol)
+		}
+		if rule.Action != "allow" && rule.Action != "deny" {
+			return fmt.Errorf("filter.rules[%d].action must be 'allow' or 'deny', got %q", i, rule.Action)
+		}
+	}
+	return nil
 }
 
 // Validate checks if the geolocation coordinates are within valid ranges.
@@ -323,6 +361,10 @@ func (c *ServerConfig) Validate() error {
 			return fmt.Errorf("invalid mesh_cidr: %w", err)
 		}
 	}
+	// Validate filter config
+	if err := c.Filter.Validate(); err != nil {
+		return err
+	}
 	// Validate JoinMesh if configured
 	if c.JoinMesh != nil {
 		if c.JoinMesh.Name == "" {
@@ -364,6 +406,10 @@ func (c *PeerConfig) Validate() error {
 	}
 	// Validate DNS aliases
 	if err := c.DNS.ValidateAliases(c.Name); err != nil {
+		return err
+	}
+	// Validate filter config
+	if err := c.Filter.Validate(); err != nil {
 		return err
 	}
 	return nil

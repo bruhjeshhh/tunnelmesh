@@ -1041,3 +1041,137 @@ func TestForwarderStats_ReEnable(t *testing.T) {
 	stats = fwd.Stats()
 	assert.Equal(t, uint64(1), stats.PacketsSent, "stats should be collected after re-enabling")
 }
+
+// Packet Filter Tests
+
+func TestForwarder_PacketFilter_DropsByDefault(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+
+	// Create filter with default deny (whitelist mode)
+	filter := NewPacketFilter(true)
+	fwd.SetFilter(filter)
+
+	// Create incoming TCP packet to port 22
+	srcIP := net.ParseIP("172.30.0.2").To4()
+	dstIP := net.ParseIP("172.30.0.1").To4()
+	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+
+	// Receive the packet - should be dropped (no allow rule for port 22)
+	err := fwd.ReceivePacket(packet)
+	require.NoError(t, err) // No error, just silently dropped
+
+	// Verify packet was NOT written to TUN
+	written := mockTun.GetWrittenPackets()
+	assert.Empty(t, written, "packet should be dropped by filter")
+
+	// Check stats
+	stats := fwd.Stats()
+	assert.Equal(t, uint64(1), stats.DroppedFiltered, "dropped packet should be counted")
+	assert.Equal(t, uint64(0), stats.PacketsReceived, "dropped packet should not count as received")
+}
+
+func TestForwarder_PacketFilter_AllowsWithRule(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+
+	// Create filter with default deny, but allow port 22
+	filter := NewPacketFilter(true)
+	filter.SetPeerConfigRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+	fwd.SetFilter(filter)
+
+	// Create incoming TCP packet to port 22
+	srcIP := net.ParseIP("172.30.0.2").To4()
+	dstIP := net.ParseIP("172.30.0.1").To4()
+	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+
+	// Receive the packet - should be allowed
+	err := fwd.ReceivePacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet WAS written to TUN
+	written := mockTun.GetWrittenPackets()
+	assert.Equal(t, packet, written, "packet should pass through filter")
+
+	// Check stats
+	stats := fwd.Stats()
+	assert.Equal(t, uint64(0), stats.DroppedFiltered, "no packets should be dropped")
+	assert.Equal(t, uint64(1), stats.PacketsReceived, "packet should count as received")
+}
+
+func TestForwarder_PacketFilter_ICMP_NotFiltered(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+
+	// Create filter with default deny
+	filter := NewPacketFilter(true)
+	fwd.SetFilter(filter)
+
+	// Create incoming ICMP packet
+	srcIP := net.ParseIP("172.30.0.2").To4()
+	dstIP := net.ParseIP("172.30.0.1").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoICMP, []byte("ping"))
+
+	// Receive the packet - ICMP should pass (not filtered)
+	err := fwd.ReceivePacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet WAS written to TUN
+	written := mockTun.GetWrittenPackets()
+	assert.Equal(t, packet, written, "ICMP should not be filtered")
+}
+
+func TestForwarder_PacketFilter_Nil(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	mockTun := newMockTUN()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetTUN(mockTun)
+	// No filter set - nil
+
+	// Create incoming TCP packet
+	srcIP := net.ParseIP("172.30.0.2").To4()
+	dstIP := net.ParseIP("172.30.0.1").To4()
+	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+
+	// Receive the packet - should pass (no filter)
+	err := fwd.ReceivePacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet WAS written to TUN
+	written := mockTun.GetWrittenPackets()
+	assert.Equal(t, packet, written, "packet should pass when no filter set")
+}
+
+func TestForwarder_Filter_GetterSetter(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Initially nil
+	assert.Nil(t, fwd.Filter())
+
+	// Set filter
+	filter := NewPacketFilter(true)
+	fwd.SetFilter(filter)
+	assert.Equal(t, filter, fwd.Filter())
+
+	// Clear filter
+	fwd.SetFilter(nil)
+	assert.Nil(t, fwd.Filter())
+}

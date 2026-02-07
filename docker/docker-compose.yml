@@ -158,7 +158,8 @@ services:
       - ../monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/ready"]
+      # Use /metrics instead of /ready - single-instance Loki's readiness check can be flaky
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/metrics"]
       interval: 10s
       timeout: 5s
       retries: 3
