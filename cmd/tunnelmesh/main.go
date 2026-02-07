@@ -300,6 +300,12 @@ Examples:
 	// Buckets command - manage S3 buckets
 	rootCmd.AddCommand(newBucketsCmd())
 
+	// Group command - manage groups
+	rootCmd.AddCommand(newGroupCmd())
+
+	// Share command - manage file shares
+	rootCmd.AddCommand(newShareCmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1726,8 +1732,8 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "  Disconnected from mesh.")
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  To reconnect:         tunnelmesh join")
-	fmt.Fprintln(os.Stderr, "  To run as a service:  tunnelmesh service install && tunnelmesh service start")
+	fmt.Fprintln(os.Stderr, "  To reconnect:         sudo tunnelmesh join")
+	fmt.Fprintln(os.Stderr, "  To run as a service:  sudo tunnelmesh service install && sudo tunnelmesh service start")
 	fmt.Fprintln(os.Stderr)
 
 	return nil

@@ -1966,6 +1966,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check if Loki is available for logs
     checkLokiAvailable();
 
+    // Load user management (users, groups, shares)
+    checkUserManagement();
+
     // Add client button handler
     if (dom.addWgClientBtn) {
         dom.addWgClientBtn.addEventListener('click', showAddWGClientModal);
@@ -1979,6 +1982,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // Setup modal background click handlers
     wgModal.setupBackgroundClose();
     filterModal.setupBackgroundClose();
+
+    // Setup background click for group modal
+    const groupModal = document.getElementById('group-modal');
+    if (groupModal) {
+        groupModal.addEventListener('click', (e) => {
+            if (e.target === groupModal) closeGroupModal();
+        });
+    }
+
+    // Setup background click for share modal
+    const shareModal = document.getElementById('share-modal');
+    if (shareModal) {
+        shareModal.addEventListener('click', (e) => {
+            if (e.target === shareModal) closeShareModal();
+        });
+    }
 
     // Logs panel resize handle
     if (dom.logsResizeHandle && dom.logsContainer) {
@@ -2047,6 +2066,235 @@ function initLogsResize() {
     document.addEventListener('touchend', () => {
         isResizing = false;
     });
+}
+
+// --- Users, Groups, and File Shares Management ---
+
+// Check if S3/user management is enabled and show sections
+async function checkUserManagement() {
+    try {
+        const resp = await fetch('api/users');
+        if (resp.ok) {
+            document.getElementById('users-section').style.display = 'block';
+            document.getElementById('groups-section').style.display = 'block';
+            document.getElementById('shares-section').style.display = 'block';
+            const users = await resp.json();
+            updateUsersTable(users);
+            fetchGroups();
+            fetchShares();
+        }
+    } catch (_err) {
+        // User management not enabled
+    }
+}
+
+function updateUsersTable(users) {
+    const tbody = document.getElementById('users-body');
+    const noUsers = document.getElementById('no-users');
+
+    if (!users || users.length === 0) {
+        tbody.innerHTML = '';
+        noUsers.style.display = 'block';
+        return;
+    }
+
+    noUsers.style.display = 'none';
+    tbody.innerHTML = users.map(u => `
+        <tr>
+            <td><code>${TM.format.escapeHtml(u.id)}</code></td>
+            <td>${TM.format.escapeHtml(u.name || '-')}</td>
+            <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
+            <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${TM.format.escapeHtml(g)}</span>`).join(' ') : '-'}</td>
+            <td>${u.last_seen ? formatRelativeTime(u.last_seen) : '-'}</td>
+            <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
+        </tr>
+    `).join('');
+}
+
+async function fetchGroups() {
+    try {
+        const resp = await fetch('api/groups');
+        if (resp.ok) {
+            const groups = await resp.json();
+            updateGroupsTable(groups);
+        }
+    } catch (err) {
+        console.error('Failed to fetch groups:', err);
+    }
+}
+
+function updateGroupsTable(groups) {
+    const tbody = document.getElementById('groups-body');
+    const noGroups = document.getElementById('no-groups');
+
+    if (!groups || groups.length === 0) {
+        tbody.innerHTML = '';
+        noGroups.style.display = 'block';
+        return;
+    }
+
+    noGroups.style.display = 'none';
+    tbody.innerHTML = groups.map(g => `
+        <tr>
+            <td><strong>${TM.format.escapeHtml(g.name)}</strong></td>
+            <td>${TM.format.escapeHtml(g.description || '-')}</td>
+            <td>${g.members ? g.members.length : 0}</td>
+            <td>${g.builtin ? 'Yes' : 'No'}</td>
+            <td>
+                ${!g.builtin ? `<button class="btn-small btn-danger" onclick="deleteGroup('${TM.format.escapeHtml(g.name)}')">Delete</button>` : '-'}
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openGroupModal() {
+    document.getElementById('group-modal').style.display = 'flex';
+    document.getElementById('group-name').value = '';
+    document.getElementById('group-description').value = '';
+    document.getElementById('group-name').focus();
+}
+
+function closeGroupModal() {
+    document.getElementById('group-modal').style.display = 'none';
+}
+
+async function createGroup() {
+    const name = document.getElementById('group-name').value.trim();
+    const description = document.getElementById('group-description').value.trim();
+
+    if (!name) {
+        TM.toast('Group name is required', 'error');
+        return;
+    }
+
+    try {
+        const resp = await fetch('api/groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description })
+        });
+
+        if (resp.ok) {
+            TM.toast(`Group "${name}" created`, 'success');
+            closeGroupModal();
+            fetchGroups();
+        } else {
+            const data = await resp.json();
+            TM.toast(data.error || 'Failed to create group', 'error');
+        }
+    } catch (err) {
+        TM.toast('Failed to create group: ' + err.message, 'error');
+    }
+}
+
+async function deleteGroup(name) {
+    if (!confirm(`Delete group "${name}"?`)) return;
+
+    try {
+        const resp = await fetch(`api/groups/${name}`, { method: 'DELETE' });
+        if (resp.ok) {
+            TM.toast(`Group "${name}" deleted`, 'success');
+            fetchGroups();
+        } else {
+            const data = await resp.json();
+            TM.toast(data.error || 'Failed to delete group', 'error');
+        }
+    } catch (err) {
+        TM.toast('Failed to delete group: ' + err.message, 'error');
+    }
+}
+
+async function fetchShares() {
+    try {
+        const resp = await fetch('api/shares');
+        if (resp.ok) {
+            const shares = await resp.json();
+            updateSharesTable(shares);
+        }
+    } catch (err) {
+        console.error('Failed to fetch shares:', err);
+    }
+}
+
+function updateSharesTable(shares) {
+    const tbody = document.getElementById('shares-body');
+    const noShares = document.getElementById('no-shares');
+
+    if (!shares || shares.length === 0) {
+        tbody.innerHTML = '';
+        noShares.style.display = 'block';
+        return;
+    }
+
+    noShares.style.display = 'none';
+    tbody.innerHTML = shares.map(s => `
+        <tr>
+            <td><strong>${TM.format.escapeHtml(s.name)}</strong></td>
+            <td>${TM.format.escapeHtml(s.description || '-')}</td>
+            <td>${TM.format.escapeHtml(s.owner)}</td>
+            <td>${s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
+            <td>
+                <button class="btn-small btn-danger" onclick="deleteShare('${TM.format.escapeHtml(s.name)}')">Delete</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openShareModal() {
+    document.getElementById('share-modal').style.display = 'flex';
+    document.getElementById('share-name').value = '';
+    document.getElementById('share-description').value = '';
+    document.getElementById('share-name').focus();
+}
+
+function closeShareModal() {
+    document.getElementById('share-modal').style.display = 'none';
+}
+
+async function createShare() {
+    const name = document.getElementById('share-name').value.trim();
+    const description = document.getElementById('share-description').value.trim();
+
+    if (!name) {
+        TM.toast('Share name is required', 'error');
+        return;
+    }
+
+    try {
+        const resp = await fetch('api/shares', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description })
+        });
+
+        if (resp.ok) {
+            TM.toast(`File share "${name}" created`, 'success');
+            closeShareModal();
+            fetchShares();
+        } else {
+            const data = await resp.json();
+            TM.toast(data.error || 'Failed to create share', 'error');
+        }
+    } catch (err) {
+        TM.toast('Failed to create share: ' + err.message, 'error');
+    }
+}
+
+async function deleteShare(name) {
+    if (!confirm(`Delete file share "${name}"? All files will be deleted.`)) return;
+
+    try {
+        const resp = await fetch(`api/shares/${name}`, { method: 'DELETE' });
+        if (resp.ok) {
+            TM.toast(`File share "${name}" deleted`, 'success');
+            fetchShares();
+        } else {
+            const data = await resp.json();
+            TM.toast(data.error || 'Failed to delete share', 'error');
+        }
+    } catch (err) {
+        TM.toast('Failed to delete share: ' + err.message, 'error');
+    }
 }
 
 // Cleanup on page unload to prevent memory leaks
