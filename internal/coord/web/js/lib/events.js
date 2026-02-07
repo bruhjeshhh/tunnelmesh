@@ -1,14 +1,14 @@
 // TunnelMesh Dashboard - Event Bus
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.events = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     /**
@@ -35,7 +35,7 @@
              */
             off(event, fn) {
                 if (listeners[event]) {
-                    listeners[event] = listeners[event].filter(f => f !== fn);
+                    listeners[event] = listeners[event].filter((f) => f !== fn);
                 }
             },
 
@@ -45,7 +45,7 @@
              * @param {*} data - Data to pass to listeners
              */
             emit(event, data) {
-                listeners[event]?.forEach(fn => {
+                listeners[event]?.forEach((fn) => {
                     try {
                         fn(data);
                     } catch (err) {
@@ -84,9 +84,9 @@
                 if (event) {
                     delete listeners[event];
                 } else {
-                    Object.keys(listeners).forEach(key => delete listeners[key]);
+                    for (const key of Object.keys(listeners)) delete listeners[key];
                 }
-            }
+            },
         };
     }
 
@@ -101,6 +101,6 @@
         emit: defaultBus.emit.bind(defaultBus),
         once: defaultBus.once.bind(defaultBus),
         listenerCount: defaultBus.listenerCount.bind(defaultBus),
-        clear: defaultBus.clear.bind(defaultBus)
+        clear: defaultBus.clear.bind(defaultBus),
     };
 });

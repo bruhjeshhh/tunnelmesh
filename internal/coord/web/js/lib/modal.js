@@ -1,14 +1,14 @@
 // TunnelMesh Dashboard - Modal Utilities
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.modal = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     /**
@@ -21,11 +21,7 @@
      * @returns {Object} Modal controller
      */
     function createModalController(modalEl, options = {}) {
-        const {
-            onOpen,
-            onClose,
-            closeOnBackgroundClick = true
-        } = options;
+        const { onOpen, onClose, closeOnBackgroundClick = true } = options;
 
         // Resolve element if string ID passed
         const getElement = () => {
@@ -103,7 +99,7 @@
              */
             getElement() {
                 return getElement();
-            }
+            },
         };
 
         return controller;
@@ -128,7 +124,7 @@
             onClose: () => {
                 if (onReset) onReset();
                 if (modalOptions.onClose) modalOptions.onClose();
-            }
+            },
         });
 
         return {
@@ -166,7 +162,7 @@
                 if (form) {
                     form.reset();
                 }
-            }
+            },
         };
     }
 
@@ -188,6 +184,6 @@
     return {
         createModalController,
         createFormModalController,
-        confirm
+        confirm,
     };
 });

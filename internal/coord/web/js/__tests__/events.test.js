@@ -104,7 +104,9 @@ describe('EventBus', () => {
 
     test('handles errors in listeners gracefully', () => {
         const bus = createEventBus();
-        const errorCallback = () => { throw new Error('test error'); };
+        const errorCallback = () => {
+            throw new Error('test error');
+        };
         const safeCallback = mock(() => {});
 
         bus.on('test', errorCallback);

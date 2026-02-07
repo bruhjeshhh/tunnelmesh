@@ -12,6 +12,10 @@ pre-commit:
       glob: "*.go"
       run: golangci-lint run --new-from-rev=HEAD
       fail_text: "Fix linting errors before committing"
+    js-lint:
+      glob: "internal/coord/web/js/**/*.js"
+      run: biome check internal/coord/web/js/
+      fail_text: "Fix JS linting errors: run 'biome check --write internal/coord/web/js/'"
 
 pre-push:
   parallel: true

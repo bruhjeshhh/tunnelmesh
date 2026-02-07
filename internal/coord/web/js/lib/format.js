@@ -1,7 +1,7 @@
 // TunnelMesh Dashboard - Format Utilities
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         // Bun/Node environment
         module.exports = factory();
@@ -10,7 +10,7 @@
         root.TM = root.TM || {};
         root.TM.format = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     /**
@@ -24,7 +24,7 @@
         const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
         const clampedI = Math.min(i, sizes.length - 1);
-        return parseFloat((bytes / Math.pow(k, clampedI)).toFixed(1)) + ' ' + sizes[clampedI];
+        return `${parseFloat((bytes / k ** clampedI).toFixed(1))} ${sizes[clampedI]}`;
     }
 
     /**
@@ -33,10 +33,10 @@
      * @returns {string} Formatted string like "1.5K"
      */
     function formatBytesCompact(bytes) {
-        if (bytes < 1024) return Math.round(bytes) + 'B';
-        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
-        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
-        return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+        if (bytes < 1024) return `${Math.round(bytes)}B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}G`;
     }
 
     /**
@@ -57,8 +57,8 @@
     function formatLatency(ms) {
         if (ms === 0 || ms === undefined || ms === null) return '-';
         if (ms < 1) return '<1 ms';
-        if (ms < 1000) return Math.round(ms) + ' ms';
-        return (ms / 1000).toFixed(1) + ' s';
+        if (ms < 1000) return `${Math.round(ms)} ms`;
+        return `${(ms / 1000).toFixed(1)} s`;
     }
 
     /**
@@ -69,8 +69,8 @@
     function formatLatencyCompact(ms) {
         if (ms === 0 || ms === undefined || ms === null) return '-';
         if (ms < 1) return '<1ms';
-        if (ms < 1000) return Math.round(ms) + 'ms';
-        return (ms / 1000).toFixed(1) + 's';
+        if (ms < 1000) return `${Math.round(ms)}ms`;
+        return `${(ms / 1000).toFixed(1)}s`;
     }
 
     /**
@@ -108,6 +108,6 @@
         formatLatency,
         formatLatencyCompact,
         formatLastSeen,
-        formatNumber
+        formatNumber,
     };
 });

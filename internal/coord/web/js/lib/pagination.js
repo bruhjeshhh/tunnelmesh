@@ -1,14 +1,14 @@
 // TunnelMesh Dashboard - Pagination Utilities
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.pagination = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     const DEFAULT_PAGE_SIZE = 7;
@@ -24,13 +24,7 @@
      * @returns {Object} Pagination controller
      */
     function createPaginationController(config) {
-        const {
-            pageSize = DEFAULT_PAGE_SIZE,
-            getItems,
-            getVisibleCount,
-            setVisibleCount,
-            onRender
-        } = config;
+        const { pageSize = DEFAULT_PAGE_SIZE, getItems, getVisibleCount, setVisibleCount, onRender } = config;
 
         return {
             /**
@@ -75,7 +69,7 @@
                     shown,
                     hasMore: total > visible,
                     canShowLess: visible > pageSize,
-                    isEmpty: total === 0
+                    isEmpty: total === 0,
                 };
             },
 
@@ -85,7 +79,7 @@
              */
             getPageSize() {
                 return pageSize;
-            }
+            },
         };
     }
 
@@ -110,7 +104,7 @@
             totalCountId,
             totalCount,
             visibleCount,
-            pageSize = DEFAULT_PAGE_SIZE
+            pageSize = DEFAULT_PAGE_SIZE,
         } = config;
 
         // Early return if no document (Bun tests)
@@ -144,6 +138,6 @@
     return {
         DEFAULT_PAGE_SIZE,
         createPaginationController,
-        updatePaginationUI
+        updatePaginationUI,
     };
 });

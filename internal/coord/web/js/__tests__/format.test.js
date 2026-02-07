@@ -2,7 +2,15 @@
 import { describe, test, expect } from 'bun:test';
 import format from '../lib/format.js';
 
-const { formatBytes, formatBytesCompact, formatRate, formatLatency, formatLatencyCompact, formatLastSeen, formatNumber } = format;
+const {
+    formatBytes,
+    formatBytesCompact,
+    formatRate,
+    formatLatency,
+    formatLatencyCompact,
+    formatLastSeen,
+    formatNumber,
+} = format;
 
 describe('formatBytes', () => {
     test('formats zero bytes', () => {

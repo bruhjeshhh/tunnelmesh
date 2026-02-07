@@ -1,14 +1,14 @@
 // TunnelMesh Dashboard - API Utilities
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.api = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     // Callbacks for auth error and toast notifications
@@ -118,7 +118,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...options.headers },
             body: JSON.stringify(body),
-            ...options
+            ...options,
         });
     }
 
@@ -134,7 +134,7 @@
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json', ...options.headers },
             body: JSON.stringify(body),
-            ...options
+            ...options,
         });
     }
 
@@ -163,6 +163,6 @@
         post,
         patch,
         del,
-        delete: del  // Alias for 'delete' keyword
+        delete: del, // Alias for 'delete' keyword
     };
 });

@@ -15,7 +15,7 @@ describe('createPaginationController', () => {
         const controller = createPaginationController({
             getItems: () => [],
             getVisibleCount: () => 7,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         expect(typeof controller.showMore).toBe('function');
@@ -33,8 +33,10 @@ describe('createPaginationController', () => {
             pageSize: 7,
             getItems: () => Array(20).fill({}),
             getVisibleCount: () => visibleCount,
-            setVisibleCount: (n) => { visibleCount = n; },
-            onRender: renderFn
+            setVisibleCount: (n) => {
+                visibleCount = n;
+            },
+            onRender: renderFn,
         });
 
         controller.showMore();
@@ -51,8 +53,10 @@ describe('createPaginationController', () => {
             pageSize: 7,
             getItems: () => Array(20).fill({}),
             getVisibleCount: () => visibleCount,
-            setVisibleCount: (n) => { visibleCount = n; },
-            onRender: renderFn
+            setVisibleCount: (n) => {
+                visibleCount = n;
+            },
+            onRender: renderFn,
         });
 
         controller.showLess();
@@ -68,7 +72,7 @@ describe('createPaginationController', () => {
             pageSize: 3,
             getItems: () => items,
             getVisibleCount: () => 5,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         expect(controller.getVisibleItems()).toEqual([1, 2, 3, 4, 5]);
@@ -79,7 +83,7 @@ describe('createPaginationController', () => {
             pageSize: 7,
             getItems: () => [],
             getVisibleCount: () => 7,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         const state = controller.getUIState();
@@ -96,7 +100,7 @@ describe('createPaginationController', () => {
             pageSize: 7,
             getItems: () => Array(20).fill({}),
             getVisibleCount: () => 7,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         const state = controller.getUIState();
@@ -113,13 +117,13 @@ describe('createPaginationController', () => {
             pageSize: 7,
             getItems: () => Array(20).fill({}),
             getVisibleCount: () => 14,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         const state = controller.getUIState();
 
-        expect(state.hasMore).toBe(true);  // 20 > 14
-        expect(state.canShowLess).toBe(true);  // 14 > 7
+        expect(state.hasMore).toBe(true); // 20 > 14
+        expect(state.canShowLess).toBe(true); // 14 > 7
     });
 
     test('getUIState hasMore is false when all shown', () => {
@@ -127,13 +131,13 @@ describe('createPaginationController', () => {
             pageSize: 7,
             getItems: () => Array(5).fill({}),
             getVisibleCount: () => 7,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         const state = controller.getUIState();
 
-        expect(state.hasMore).toBe(false);  // 5 <= 7
-        expect(state.shown).toBe(5);  // min(7, 5)
+        expect(state.hasMore).toBe(false); // 5 <= 7
+        expect(state.shown).toBe(5); // min(7, 5)
     });
 
     test('getPageSize returns configured page size', () => {
@@ -141,7 +145,7 @@ describe('createPaginationController', () => {
             pageSize: 10,
             getItems: () => [],
             getVisibleCount: () => 10,
-            setVisibleCount: () => {}
+            setVisibleCount: () => {},
         });
 
         expect(controller.getPageSize()).toBe(10);
@@ -153,10 +157,12 @@ describe('createPaginationController', () => {
         const controller = createPaginationController({
             getItems: () => Array(20).fill({}),
             getVisibleCount: () => visibleCount,
-            setVisibleCount: (n) => { visibleCount = n; }
+            setVisibleCount: (n) => {
+                visibleCount = n;
+            },
         });
 
         controller.showMore();
-        expect(visibleCount).toBe(14);  // 7 + 7 default
+        expect(visibleCount).toBe(14); // 7 + 7 default
     });
 });

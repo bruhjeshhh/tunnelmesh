@@ -1,14 +1,14 @@
 // TunnelMesh Dashboard - Common Utilities
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.utils = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     // =========================================================================
@@ -16,16 +16,16 @@
     // =========================================================================
 
     const CONSTANTS = {
-        HEARTBEAT_INTERVAL_MS: 10000,    // 10 seconds between heartbeats
-        POLL_INTERVAL_MS: 10000,         // Polling fallback interval
-        SSE_RETRY_DELAY_MS: 2000,        // Base delay for SSE reconnection
-        MAX_SSE_RETRIES: 3,              // Max SSE reconnection attempts
-        ROWS_PER_PAGE: 7,                // Default pagination size
-        MAX_HISTORY_POINTS: 20,          // Max sparkline history points per peer
-        MAX_CHART_POINTS: 360,           // 1 hour at 10-second intervals
-        TOAST_DURATION_MS: 4000,         // Toast notification duration
-        TOAST_FADE_MS: 300,              // Toast fade-out animation duration
-        QUANTIZE_INTERVAL_MS: 10000      // Timestamp quantization interval
+        HEARTBEAT_INTERVAL_MS: 10000, // 10 seconds between heartbeats
+        POLL_INTERVAL_MS: 10000, // Polling fallback interval
+        SSE_RETRY_DELAY_MS: 2000, // Base delay for SSE reconnection
+        MAX_SSE_RETRIES: 3, // Max SSE reconnection attempts
+        ROWS_PER_PAGE: 7, // Default pagination size
+        MAX_HISTORY_POINTS: 20, // Max sparkline history points per peer
+        MAX_CHART_POINTS: 360, // 1 hour at 10-second intervals
+        TOAST_DURATION_MS: 4000, // Toast notification duration
+        TOAST_FADE_MS: 300, // Toast fade-out animation duration
+        QUANTIZE_INTERVAL_MS: 10000, // Timestamp quantization interval
     };
 
     // =========================================================================
@@ -66,7 +66,7 @@
      */
     function debounce(fn, delay) {
         let timeoutId;
-        return function(...args) {
+        return function (...args) {
             clearTimeout(timeoutId);
             timeoutId = setTimeout(() => fn.apply(this, args), delay);
         };
@@ -80,11 +80,11 @@
      */
     function throttle(fn, limit) {
         let inThrottle;
-        return function(...args) {
+        return function (...args) {
             if (!inThrottle) {
                 fn.apply(this, args);
                 inThrottle = true;
-                setTimeout(() => inThrottle = false, limit);
+                setTimeout(() => (inThrottle = false), limit);
             }
         };
     }
@@ -97,9 +97,7 @@
     function deepClone(obj) {
         if (obj === null || typeof obj !== 'object') return obj;
         if (Array.isArray(obj)) return obj.map(deepClone);
-        return Object.fromEntries(
-            Object.entries(obj).map(([k, v]) => [k, deepClone(v)])
-        );
+        return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, deepClone(v)]));
     }
 
     /**
@@ -111,7 +109,7 @@
         if (!peer || !peer.location) return null;
         let region = peer.location.city || peer.location.region || peer.location.country || null;
         if (region && region.length > 20) {
-            region = region.substring(0, 18) + '...';
+            region = `${region.substring(0, 18)}...`;
         }
         return region;
     }
@@ -123,6 +121,6 @@
         debounce,
         throttle,
         deepClone,
-        extractRegion
+        extractRegion,
     };
 });

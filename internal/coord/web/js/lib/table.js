@@ -1,14 +1,14 @@
 // TunnelMesh Dashboard - Table Utilities
 // UMD pattern for browser + Bun compatibility
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.table = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     /**
@@ -23,15 +23,7 @@
      * @param {Function} [config.updatePaginationUI] - Pagination update function
      */
     function renderTable(config) {
-        const {
-            tbody,
-            items,
-            visibleCount,
-            emptyEl,
-            rowRenderer,
-            paginationConfig,
-            updatePaginationUI
-        } = config;
+        const { tbody, items, visibleCount, emptyEl, rowRenderer, paginationConfig, updatePaginationUI } = config;
 
         if (!tbody) return;
 
@@ -55,7 +47,7 @@
             updatePaginationUI({
                 ...paginationConfig,
                 totalCount: items.length,
-                visibleCount
+                visibleCount,
             });
         }
     }
@@ -72,19 +64,10 @@
      * @returns {Object} Table renderer with render() method
      */
     function createTableRenderer(config) {
-        const {
-            tbodyId,
-            emptyElId,
-            paginationConfig,
-            rowRenderer,
-            getItems,
-            getVisibleCount
-        } = config;
+        const { tbodyId, emptyElId, paginationConfig, rowRenderer, getItems, getVisibleCount } = config;
 
         // Import pagination update function if available
-        const updatePaginationUI = typeof TM !== 'undefined' && TM.pagination
-            ? TM.pagination.updatePaginationUI
-            : null;
+        const updatePaginationUI = typeof TM !== 'undefined' && TM.pagination ? TM.pagination.updatePaginationUI : null;
 
         return {
             render() {
@@ -101,9 +84,9 @@
                     emptyEl,
                     rowRenderer,
                     paginationConfig,
-                    updatePaginationUI
+                    updatePaginationUI,
                 });
-            }
+            },
         };
     }
 
@@ -159,7 +142,7 @@
             return `${x.toFixed(1)},${y.toFixed(1)}`;
         });
 
-        return 'M' + points.join(' L');
+        return `M${points.join(' L')}`;
     }
 
     // Export
@@ -167,6 +150,6 @@
         renderTable,
         createTableRenderer,
         createSparklineSVG,
-        createSparklinePath
+        createSparklinePath,
     };
 });

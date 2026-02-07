@@ -6,7 +6,9 @@ function createMockElement(tag = 'div') {
     let _textContent = '';
     return {
         tagName: tag.toUpperCase(),
-        get textContent() { return _textContent; },
+        get textContent() {
+            return _textContent;
+        },
         set textContent(val) {
             _textContent = String(val);
             // Simulate browser behavior: setting textContent escapes HTML
@@ -22,14 +24,22 @@ function createMockElement(tag = 'div') {
         value: '',
         style: {
             display: '',
-            cssText: ''
+            cssText: '',
         },
         classList: {
             _classes: new Set(),
-            add(...classes) { classes.forEach(c => this._classes.add(c)); },
-            remove(...classes) { classes.forEach(c => this._classes.delete(c)); },
-            toggle(c) { this._classes.has(c) ? this._classes.delete(c) : this._classes.add(c); },
-            contains(c) { return this._classes.has(c); }
+            add(...classes) {
+                for (const c of classes) this._classes.add(c);
+            },
+            remove(...classes) {
+                for (const c of classes) this._classes.delete(c);
+            },
+            toggle(c) {
+                this._classes.has(c) ? this._classes.delete(c) : this._classes.add(c);
+            },
+            contains(c) {
+                return this._classes.has(c);
+            },
         },
         dataset: {},
         children: [],
@@ -37,7 +47,10 @@ function createMockElement(tag = 'div') {
         parentElement: null,
         addEventListener: () => {},
         removeEventListener: () => {},
-        appendChild(child) { this.children.push(child); return child; },
+        appendChild(child) {
+            this.children.push(child);
+            return child;
+        },
         removeChild(child) {
             const idx = this.children.indexOf(child);
             if (idx > -1) this.children.splice(idx, 1);
@@ -52,7 +65,7 @@ function createMockElement(tag = 'div') {
         focus: () => {},
         blur: () => {},
         click: () => {},
-        dispatchEvent: () => true
+        dispatchEvent: () => true,
     };
 }
 
@@ -71,8 +84,8 @@ globalThis.document = {
     addEventListener: () => {},
     removeEventListener: () => {},
     createEvent: () => ({
-        initEvent: () => {}
-    })
+        initEvent: () => {},
+    }),
 };
 
 // Mock window
@@ -87,19 +100,33 @@ globalThis.fetch = async (url, options = {}) => {
         headers: new Map(),
         text: async () => '{}',
         json: async () => ({}),
-        clone: function() { return this; }
+        clone: function () {
+            return this;
+        },
     };
 };
 
 // Mock localStorage
 globalThis.localStorage = {
     _data: {},
-    getItem(key) { return this._data[key] || null; },
-    setItem(key, value) { this._data[key] = String(value); },
-    removeItem(key) { delete this._data[key]; },
-    clear() { this._data = {}; },
-    get length() { return Object.keys(this._data).length; },
-    key(i) { return Object.keys(this._data)[i] || null; }
+    getItem(key) {
+        return this._data[key] || null;
+    },
+    setItem(key, value) {
+        this._data[key] = String(value);
+    },
+    removeItem(key) {
+        delete this._data[key];
+    },
+    clear() {
+        this._data = {};
+    },
+    get length() {
+        return Object.keys(this._data).length;
+    },
+    key(i) {
+        return Object.keys(this._data)[i] || null;
+    },
 };
 
 // Mock sessionStorage
@@ -115,7 +142,7 @@ globalThis.performance = {
     mark: () => {},
     measure: () => {},
     getEntriesByType: () => [],
-    getEntriesByName: () => []
+    getEntriesByName: () => [],
 };
 
 // Mock console (already exists in Bun, but ensure methods exist)
@@ -124,12 +151,12 @@ globalThis.console = globalThis.console || {
     error: () => {},
     warn: () => {},
     info: () => {},
-    debug: () => {}
+    debug: () => {},
 };
 
 // Mock CSS object
 globalThis.CSS = {
-    escape: (str) => str.replace(/([!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~])/g, '\\$1')
+    escape: (str) => str.replace(/([!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, '\\$1'),
 };
 
 // Mock EventSource for SSE
@@ -144,7 +171,7 @@ globalThis.EventSource = class EventSource {
     }
     removeEventListener(event, fn) {
         if (this._listeners[event]) {
-            this._listeners[event] = this._listeners[event].filter(f => f !== fn);
+            this._listeners[event] = this._listeners[event].filter((f) => f !== fn);
         }
     }
     close() {

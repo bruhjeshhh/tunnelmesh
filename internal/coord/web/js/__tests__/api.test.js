@@ -14,7 +14,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: true,
                 status: 200,
-                text: async () => '{"message": "success"}'
+                text: async () => '{"message": "success"}',
             }));
 
             const result = await api.apiFetch('/api/test');
@@ -28,7 +28,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: true,
                 status: 204,
-                text: async () => ''
+                text: async () => '',
             }));
 
             const result = await api.apiFetch('/api/test');
@@ -41,7 +41,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: true,
                 status: 200,
-                text: async () => 'plain text response'
+                text: async () => 'plain text response',
             }));
 
             const result = await api.apiFetch('/api/test');
@@ -57,7 +57,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: false,
                 status: 401,
-                text: async () => ''
+                text: async () => '',
             }));
 
             const result = await api.apiFetch('/api/test');
@@ -71,7 +71,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: false,
                 status: 500,
-                text: async () => ''
+                text: async () => '',
             }));
 
             const result = await api.apiFetch('/api/test', { showToast: false });
@@ -88,7 +88,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: false,
                 status: 500,
-                text: async () => ''
+                text: async () => '',
             }));
 
             await api.apiFetch('/api/test');
@@ -103,7 +103,7 @@ describe('api', () => {
             globalThis.fetch = mock(async () => ({
                 ok: false,
                 status: 500,
-                text: async () => ''
+                text: async () => '',
             }));
 
             await api.apiFetch('/api/test', { showToast: false });

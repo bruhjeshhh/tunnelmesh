@@ -51,19 +51,21 @@ describe('debounce', () => {
 
         expect(callCount).toBe(0);
 
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 100));
         expect(callCount).toBe(1);
     });
 
     test('only calls once after delay', async () => {
         let value = 0;
-        const fn = debounce((n) => { value = n; }, 20);
+        const fn = debounce((n) => {
+            value = n;
+        }, 20);
 
         fn(1);
         fn(2);
         fn(3);
 
-        await new Promise(r => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 50));
         expect(value).toBe(3);
     });
 });
@@ -79,7 +81,7 @@ describe('throttle', () => {
 
         expect(callCount).toBe(1);
 
-        await new Promise(r => setTimeout(r, 60));
+        await new Promise((r) => setTimeout(r, 60));
         fn(); // Should execute after throttle period
         expect(callCount).toBe(2);
     });
@@ -114,7 +116,7 @@ describe('deepClone', () => {
     test('handles nested structures', () => {
         const complex = {
             arr: [1, { nested: true }],
-            obj: { deep: { value: 42 } }
+            obj: { deep: { value: 42 } },
         };
         const cloned = deepClone(complex);
 
@@ -132,26 +134,32 @@ describe('extractRegion', () => {
     });
 
     test('prefers city over region', () => {
-        expect(extractRegion({
-            location: { city: 'New York', region: 'NY', country: 'USA' }
-        })).toBe('New York');
+        expect(
+            extractRegion({
+                location: { city: 'New York', region: 'NY', country: 'USA' },
+            }),
+        ).toBe('New York');
     });
 
     test('falls back to region', () => {
-        expect(extractRegion({
-            location: { region: 'California', country: 'USA' }
-        })).toBe('California');
+        expect(
+            extractRegion({
+                location: { region: 'California', country: 'USA' },
+            }),
+        ).toBe('California');
     });
 
     test('falls back to country', () => {
-        expect(extractRegion({
-            location: { country: 'Germany' }
-        })).toBe('Germany');
+        expect(
+            extractRegion({
+                location: { country: 'Germany' },
+            }),
+        ).toBe('Germany');
     });
 
     test('truncates long names', () => {
         const result = extractRegion({
-            location: { city: 'This is a very long city name that should be truncated' }
+            location: { city: 'This is a very long city name that should be truncated' },
         });
         expect(result.length).toBeLessThanOrEqual(21); // 18 + '...'
         expect(result).toContain('...');

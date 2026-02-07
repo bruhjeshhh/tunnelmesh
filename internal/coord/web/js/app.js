@@ -1,6 +1,5 @@
 // Import constants from TM.utils (loaded via lib/utils.js)
 const {
-    HEARTBEAT_INTERVAL_MS,
     POLL_INTERVAL_MS,
     SSE_RETRY_DELAY_MS,
     MAX_SSE_RETRIES,
@@ -9,14 +8,14 @@ const {
     MAX_CHART_POINTS,
     TOAST_DURATION_MS,
     TOAST_FADE_MS,
-    QUANTIZE_INTERVAL_MS
+    QUANTIZE_INTERVAL_MS,
 } = TM.utils.CONSTANTS;
 
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
-const { formatBytes, formatRate, formatLatency, formatLastSeen, formatNumber } = TM.format;
-const { updatePaginationUI, createPaginationController } = TM.pagination;
-const { createSparklineSVG, createSparklinePath } = TM.table;
+const { formatBytes, formatRate, formatLatency, formatLastSeen } = TM.format;
+const { updatePaginationUI } = TM.pagination;
+const { createSparklineSVG } = TM.table;
 
 // Toggle collapsible section
 function toggleSection(header) {
@@ -47,11 +46,11 @@ const state = {
         throughput: null,
         packets: null,
         chartData: {
-            labels: [],      // timestamps (shared across both charts)
-            throughput: {},  // { peerName: [values] }
-            packets: {}      // { peerName: [values] }
+            labels: [], // timestamps (shared across both charts)
+            throughput: {}, // { peerName: [values] }
+            packets: {}, // { peerName: [values] }
         },
-        highlightedPeer: null // Peer to highlight on charts (selected in visualizer)
+        highlightedPeer: null, // Peer to highlight on charts (selected in visualizer)
     },
     // Visualizer state
     visualizer: null,
@@ -63,12 +62,12 @@ const state = {
     peersVisibleCount: ROWS_PER_PAGE,
     dnsVisibleCount: ROWS_PER_PAGE,
     wgVisibleCount: ROWS_PER_PAGE,
-    currentPeers: [],  // Store current peers data for pagination
+    currentPeers: [], // Store current peers data for pagination
     // Alerts state
     alertsEnabled: false,
     peerAlerts: {}, // { peerName: { warning: count, critical: count, page: count } }
     // Loki logs state
-    lokiEnabled: false
+    lokiEnabled: false,
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -78,7 +77,7 @@ const GREEN_GRADIENT = [
     '#3d6b4a',
     '#3fb950', // middle
     '#56d364',
-    '#7ee787'  // brightest - outliers
+    '#7ee787', // brightest - outliers
 ];
 
 // Max time range for charts (1 hour)
@@ -241,8 +240,10 @@ function showAuthError() {
     if (!banner) {
         banner = document.createElement('div');
         banner.id = 'auth-error-banner';
-        banner.style.cssText = 'background:#d32f2f;color:white;padding:12px 20px;text-align:center;position:fixed;top:0;left:0;right:0;z-index:1000;';
-        banner.innerHTML = 'Authentication required. <a href="/admin/" style="color:white;text-decoration:underline;">Click here to login</a>';
+        banner.style.cssText =
+            'background:#d32f2f;color:white;padding:12px 20px;text-align:center;position:fixed;top:0;left:0;right:0;z-index:1000;';
+        banner.innerHTML =
+            'Authentication required. <a href="/admin/" style="color:white;text-decoration:underline;">Click here to login</a>';
         document.body.prepend(banner);
     }
 }
@@ -295,13 +296,13 @@ function updateDashboard(data, loadHistory = false) {
     }
 
     // Update history for each peer
-    data.peers.forEach(peer => {
+    data.peers.forEach((peer) => {
         if (!state.peerHistory[peer.name]) {
             state.peerHistory[peer.name] = {
                 throughputTx: [],
                 throughputRx: [],
                 packetsTx: [],
-                packetsRx: []
+                packetsRx: [],
             };
         }
         const history = state.peerHistory[peer.name];
@@ -310,10 +311,10 @@ function updateDashboard(data, loadHistory = false) {
         if (loadHistory && peer.history && peer.history.length > 0) {
             // Server returns newest first, reverse to get oldest first
             const serverHistory = [...peer.history].reverse();
-            history.throughputTx = serverHistory.map(h => h.txB || 0);
-            history.throughputRx = serverHistory.map(h => h.rxB || 0);
-            history.packetsTx = serverHistory.map(h => h.txP || 0);
-            history.packetsRx = serverHistory.map(h => h.rxP || 0);
+            history.throughputTx = serverHistory.map((h) => h.txB || 0);
+            history.throughputRx = serverHistory.map((h) => h.rxB || 0);
+            history.packetsTx = serverHistory.map((h) => h.txP || 0);
+            history.packetsRx = serverHistory.map((h) => h.rxP || 0);
         } else {
             // Add new data points from current rates
             history.throughputTx.push(peer.bytes_sent_rate || 0);
@@ -334,8 +335,8 @@ function updateDashboard(data, loadHistory = false) {
     });
 
     // Clean up history for removed peers
-    const currentPeers = new Set(data.peers.map(p => p.name));
-    Object.keys(state.peerHistory).forEach(name => {
+    const currentPeers = new Set(data.peers.map((p) => p.name));
+    Object.keys(state.peerHistory).forEach((name) => {
         if (!currentPeers.has(name)) {
             delete state.peerHistory[name];
         }
@@ -367,110 +368,44 @@ function updateDashboard(data, loadHistory = false) {
     }
 }
 
-function createSparklineSVG(dataTx, dataRx) {
-    const width = 80;
-    const height = 24;
-    const padding = 2;
-
-    if (!dataTx.length) {
-        return `<svg class="sparkline" viewBox="0 0 ${width} ${height}"></svg>`;
-    }
-
-    // Find max value across both datasets for consistent scale
-    const allValues = [...dataTx, ...dataRx];
-    const maxVal = Math.max(...allValues, 1); // At least 1 to avoid division by zero
-
-    const pathTx = createSparklinePath(dataTx, width, height, padding, maxVal);
-    const pathRx = createSparklinePath(dataRx, width, height, padding, maxVal);
-
-    return `<svg class="sparkline" viewBox="0 0 ${width} ${height}">
-        <path class="tx" d="${pathTx}"/>
-        <path class="rx" d="${pathRx}"/>
-    </svg>`;
-}
-
-function createSparklinePath(data, width, height, padding, maxVal) {
-    if (!data.length) return '';
-
-    const drawWidth = width - padding * 2;
-    const drawHeight = height - padding * 2;
-    const step = drawWidth / Math.max(data.length - 1, 1);
-
-    const points = data.map((val, i) => {
-        const x = padding + i * step;
-        const y = padding + drawHeight - (val / maxVal) * drawHeight;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-    });
-
-    return 'M' + points.join(' L');
-}
-
-// Pagination helper - updates pagination UI elements
-function updatePaginationUI(config) {
-    const {
-        paginationId,
-        showMoreId,
-        showLessId,
-        shownCountId,
-        totalCountId,
-        totalCount,
-        visibleCount
-    } = config;
-
-    const paginationEl = document.getElementById(paginationId);
-    const showMoreEl = document.getElementById(showMoreId);
-    const showLessEl = document.getElementById(showLessId);
-
-    if (!paginationEl) return;
-
-    const hasMore = totalCount > visibleCount;
-    const canShowLess = visibleCount > ROWS_PER_PAGE;
-
-    if (hasMore || canShowLess) {
-        paginationEl.style.display = 'block';
-        if (showMoreEl) showMoreEl.style.display = hasMore ? 'inline' : 'none';
-        if (showLessEl) showLessEl.style.display = canShowLess ? 'inline' : 'none';
-        if (hasMore && shownCountId && totalCountId) {
-            const shownEl = document.getElementById(shownCountId);
-            const totalEl = document.getElementById(totalCountId);
-            if (shownEl) shownEl.textContent = visibleCount;
-            if (totalEl) totalEl.textContent = totalCount;
-        }
-    } else {
-        paginationEl.style.display = 'none';
-    }
-}
-
 // Pagination functions
-function showMorePeers() {
+function _showMorePeers() {
     state.peersVisibleCount += ROWS_PER_PAGE;
     renderPeersTable();
 }
 
-function showLessPeers() {
+function _showLessPeers() {
     state.peersVisibleCount = ROWS_PER_PAGE;
     renderPeersTable();
 }
 
-function showMoreDns() {
+function _showMoreDns() {
     state.dnsVisibleCount += ROWS_PER_PAGE;
     renderDnsTable();
 }
 
-function showLessDns() {
+function _showLessDns() {
     state.dnsVisibleCount = ROWS_PER_PAGE;
     renderDnsTable();
 }
 
-function showMoreWg() {
+function _showMoreWg() {
     state.wgVisibleCount += ROWS_PER_PAGE;
     updateWGClientsTable();
 }
 
-function showLessWg() {
+function _showLessWg() {
     state.wgVisibleCount = ROWS_PER_PAGE;
     updateWGClientsTable();
 }
+
+// Expose pagination functions for HTML onclick handlers
+window.showMorePeers = _showMorePeers;
+window.showLessPeers = _showLessPeers;
+window.showMoreDns = _showMoreDns;
+window.showLessDns = _showLessDns;
+window.showMoreWg = _showMoreWg;
+window.showLessWg = _showLessWg;
 
 function renderPeersTable() {
     const peers = state.currentPeers;
@@ -485,20 +420,28 @@ function renderPeersTable() {
     if (dom.noPeers) dom.noPeers.style.display = 'none';
     const visiblePeers = peers.slice(0, state.peersVisibleCount);
     if (!dom.peersBody) return;
-    dom.peersBody.innerHTML = visiblePeers.map(peer => {
-        const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
-        const peerNameEscaped = escapeHtml(peer.name);
-        // Alert badge - show if peer has any firing alerts
-        const peerAlert = state.peerAlerts[peer.name];
-        const hasAlert = peerAlert && (peerAlert.warning > 0 || peerAlert.critical > 0 || peerAlert.page > 0);
-        const alertSeverity = peerAlert?.page > 0 ? 'page' : (peerAlert?.critical > 0 ? 'critical' : 'warning');
-        const alertBadge = hasAlert ? `<span class="status-badge alert-icon" title="${alertSeverity}">⚠</span>` : '';
-        const exitBadge = peer.allows_exit_traffic ? '<span class="status-badge exit">EXIT</span>' : '';
-        const exitVia = peer.exit_node ? `<span class="exit-via">via ${escapeHtml(peer.exit_node)}</span>` : '';
-        // Tunnel count from connections map
-        const tunnelCount = peer.connections ? Object.keys(peer.connections).length : 0;
-        const tunnelSuffix = tunnelCount > 0 ? ` <span class="tunnel-count">(${tunnelCount})</span>` : '';
-        return `
+    dom.peersBody.innerHTML = visiblePeers
+        .map((peer) => {
+            const history = state.peerHistory[peer.name] || {
+                throughputTx: [],
+                throughputRx: [],
+                packetsTx: [],
+                packetsRx: [],
+            };
+            const peerNameEscaped = escapeHtml(peer.name);
+            // Alert badge - show if peer has any firing alerts
+            const peerAlert = state.peerAlerts[peer.name];
+            const hasAlert = peerAlert && (peerAlert.warning > 0 || peerAlert.critical > 0 || peerAlert.page > 0);
+            const alertSeverity = peerAlert?.page > 0 ? 'page' : peerAlert?.critical > 0 ? 'critical' : 'warning';
+            const alertBadge = hasAlert
+                ? `<span class="status-badge alert-icon" title="${alertSeverity}">⚠</span>`
+                : '';
+            const exitBadge = peer.allows_exit_traffic ? '<span class="status-badge exit">EXIT</span>' : '';
+            const exitVia = peer.exit_node ? `<span class="exit-via">via ${escapeHtml(peer.exit_node)}</span>` : '';
+            // Tunnel count from connections map
+            const tunnelCount = peer.connections ? Object.keys(peer.connections).length : 0;
+            const tunnelSuffix = tunnelCount > 0 ? ` <span class="tunnel-count">(${tunnelCount})</span>` : '';
+            return `
         <tr>
             <td><strong>${peerNameEscaped}</strong>${alertBadge}${exitBadge}${exitVia}</td>
             <td><code>${peer.mesh_ip}</code>${tunnelSuffix}</td>
@@ -522,7 +465,9 @@ function renderPeersTable() {
             </td>
             <td><code>${escapeHtml(peer.version || '-')}</code></td>
         </tr>
-    `}).join('');
+    `;
+        })
+        .join('');
 
     updatePaginationUI({
         paginationId: 'peers-pagination',
@@ -531,7 +476,7 @@ function renderPeersTable() {
         shownCountId: 'peers-shown-count',
         totalCountId: 'peers-total-count',
         totalCount: peers.length,
-        visibleCount: state.peersVisibleCount
+        visibleCount: state.peersVisibleCount,
     });
 }
 
@@ -554,7 +499,7 @@ function renderDnsTable() {
             name: peer.name,
             meshIp: peer.mesh_ip,
             peerName: peer.name,
-            isAlias: false
+            isAlias: false,
         });
         // Add aliases for this peer
         if (peer.aliases && peer.aliases.length > 0) {
@@ -563,7 +508,7 @@ function renderDnsTable() {
                     name: alias,
                     meshIp: peer.mesh_ip,
                     peerName: peer.name,
-                    isAlias: true
+                    isAlias: true,
                 });
             }
         }
@@ -584,12 +529,16 @@ function renderDnsTable() {
     if (dom.noDns) dom.noDns.style.display = 'none';
     const visibleRecords = dnsRecords.slice(0, state.dnsVisibleCount);
     if (!dom.dnsBody) return;
-    dom.dnsBody.innerHTML = visibleRecords.map(record => `
+    dom.dnsBody.innerHTML = visibleRecords
+        .map(
+            (record) => `
         <tr data-dns-peer="${escapeHtml(record.peerName)}">
             <td><code${record.isAlias ? ' style="color: var(--text-secondary)"' : ''}>${record.isAlias ? '↳ ' : ''}${escapeHtml(record.name)}${domainSuffix}</code></td>
             <td><code>${record.meshIp}</code></td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
 
     // Setup DNS row group highlighting
     setupDnsGroupHighlight();
@@ -601,7 +550,7 @@ function renderDnsTable() {
         shownCountId: 'dns-shown-count',
         totalCountId: 'dns-total-count',
         totalCount: dnsRecords.length,
-        visibleCount: state.dnsVisibleCount
+        visibleCount: state.dnsVisibleCount,
     });
 }
 
@@ -611,7 +560,7 @@ function setupDnsGroupHighlight() {
 
     const rows = dom.dnsBody.querySelectorAll('tr[data-dns-peer]');
 
-    rows.forEach(row => {
+    rows.forEach((row) => {
         row.addEventListener('mouseenter', () => {
             const peerName = row.getAttribute('data-dns-peer');
             const groupRows = dom.dnsBody.querySelectorAll(`tr[data-dns-peer="${CSS.escape(peerName)}"]`);
@@ -619,7 +568,7 @@ function setupDnsGroupHighlight() {
             if (groupRows.length <= 1) return; // No grouping needed for single rows
 
             dom.dnsBody.classList.add('dns-group-active');
-            groupRows.forEach(r => r.classList.add('dns-group-highlight'));
+            for (const r of groupRows) r.classList.add('dns-group-highlight');
         });
 
         row.addEventListener('mouseleave', () => {
@@ -627,12 +576,10 @@ function setupDnsGroupHighlight() {
             const groupRows = dom.dnsBody.querySelectorAll(`tr[data-dns-peer="${CSS.escape(peerName)}"]`);
 
             dom.dnsBody.classList.remove('dns-group-active');
-            groupRows.forEach(r => r.classList.remove('dns-group-highlight'));
+            for (const r of groupRows) r.classList.remove('dns-group-highlight');
         });
     });
 }
-
-// formatBytes, formatRate, formatLatency imported from TM.format
 
 // Chart functions
 
@@ -643,7 +590,7 @@ function initCharts() {
         animation: false,
         interaction: {
             mode: 'index',
-            intersect: false
+            intersect: false,
         },
         scales: {
             x: {
@@ -653,24 +600,24 @@ function initCharts() {
                         second: 'HH:mm',
                         minute: 'HH:mm',
                         hour: 'HH:mm',
-                        day: 'd MMM'
-                    }
+                        day: 'd MMM',
+                    },
                 },
                 grid: { display: false },
                 ticks: { color: '#8b949e', maxTicksLimit: 5, maxRotation: 0 },
-                border: { display: false }
+                border: { display: false },
             },
             y: {
                 beginAtZero: true,
                 grid: { color: '#21262d' },
                 ticks: { color: '#8b949e', maxTicksLimit: 4 },
-                border: { display: false }
-            }
+                border: { display: false },
+            },
         },
         plugins: {
             legend: { display: false },
-            tooltip: { enabled: false }
-        }
+            tooltip: { enabled: false },
+        },
     };
 
     // Throughput chart with byte formatting on Y-axis
@@ -679,14 +626,14 @@ function initCharts() {
         throughputOptions.scales.y.ticks = {
             color: '#8b949e',
             maxTicksLimit: 4,
-            callback: function(value) {
-                return formatBytes(value) + '/s';
-            }
+            callback: function (value) {
+                return `${formatBytes(value)}/s`;
+            },
         };
         state.charts.throughput = new Chart(dom.throughputChart, {
             type: 'line',
             data: { datasets: [] },
-            options: throughputOptions
+            options: throughputOptions,
         });
     }
 
@@ -695,7 +642,7 @@ function initCharts() {
         state.charts.packets = new Chart(dom.packetsChart, {
             type: 'line',
             data: { datasets: [] },
-            options: baseChartOptions
+            options: baseChartOptions,
         });
     }
 }
@@ -740,16 +687,16 @@ function initializeChartData(data) {
     const allTimestamps = new Set();
     const peerHistories = {};
     const peerFirstTs = {}; // Track when each peer first came online
-    const peerLastTs = {};  // Track when each peer was last seen
+    const peerLastTs = {}; // Track when each peer was last seen
 
-    data.peers.forEach(peer => {
+    data.peers.forEach((peer) => {
         if (!peer.history || peer.history.length === 0) return;
 
         // History comes newest first, reverse to get oldest first
         const history = [...peer.history].reverse();
         peerHistories[peer.name] = {};
 
-        history.forEach(point => {
+        history.forEach((point) => {
             const quantized = quantizeTimestamp(new Date(point.ts).getTime());
             allTimestamps.add(quantized);
             // Store by quantized timestamp (last value wins if multiple in same interval)
@@ -767,7 +714,7 @@ function initializeChartData(data) {
 
     // Sort timestamps
     const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
-    state.charts.chartData.labels = sortedTimestamps.map(ts => new Date(ts));
+    state.charts.chartData.labels = sortedTimestamps.map((ts) => new Date(ts));
 
     // Build data arrays for each peer
     Object.entries(peerHistories).forEach(([peerName, historyMap]) => {
@@ -776,7 +723,7 @@ function initializeChartData(data) {
         const firstTs = peerFirstTs[peerName];
         const lastTs = peerLastTs[peerName];
 
-        sortedTimestamps.forEach(ts => {
+        sortedTimestamps.forEach((ts) => {
             const point = historyMap[ts];
             if (point) {
                 // Combine TX and RX for total throughput/packets
@@ -839,12 +786,12 @@ function updateChartsWithNewData(peers) {
     }
 
     // Build set of currently online peers (present in API response AND online)
-    const onlinePeers = new Set(peers.filter(p => p.online).map(p => p.name));
+    const onlinePeers = new Set(peers.filter((p) => p.online).map((p) => p.name));
 
     // Collect new data points with their timestamps
     const newPoints = [];
 
-    peers.forEach(peer => {
+    peers.forEach((peer) => {
         const peerLastSeen = new Date(peer.last_seen);
         const peerLastSeenQuantized = quantizeTimestamp(peerLastSeen.getTime());
         const knownLastSeen = state.charts.lastSeenTimes[peer.name] || 0;
@@ -857,7 +804,7 @@ function updateChartsWithNewData(peers) {
                 peer: peer.name,
                 timestamp: new Date(peerLastSeenQuantized),
                 throughput: (peer.bytes_sent_rate || 0) + (peer.bytes_received_rate || 0),
-                packets: (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0)
+                packets: (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0),
             });
         }
     });
@@ -869,7 +816,7 @@ function updateChartsWithNewData(peers) {
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
-    newPoints.forEach(point => {
+    newPoints.forEach((point) => {
         const key = point.timestamp.getTime();
         if (!groups.has(key)) {
             groups.set(key, { timestamp: point.timestamp, peers: {} });
@@ -881,17 +828,16 @@ function updateChartsWithNewData(peers) {
     const sortedGroups = Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
 
     // Get the last timestamp in the chart (if any)
-    const lastChartTime = state.charts.chartData.labels.length > 0
-        ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
-        : 0;
+    const lastChartTime =
+        state.charts.chartData.labels.length > 0
+            ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
+            : 0;
 
-    sortedGroups.forEach(group => {
+    sortedGroups.forEach((group) => {
         const groupTime = group.timestamp.getTime();
 
         // Check if this timestamp already exists in the chart
-        const existingIndex = state.charts.chartData.labels.findIndex(
-            label => label.getTime() === groupTime
-        );
+        const existingIndex = state.charts.chartData.labels.findIndex((label) => label.getTime() === groupTime);
 
         if (existingIndex >= 0) {
             // Timestamp exists - update data for this timestamp
@@ -916,12 +862,9 @@ function updateChartsWithNewData(peers) {
         state.charts.chartData.labels.push(group.timestamp);
 
         // For each existing peer, add their value
-        const allPeers = new Set([
-            ...Object.keys(state.charts.chartData.throughput),
-            ...Object.keys(group.peers)
-        ]);
+        const allPeers = new Set([...Object.keys(state.charts.chartData.throughput), ...Object.keys(group.peers)]);
 
-        allPeers.forEach(peerName => {
+        allPeers.forEach((peerName) => {
             // Check if this is a new peer
             const isNewPeer = !state.charts.chartData.throughput[peerName];
 
@@ -953,15 +896,15 @@ function updateChartsWithNewData(peers) {
     if (state.charts.chartData.labels.length > maxPoints) {
         const excess = state.charts.chartData.labels.length - maxPoints;
         state.charts.chartData.labels = state.charts.chartData.labels.slice(excess);
-        Object.keys(state.charts.chartData.throughput).forEach(peerName => {
+        Object.keys(state.charts.chartData.throughput).forEach((peerName) => {
             state.charts.chartData.throughput[peerName] = state.charts.chartData.throughput[peerName].slice(excess);
             state.charts.chartData.packets[peerName] = state.charts.chartData.packets[peerName].slice(excess);
         });
     }
 
     // Clean up peers that are no longer present
-    const currentPeers = new Set(peers.map(p => p.name));
-    Object.keys(state.charts.chartData.throughput).forEach(peerName => {
+    const currentPeers = new Set(peers.map((p) => p.name));
+    Object.keys(state.charts.chartData.throughput).forEach((peerName) => {
         if (!currentPeers.has(peerName)) {
             delete state.charts.chartData.throughput[peerName];
             delete state.charts.chartData.packets[peerName];
@@ -980,7 +923,7 @@ function calculatePeerColors(dataMap) {
 
     // Calculate average for each peer
     Object.entries(dataMap).forEach(([peerName, values]) => {
-        const validValues = values.filter(v => v !== null && v > 0);
+        const validValues = values.filter((v) => v !== null && v > 0);
         if (validValues.length > 0) {
             const avg = validValues.reduce((a, b) => a + b, 0) / validValues.length;
             peerAverages[peerName] = avg;
@@ -996,7 +939,7 @@ function calculatePeerColors(dataMap) {
     const overallAvg = allAverages.reduce((a, b) => a + b, 0) / allAverages.length;
 
     // Calculate max deviation from average
-    const deviations = allAverages.map(avg => Math.abs(avg - overallAvg));
+    const deviations = allAverages.map((avg) => Math.abs(avg - overallAvg));
     const maxDeviation = Math.max(...deviations, 1); // avoid division by zero
 
     // Assign colors based on deviation (normalized 0-1)
@@ -1024,11 +967,11 @@ function rebuildChartDatasets() {
     const buildDataset = (peerName, values, baseColor) => {
         const data = values.map((v, i) => ({
             x: labels[i],
-            y: v === null ? null : (v === -1 ? 0 : v)
+            y: v === null ? null : v === -1 ? 0 : v,
         }));
 
         // Track which segments are offline (were -1 in original data)
-        const offlineSegments = values.map(v => v === -1);
+        const offlineSegments = values.map((v) => v === -1);
 
         // Check if this peer is highlighted (selected in visualizer)
         const isHighlighted = peerName === state.charts.highlightedPeer;
@@ -1047,7 +990,7 @@ function rebuildChartDatasets() {
             spanGaps: false, // Don't connect across null gaps
             order: isHighlighted ? 0 : 1, // Highlighted peer drawn on top
             segment: {
-                borderColor: ctx => {
+                borderColor: (ctx) => {
                     const p0Offline = offlineSegments[ctx.p0DataIndex];
                     const p1Offline = offlineSegments[ctx.p1DataIndex];
                     if (p0Offline || p1Offline) {
@@ -1055,15 +998,15 @@ function rebuildChartDatasets() {
                     }
                     return lineColor;
                 },
-                borderDash: ctx => {
+                borderDash: (ctx) => {
                     const p0Offline = offlineSegments[ctx.p0DataIndex];
                     const p1Offline = offlineSegments[ctx.p1DataIndex];
                     if (p0Offline || p1Offline) {
                         return [5, 5];
                     }
                     return undefined;
-                }
-            }
+                },
+            },
         };
     };
 
@@ -1088,17 +1031,19 @@ function rebuildChartDatasets() {
     }
 }
 
-// formatNumber, escapeHtml imported from TM.format and TM.utils
-
 function formatAdvertisedIPs(peer) {
     const parts = [];
 
     if (peer.public_ips && peer.public_ips.length > 0) {
         const natBadge = peer.behind_nat ? '<span class="nat-badge">NAT</span>' : '';
-        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code class="obscured-ip">${ip}</code>`).join(', ')}${natBadge}`);
+        parts.push(
+            `<span class="ip-label">Public:</span> ${peer.public_ips.map((ip) => `<code class="obscured-ip">${ip}</code>`).join(', ')}${natBadge}`,
+        );
     }
     if (peer.private_ips && peer.private_ips.length > 0) {
-        parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}</code>`).join(', ')}`);
+        parts.push(
+            `<span class="ip-label">Private:</span> ${peer.private_ips.map((ip) => `<code>${ip}</code>`).join(', ')}`,
+        );
     }
     // Show IPv6 external address if available (visually obscured)
     if (peer.udp_external_addr6) {
@@ -1145,7 +1090,7 @@ async function checkWireGuardStatus() {
             document.getElementById('wireguard-section').style.display = 'none';
             state.wgEnabled = false;
         }
-    } catch (err) {
+    } catch (_err) {
         // WireGuard not enabled or network error
         state.wgEnabled = false;
     }
@@ -1200,7 +1145,7 @@ function enableChartLinks() {
     const packetsWrapper = document.getElementById('packets-wrapper');
     const grafanaUrl = '/grafana/';
 
-    [throughputWrapper, packetsWrapper].forEach(wrapper => {
+    [throughputWrapper, packetsWrapper].forEach((wrapper) => {
         if (wrapper) {
             wrapper.classList.add('clickable-card');
             wrapper.addEventListener('click', () => {
@@ -1246,11 +1191,13 @@ function updateLokiExploreLink() {
     const now = Date.now();
     const from = now - 3600000; // 1 hour ago
     const dsUid = state.lokiDatasourceUid || 'loki';
-    const leftParam = encodeURIComponent(JSON.stringify({
-        datasource: { type: 'loki', uid: dsUid },
-        queries: [{ refId: 'A', expr: '{job="tunnelmesh"}', queryType: 'range' }],
-        range: { from: String(from), to: String(now) }
-    }));
+    const leftParam = encodeURIComponent(
+        JSON.stringify({
+            datasource: { type: 'loki', uid: dsUid },
+            queries: [{ refId: 'A', expr: '{job="tunnelmesh"}', queryType: 'range' }],
+            range: { from: String(from), to: String(now) },
+        }),
+    );
     logsLink.href = `/grafana/explore?orgId=1&left=${leftParam}`;
 }
 
@@ -1261,7 +1208,7 @@ async function fetchLogs() {
         const peerCount = Math.max(state.currentPeers.length, 1);
         const limit = 25 * peerCount;
         const now = Date.now() * 1000000; // nanoseconds
-        const oneHourAgo = now - (3600 * 1000000000);
+        const oneHourAgo = now - 3600 * 1000000000;
 
         const query = encodeURIComponent('{job="tunnelmesh"}');
         const url = `/grafana/api/datasources/proxy/${state.lokiDatasourceId}/loki/api/v1/query_range?query=${query}&start=${oneHourAgo}&end=${now}&limit=${limit}&direction=backward`;
@@ -1287,11 +1234,11 @@ function displayLogs(data) {
     // Collect all log entries from all streams
     for (const stream of streams) {
         const labels = stream.stream || {};
-        for (const [timestamp, line] of (stream.values || [])) {
+        for (const [timestamp, line] of stream.values || []) {
             allEntries.push({
-                timestamp: parseInt(timestamp) / 1000000, // Convert to milliseconds
+                timestamp: parseInt(timestamp, 10) / 1000000, // Convert to milliseconds
                 line,
-                labels
+                labels,
             });
         }
     }
@@ -1307,35 +1254,37 @@ function displayLogs(data) {
 
     if (noLogs) noLogs.style.display = 'none';
 
-    const html = allEntries.map(entry => {
-        const date = new Date(entry.timestamp);
-        const timeStr = date.toISOString().replace('T', ' ').substring(0, 23);
+    const html = allEntries
+        .map((entry) => {
+            const date = new Date(entry.timestamp);
+            const timeStr = date.toISOString().replace('T', ' ').substring(0, 23);
 
-        // Parse the log line - try JSON first
-        let level = 'info';
-        let message = entry.line;
+            // Parse the log line - try JSON first
+            let level = 'info';
+            let message = entry.line;
 
-        try {
-            const parsed = JSON.parse(entry.line);
-            level = (parsed.level || 'info').toLowerCase();
-            message = formatLogJson(parsed);
-        } catch {
-            // Not JSON, check for level prefix
-            const levelMatch = entry.line.match(/^(DEBUG|INFO|WARN|ERROR)/i);
-            if (levelMatch) {
-                level = levelMatch[1].toLowerCase();
-                message = escapeHtml(entry.line.substring(levelMatch[0].length).trim());
-            } else {
-                message = escapeHtml(entry.line);
+            try {
+                const parsed = JSON.parse(entry.line);
+                level = (parsed.level || 'info').toLowerCase();
+                message = formatLogJson(parsed);
+            } catch {
+                // Not JSON, check for level prefix
+                const levelMatch = entry.line.match(/^(DEBUG|INFO|WARN|ERROR)/i);
+                if (levelMatch) {
+                    level = levelMatch[1].toLowerCase();
+                    message = escapeHtml(entry.line.substring(levelMatch[0].length).trim());
+                } else {
+                    message = escapeHtml(entry.line);
+                }
             }
-        }
 
-        return `<div class="log-entry">
+            return `<div class="log-entry">
             <span class="log-timestamp">${timeStr}</span>
             <span class="log-level ${level}">${level.toUpperCase()}</span>
             <span class="log-message">${message}</span>
         </div>`;
-    }).join('');
+        })
+        .join('');
 
     logsContent.innerHTML = html;
 }
@@ -1344,15 +1293,14 @@ function formatLogJson(obj) {
     const parts = [];
     for (const [key, value] of Object.entries(obj)) {
         if (key === 'level' || key === 'ts' || key === 'time') continue;
-        const valueStr = typeof value === 'string'
-            ? `<span class="log-string">"${escapeHtml(value)}"</span>`
-            : `<span class="log-value">${escapeHtml(String(value))}</span>`;
+        const valueStr =
+            typeof value === 'string'
+                ? `<span class="log-string">"${escapeHtml(value)}"</span>`
+                : `<span class="log-value">${escapeHtml(String(value))}</span>`;
         parts.push(`<span class="log-key">${escapeHtml(key)}</span>:${valueStr}`);
     }
-    return '{' + parts.join(',') + '}';
+    return `{${parts.join(',')}}`;
 }
-
-// escapeHtml imported from TM.utils (duplicate removed)
 
 async function fetchAlerts() {
     if (!state.alertsEnabled) return;
@@ -1379,7 +1327,7 @@ function processAlertData(data) {
     for (const alert of alerts) {
         if (alert.state === 'firing') {
             const severity = alert.labels?.severity || 'warning';
-            if (counts.hasOwnProperty(severity)) {
+            if (Object.hasOwn(counts, severity)) {
                 counts[severity]++;
             }
 
@@ -1391,7 +1339,7 @@ function processAlertData(data) {
                 if (!peerAlerts[peerName]) {
                     peerAlerts[peerName] = { warning: 0, critical: 0, page: 0 };
                 }
-                if (peerAlerts[peerName].hasOwnProperty(severity)) {
+                if (Object.hasOwn(peerAlerts[peerName], severity)) {
                     peerAlerts[peerName][severity]++;
                 }
             }
@@ -1426,7 +1374,8 @@ function updateWGClientsTable() {
     if (!state.wgConcentratorConnected) {
         if (dom.wgClientsBody) dom.wgClientsBody.innerHTML = '';
         if (dom.noWgClients) {
-            dom.noWgClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
+            dom.noWgClients.textContent =
+                'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
             dom.noWgClients.style.display = 'block';
         }
         document.getElementById('wg-pagination').style.display = 'none';
@@ -1449,12 +1398,13 @@ function updateWGClientsTable() {
     if (dom.noWgClients) dom.noWgClients.style.display = 'none';
     const visibleClients = state.wgClients.slice(0, state.wgVisibleCount);
     if (!dom.wgClientsBody) return;
-    dom.wgClientsBody.innerHTML = visibleClients.map(client => {
-        const statusClass = client.enabled ? 'online' : 'offline';
-        const statusText = client.enabled ? 'Enabled' : 'Disabled';
-        const lastSeen = client.last_seen ? formatLastSeen(client.last_seen) : 'Never';
+    dom.wgClientsBody.innerHTML = visibleClients
+        .map((client) => {
+            const statusClass = client.enabled ? 'online' : 'offline';
+            const statusText = client.enabled ? 'Enabled' : 'Disabled';
+            const lastSeen = client.last_seen ? formatLastSeen(client.last_seen) : 'Never';
 
-        return `
+            return `
             <tr>
                 <td><strong>${escapeHtml(client.name)}</strong></td>
                 <td><code>${client.mesh_ip}</code></td>
@@ -1469,7 +1419,8 @@ function updateWGClientsTable() {
                 </td>
             </tr>
         `;
-    }).join('');
+        })
+        .join('');
 
     updatePaginationUI({
         paginationId: 'wg-pagination',
@@ -1478,11 +1429,9 @@ function updateWGClientsTable() {
         shownCountId: 'wg-shown-count',
         totalCountId: 'wg-total-count',
         totalCount: state.wgClients.length,
-        visibleCount: state.wgVisibleCount
+        visibleCount: state.wgVisibleCount,
     });
 }
-
-// formatLastSeen imported from TM.format
 
 function showAddWGClientModal() {
     if (!state.wgConcentratorConnected) {
@@ -1502,7 +1451,7 @@ function closeWGModal() {
     fetchWGClients();
 }
 
-async function createWGClient() {
+async function _createWGClient() {
     const nameInput = document.getElementById('wg-client-name');
     const name = nameInput.value.trim();
 
@@ -1515,12 +1464,12 @@ async function createWGClient() {
         const resp = await fetch('api/wireguard/clients', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name })
+            body: JSON.stringify({ name }),
         });
 
         if (!resp.ok) {
             const err = await resp.json();
-            showToast('Failed to create client: ' + (err.message || 'Unknown error'), 'error');
+            showToast(`Failed to create client: ${err.message || 'Unknown error'}`, 'error');
             return;
         }
 
@@ -1535,16 +1484,15 @@ async function createWGClient() {
         document.getElementById('wg-qr-image').src = data.qr_code || '';
         document.getElementById('wg-created-name').textContent = data.client.name;
         document.getElementById('wg-created-ip').textContent = data.client.mesh_ip;
-        document.getElementById('wg-created-dns').textContent = data.client.dns_name + '.tunnelmesh';
+        document.getElementById('wg-created-dns').textContent = `${data.client.dns_name}.tunnelmesh`;
         document.getElementById('wg-config-text').value = data.config;
-
     } catch (err) {
         console.error('Failed to create WG client:', err);
         showToast('Failed to create client', 'error');
     }
 }
 
-function downloadWGConfig() {
+function _downloadWGConfig() {
     if (!state.currentWGConfig) return;
 
     const config = state.currentWGConfig.config;
@@ -1559,13 +1507,14 @@ function downloadWGConfig() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 }
+window.downloadWGConfig = _downloadWGConfig;
 
-async function toggleWGClient(id, enabled) {
+async function _toggleWGClient(id, enabled) {
     try {
         const resp = await fetch(`api/wireguard/clients/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled })
+            body: JSON.stringify({ enabled }),
         });
 
         if (!resp.ok) {
@@ -1580,14 +1529,14 @@ async function toggleWGClient(id, enabled) {
     }
 }
 
-async function deleteWGClient(id, name) {
+async function _deleteWGClient(id, name) {
     if (!confirm(`Delete WireGuard peer "${name}"?`)) {
         return;
     }
 
     try {
         const resp = await fetch(`api/wireguard/clients/${id}`, {
-            method: 'DELETE'
+            method: 'DELETE',
         });
 
         if (!resp.ok) {
@@ -1609,9 +1558,9 @@ function populateFilterPeerSelect(peers) {
     if (!dom.filterPeerSelect) return;
 
     // Build new peer list for comparison - skip rebuild if unchanged
-    const newPeerList = peers.map(p => p.name).join(',');
+    const newPeerList = peers.map((p) => p.name).join(',');
     const currentOptions = Array.from(dom.filterPeerSelect.options);
-    const currentPeerList = currentOptions.map(o => o.value).join(',');
+    const currentPeerList = currentOptions.map((o) => o.value).join(',');
 
     if (newPeerList === currentPeerList) {
         // Peer list unchanged, skip rebuild to avoid disrupting user interaction
@@ -1621,7 +1570,7 @@ function populateFilterPeerSelect(peers) {
     const currentValue = dom.filterPeerSelect.value;
     dom.filterPeerSelect.innerHTML = '';
 
-    peers.forEach(peer => {
+    peers.forEach((peer) => {
         const opt = document.createElement('option');
         opt.value = peer.name;
         opt.textContent = peer.name;
@@ -1629,9 +1578,9 @@ function populateFilterPeerSelect(peers) {
     });
 
     // Restore selection if it still exists, otherwise use global selection or first peer
-    if (currentValue && peers.some(p => p.name === currentValue)) {
+    if (currentValue && peers.some((p) => p.name === currentValue)) {
         dom.filterPeerSelect.value = currentValue;
-    } else if (state.selectedNodeId && peers.some(p => p.name === state.selectedNodeId)) {
+    } else if (state.selectedNodeId && peers.some((p) => p.name === state.selectedNodeId)) {
         dom.filterPeerSelect.value = state.selectedNodeId;
         loadFilterRules();
     } else if (peers.length > 0 && !dom.filterPeerSelect.value) {
@@ -1699,13 +1648,13 @@ function renderFilterRules(data) {
     if (dom.noFilterRules) dom.noFilterRules.style.display = 'none';
 
     // Check for temporary rules and show warning if any exist
-    const hasTemporaryRules = data.rules.some(r => r.source === 'temporary');
+    const hasTemporaryRules = data.rules.some((r) => r.source === 'temporary');
     if (dom.filterTempWarning) {
         dom.filterTempWarning.style.display = hasTemporaryRules ? 'block' : 'none';
     }
 
     // Sort rules: coordinator first, then config, temporary, service
-    const sourceOrder = { 'coordinator': 0, 'config': 1, 'temporary': 2, 'service': 3 };
+    const sourceOrder = { coordinator: 0, config: 1, temporary: 2, service: 3 };
     const sortedRules = [...data.rules].sort((a, b) => {
         const orderA = sourceOrder[a.source] ?? 99;
         const orderB = sourceOrder[b.source] ?? 99;
@@ -1714,10 +1663,11 @@ function renderFilterRules(data) {
         return a.port - b.port;
     });
 
-    dom.filterRulesBody.innerHTML = sortedRules.map(rule => {
-        const sourcePeerDisplay = rule.source_peer ? rule.source_peer : '<span class="text-muted">Any</span>';
-        const sourcePeerEscaped = rule.source_peer || '';
-        return `
+    dom.filterRulesBody.innerHTML = sortedRules
+        .map((rule) => {
+            const sourcePeerDisplay = rule.source_peer ? rule.source_peer : '<span class="text-muted">Any</span>';
+            const sourcePeerEscaped = rule.source_peer || '';
+            return `
         <tr>
             <td>${rule.port}</td>
             <td>${rule.protocol.toUpperCase()}</td>
@@ -1725,12 +1675,16 @@ function renderFilterRules(data) {
             <td>${sourcePeerDisplay}</td>
             <td>${rule.source}</td>
             <td>
-                ${rule.source === 'temporary' ?
-                    `<button class="btn-danger" onclick="removeFilterRule('${data.peer}', ${rule.port}, '${rule.protocol}', '${sourcePeerEscaped}')">Remove</button>` :
-                    '<span class="text-muted">-</span>'}
+                ${
+                    rule.source === 'temporary'
+                        ? `<button class="btn-danger" onclick="removeFilterRule('${data.peer}', ${rule.port}, '${rule.protocol}', '${sourcePeerEscaped}')">Remove</button>`
+                        : '<span class="text-muted">-</span>'
+                }
             </td>
         </tr>
-    `}).join('');
+    `;
+        })
+        .join('');
 }
 
 // Populate the source peer dropdown in the filter modal
@@ -1743,7 +1697,7 @@ function populateSourcePeerSelect() {
     // Add all known peers
     const peers = state.currentPeers || [];
     const sortedPeers = [...peers].sort((a, b) => a.name.localeCompare(b.name));
-    sortedPeers.forEach(peer => {
+    sortedPeers.forEach((peer) => {
         const opt = document.createElement('option');
         opt.value = peer.name;
         opt.textContent = `${peer.name} (${peer.mesh_ip})`;
@@ -1761,7 +1715,7 @@ function populateDestPeerSelect() {
     // Add all known peers
     const peers = state.currentPeers || [];
     const sortedPeers = [...peers].sort((a, b) => a.name.localeCompare(b.name));
-    sortedPeers.forEach(peer => {
+    sortedPeers.forEach((peer) => {
         const opt = document.createElement('option');
         opt.value = peer.name;
         opt.textContent = `${peer.name} (${peer.mesh_ip})`;
@@ -1798,7 +1752,7 @@ window.closeFilterModal = closeFilterModal;
 // Add a filter rule
 async function addFilterRule() {
     const destPeer = document.getElementById('filter-rule-dest-peer')?.value || '__all__';
-    const port = parseInt(document.getElementById('filter-rule-port')?.value);
+    const port = parseInt(document.getElementById('filter-rule-port')?.value, 10);
     const protocol = document.getElementById('filter-rule-protocol')?.value;
     const action = document.getElementById('filter-rule-action')?.value;
     const sourcePeer = document.getElementById('filter-rule-source-peer')?.value || '';
@@ -1831,18 +1785,21 @@ async function addFilterRule() {
         const resp = await fetch('api/filter/rules', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ peer: destPeer, port, protocol, action, source_peer: sourcePeer })
+            body: JSON.stringify({ peer: destPeer, port, protocol, action, source_peer: sourcePeer }),
         });
 
         if (!resp.ok) {
             const err = await resp.json();
-            showToast('Failed to add rule: ' + (err.message || 'Unknown error'), 'error');
+            showToast(`Failed to add rule: ${err.message || 'Unknown error'}`, 'error');
             return;
         }
 
         const sourceDesc = sourcePeer ? ` from ${sourcePeer}` : '';
         const destDesc = destPeer === '__all__' ? 'all peers' : destPeer;
-        showToast(`Filter rule sent to ${destDesc}: ${action} ${port}/${protocol.toUpperCase()}${sourceDesc}`, 'success');
+        showToast(
+            `Filter rule sent to ${destDesc}: ${action} ${port}/${protocol.toUpperCase()}${sourceDesc}`,
+            'success',
+        );
         closeFilterModal();
         loadFilterRules();
     } catch (err) {
@@ -1863,7 +1820,7 @@ async function removeFilterRule(peerName, port, protocol, sourcePeer) {
         const resp = await fetch('api/filter/rules', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ peer: peerName, port, protocol, source_peer: sourcePeer || '' })
+            body: JSON.stringify({ peer: peerName, port, protocol, source_peer: sourcePeer || '' }),
         });
 
         if (!resp.ok) {
@@ -1943,7 +1900,7 @@ function initFilterPanel() {
         if (dom.filterPeerSelect && nodeId) {
             // Check if the peer exists in the dropdown
             const options = Array.from(dom.filterPeerSelect.options);
-            if (options.some(opt => opt.value === nodeId)) {
+            if (options.some((opt) => opt.value === nodeId)) {
                 dom.filterPeerSelect.value = nodeId;
                 loadFilterRules();
             }
@@ -2052,7 +2009,7 @@ function initLogsResize() {
         if (!isResizing) return;
         const delta = e.clientY - startY;
         const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-        container.style.maxHeight = newHeight + 'px';
+        container.style.maxHeight = `${newHeight}px`;
     });
 
     document.addEventListener('mouseup', () => {
@@ -2064,19 +2021,27 @@ function initLogsResize() {
     });
 
     // Touch support for mobile
-    handle.addEventListener('touchstart', (e) => {
-        isResizing = true;
-        startY = e.touches[0].clientY;
-        startHeight = container.offsetHeight;
-        e.preventDefault();
-    }, { passive: false });
+    handle.addEventListener(
+        'touchstart',
+        (e) => {
+            isResizing = true;
+            startY = e.touches[0].clientY;
+            startHeight = container.offsetHeight;
+            e.preventDefault();
+        },
+        { passive: false },
+    );
 
-    document.addEventListener('touchmove', (e) => {
-        if (!isResizing) return;
-        const delta = e.touches[0].clientY - startY;
-        const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-        container.style.maxHeight = newHeight + 'px';
-    }, { passive: true });
+    document.addEventListener(
+        'touchmove',
+        (e) => {
+            if (!isResizing) return;
+            const delta = e.touches[0].clientY - startY;
+            const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
+            container.style.maxHeight = `${newHeight}px`;
+        },
+        { passive: true },
+    );
 
     document.addEventListener('touchend', () => {
         isResizing = false;
