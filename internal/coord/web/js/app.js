@@ -1685,7 +1685,17 @@ function renderFilterRules(data) {
 
     if (dom.noFilterRules) dom.noFilterRules.style.display = 'none';
 
-    dom.filterRulesBody.innerHTML = data.rules.map(rule => {
+    // Sort rules: coordinator first, then config, temporary, service
+    const sourceOrder = { 'coordinator': 0, 'config': 1, 'temporary': 2, 'service': 3 };
+    const sortedRules = [...data.rules].sort((a, b) => {
+        const orderA = sourceOrder[a.source] ?? 99;
+        const orderB = sourceOrder[b.source] ?? 99;
+        if (orderA !== orderB) return orderA - orderB;
+        // Within same source, sort by port
+        return a.port - b.port;
+    });
+
+    dom.filterRulesBody.innerHTML = sortedRules.map(rule => {
         const sourcePeerDisplay = rule.source_peer ? rule.source_peer : '<span class="text-muted">Any</span>';
         const sourcePeerEscaped = rule.source_peer || '';
         return `

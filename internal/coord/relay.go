@@ -80,6 +80,8 @@ const (
 	MsgTypeFilterRuleAdd     byte = 0x31 // Server -> Client: add single temporary rule
 	MsgTypeFilterRuleRemove  byte = 0x32 // Server -> Client: remove single rule
 	MsgTypeServicePortNotify byte = 0x33 // Server -> Client: coordinator service port announcement
+	MsgTypeFilterRulesQuery  byte = 0x34 // Server -> Client: request current filter rules
+	MsgTypeFilterRulesReply  byte = 0x35 // Client -> Server: response with filter rules
 )
 
 var upgrader = websocket.Upgrader{
@@ -203,6 +205,81 @@ func (r *relayManager) handleAPIResponse(data []byte) {
 		}
 	} else {
 		log.Debug().Uint32("req_id", reqID).Msg("API response for unknown request")
+	}
+}
+
+// QueryFilterRules sends a filter rules query to a peer and waits for response.
+// Returns the JSON-encoded filter rules or error if timeout/peer not connected.
+func (r *relayManager) QueryFilterRules(peerName string, timeout time.Duration) ([]byte, error) {
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("peer not connected: %s", peerName)
+	}
+
+	// Allocate request ID and response channel (reuse apiRequests map)
+	r.apiRequestsMu.Lock()
+	reqID := r.nextReqID
+	r.nextReqID++
+	respChan := make(chan []byte, 1)
+	r.apiRequests[reqID] = respChan
+	r.apiRequestsMu.Unlock()
+
+	defer func() {
+		r.apiRequestsMu.Lock()
+		delete(r.apiRequests, reqID)
+		r.apiRequestsMu.Unlock()
+	}()
+
+	// Build request: [MsgTypeFilterRulesQuery][reqID:4]
+	msg := make([]byte, 5)
+	msg[0] = MsgTypeFilterRulesQuery
+	msg[1] = byte(reqID >> 24)
+	msg[2] = byte(reqID >> 16)
+	msg[3] = byte(reqID >> 8)
+	msg[4] = byte(reqID)
+
+	// Send request via async write channel
+	select {
+	case pc.writeChan <- msg:
+		// Message queued
+	default:
+		return nil, fmt.Errorf("query filter rules: write channel full")
+	}
+
+	// Wait for response
+	select {
+	case resp := <-respChan:
+		return resp, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("filter rules query timeout")
+	}
+}
+
+// handleFilterRulesReply processes a filter rules response from a peer.
+func (r *relayManager) handleFilterRulesReply(data []byte) {
+	if len(data) < 5 {
+		log.Debug().Msg("filter rules reply too short")
+		return
+	}
+
+	reqID := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+	body := data[5:]
+
+	r.apiRequestsMu.Lock()
+	respChan, ok := r.apiRequests[reqID]
+	r.apiRequestsMu.Unlock()
+
+	if ok {
+		select {
+		case respChan <- body:
+		default:
+			log.Debug().Uint32("req_id", reqID).Msg("filter rules reply channel full")
+		}
+	} else {
+		log.Debug().Uint32("req_id", reqID).Msg("filter rules reply for unknown request")
 	}
 }
 
@@ -937,6 +1014,10 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 	case MsgTypeAPIResponse:
 		// API response from concentrator
 		s.relay.handleAPIResponse(data)
+
+	case MsgTypeFilterRulesReply:
+		// Filter rules response from peer
+		s.relay.handleFilterRulesReply(data)
 
 	default:
 		log.Debug().Str("peer", sourcePeer).Uint8("type", msgType).Msg("unknown persistent relay message type")

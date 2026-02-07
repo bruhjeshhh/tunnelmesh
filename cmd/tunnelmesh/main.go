@@ -1169,6 +1169,22 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			filter.SetServiceRules(rules)
 			log.Info().Int("ports", len(ports)).Msg("added coordinator service ports to filter")
 		})
+
+		// Handler for coordinator to query our current filter rules
+		node.PersistentRelay.SetGetFilterRulesHandler(func() []tunnel.FilterRuleWithSourceWire {
+			allRules := filter.ListRules()
+			wireRules := make([]tunnel.FilterRuleWithSourceWire, 0, len(allRules))
+			for _, r := range allRules {
+				wireRules = append(wireRules, tunnel.FilterRuleWithSourceWire{
+					Port:       r.Rule.Port,
+					Protocol:   routing.ProtocolToString(r.Rule.Protocol),
+					Action:     r.Rule.Action.String(),
+					SourcePeer: r.Rule.SourcePeer,
+					Source:     r.Source.String(),
+				})
+			}
+			return wireRules
+		})
 	}
 
 	// Initialize WireGuard concentrator if enabled

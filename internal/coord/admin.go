@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -546,7 +547,7 @@ func (s *Server) handleFilterRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleFilterRulesList returns the filter rules for a peer.
+// handleFilterRulesList returns the filter rules for a peer by querying the peer directly.
 func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 	peerName := r.URL.Query().Get("peer")
 	if peerName == "" {
@@ -554,31 +555,45 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Calculate capacity for rules: coordinator rules + service ports
-	servicePorts := s.getServicePorts()
-	rules := make([]FilterRuleInfo, 0, len(s.cfg.Filter.Rules)+len(servicePorts))
+	// Query the peer for their current filter rules
+	rulesJSON, err := s.relay.QueryFilterRules(peerName, 10*time.Second)
+	if err != nil {
+		// Peer not connected or timeout - return empty rules with error indication
+		log.Debug().Err(err).Str("peer", peerName).Msg("failed to query peer filter rules")
+		resp := FilterRulesResponse{
+			PeerName:    peerName,
+			DefaultDeny: s.cfg.Filter.IsDefaultDeny(),
+			Rules:       []FilterRuleInfo{},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
 
-	// Add coordinator rules from config
-	for _, r := range s.cfg.Filter.Rules {
+	// Parse the response from the peer
+	var peerRules []struct {
+		Port       uint16 `json:"port"`
+		Protocol   string `json:"protocol"`
+		Action     string `json:"action"`
+		SourcePeer string `json:"source_peer"`
+		Source     string `json:"source"`
+	}
+	if err := json.Unmarshal(rulesJSON, &peerRules); err != nil {
+		log.Error().Err(err).Str("peer", peerName).Msg("failed to parse peer filter rules")
+		s.jsonError(w, "failed to parse peer filter rules", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	rules := make([]FilterRuleInfo, 0, len(peerRules))
+	for _, r := range peerRules {
 		rules = append(rules, FilterRuleInfo{
 			Port:       r.Port,
 			Protocol:   r.Protocol,
 			Action:     r.Action,
-			Source:     "coordinator",
+			Source:     r.Source,
 			Expires:    0,
 			SourcePeer: r.SourcePeer,
-		})
-	}
-
-	// Add service port rules (auto-generated for coordinator services)
-	for _, port := range servicePorts {
-		rules = append(rules, FilterRuleInfo{
-			Port:       port,
-			Protocol:   "tcp",
-			Action:     "allow",
-			Source:     "service",
-			Expires:    0,
-			SourcePeer: "",
 		})
 	}
 
