@@ -85,7 +85,6 @@ var (
 	logLevel  string
 	serverURL string
 	authToken string
-	nodeName  string
 
 	// WireGuard concentrator flag
 	wireguardEnabled bool
@@ -198,7 +197,6 @@ It does not route traffic - peers connect directly to each other.`,
 	}
 	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL")
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
-	joinCmd.Flags().StringVarP(&nodeName, "name", "n", "", "node name")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
@@ -481,12 +479,11 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 
 	log.Info().
 		Str("server", cfg.Server).
-		Str("name", cfg.Name).
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required in config")
+	if cfg.Server == "" || cfg.AuthToken == "" {
+		return fmt.Errorf("server and token are required in config")
 	}
 
 	// Log network interface information for debugging
@@ -805,12 +802,6 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if authToken != "" {
 		cfg.AuthToken = authToken
 	}
-	if nodeName != "" {
-		cfg.Name = nodeName
-	} else if cfg.Name == "" {
-		// Default to hostname if no name specified
-		cfg.Name, _ = os.Hostname()
-	}
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
@@ -828,8 +819,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required\nHint: run with --server and --token flags to update context credentials")
+	if cfg.Server == "" || cfg.AuthToken == "" {
+		return fmt.Errorf("server and token are required\nHint: run with --server and --token flags to update context credentials")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -857,8 +848,11 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 }
 
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
-	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required")
+	// Always use system hostname as node name
+	cfg.Name, _ = os.Hostname()
+
+	if cfg.Server == "" || cfg.AuthToken == "" {
+		return fmt.Errorf("server and token are required")
 	}
 
 	// Apply configured log level from config file
@@ -1695,6 +1689,10 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Start heartbeat loop
 	go node.RunHeartbeat(ctx)
 
+	// Show ready message
+	fmt.Fprintf(os.Stderr, "\n  ✓ Connected to mesh as %s (%s)\n", cfg.Name, resp.MeshIP)
+	fmt.Fprintf(os.Stderr, "  Press CTRL+C to disconnect\n\n")
+
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
 
@@ -1715,13 +1713,17 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Close all connections via FSM (properly transitions states and triggers observers)
 	node.Connections.CloseAll()
 
-	// Don't deregister on shutdown - keep the peer record so we get the same
-	// mesh IP when we reconnect. Use 'tunnelmesh leave' for intentional removal.
-	log.Info().Msg("disconnected from mesh (peer record retained for sticky IP)")
-
 	if node.Resolver != nil {
 		_ = node.Resolver.Shutdown()
 	}
+
+	// Show exit instructions
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  Disconnected from mesh.")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  To reconnect:         tunnelmesh join")
+	fmt.Fprintln(os.Stderr, "  To run as a service:  tunnelmesh service install && tunnelmesh service start")
+	fmt.Fprintln(os.Stderr)
 
 	return nil
 }

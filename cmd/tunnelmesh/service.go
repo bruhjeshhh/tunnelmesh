@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/context"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 )
@@ -225,6 +228,19 @@ func runServiceInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config file not found: %s\nCreate the config file first or specify a different path with --config", cfg.ConfigPath)
 	}
 
+	// Show security warning based on filter configuration
+	showServiceInstallWarning(cfg.ConfigPath)
+
+	// Prompt for confirmation
+	fmt.Print("Do you want to continue? [y/N]: ")
+	reader := bufio.NewReader(os.Stdin)
+	response, _ := reader.ReadString('\n')
+	response = strings.TrimSpace(strings.ToLower(response))
+	if response != "y" && response != "yes" {
+		fmt.Println("Installation cancelled.")
+		return nil
+	}
+
 	log.Info().
 		Str("name", cfg.Name).
 		Str("mode", cfg.Mode).
@@ -235,13 +251,56 @@ func runServiceInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("Service %q installed successfully.\n", cfg.Name)
+	fmt.Printf("\nService %q installed successfully.\n", cfg.Name)
 	fmt.Printf("\nTo start the service:\n")
 	fmt.Printf("  tunnelmesh service start\n")
 	fmt.Printf("\nTo view logs:\n")
 	fmt.Printf("  tunnelmesh service logs\n")
 
 	return nil
+}
+
+// showServiceInstallWarning displays a security warning before installing the service.
+// The warning is stronger when the packet filter allows all traffic by default.
+func showServiceInstallWarning(configPath string) {
+	// Try to load config to check filter settings
+	isDefaultDeny := true // Safe default
+	if peerCfg, err := config.LoadPeerConfig(configPath); err == nil {
+		isDefaultDeny = peerCfg.Filter.IsDefaultDeny()
+	}
+
+	fmt.Fprintln(os.Stderr)
+	if isDefaultDeny {
+		// Safer configuration - moderate warning
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr, "@          INSTALLING MESH NETWORK SERVICE              @")
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "This will install TunnelMesh as a permanent system service.")
+		fmt.Fprintln(os.Stderr, "A new network interface will be created on this machine.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Filter mode: DENY by default (allowlist)")
+		fmt.Fprintln(os.Stderr, "  → Only explicitly allowed ports will be accessible")
+		fmt.Fprintln(os.Stderr)
+	} else {
+		// Dangerous configuration - strong warning
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr, "@    WARNING: INSTALLING MESH NETWORK WITH OPEN ACCESS   @")
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "This will install TunnelMesh as a permanent system service.")
+		fmt.Fprintln(os.Stderr, "A new network interface will be created on this machine.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  *** SECURITY WARNING ***")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Filter mode: ALLOW by default (denylist)")
+		fmt.Fprintln(os.Stderr, "  → ALL ports on this machine will be accessible to mesh peers!")
+		fmt.Fprintln(os.Stderr, "  → Any peer in the mesh can connect to any service on this host.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Consider setting 'filter.default_deny: true' in your config")
+		fmt.Fprintln(os.Stderr, "to only allow specific ports.")
+		fmt.Fprintln(os.Stderr)
+	}
 }
 
 func runServiceUninstall(cmd *cobra.Command, args []string) error {
