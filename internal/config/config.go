@@ -138,14 +138,14 @@ func (r *FilterRule) ProtocolNumber() uint8 {
 }
 
 // FilterConfig holds packet filter configuration.
-// When default_deny is true (whitelist mode), all ports are blocked unless explicitly allowed.
+// When default_deny is true (allowlist mode), all ports are blocked unless explicitly allowed.
 type FilterConfig struct {
 	DefaultDeny *bool        `yaml:"default_deny"` // Block all by default (default: true)
 	Rules       []FilterRule `yaml:"rules"`        // Filter rules
 }
 
 // IsDefaultDeny returns whether the filter defaults to denying traffic.
-// Returns true by default (whitelist mode) if not explicitly set.
+// Returns true by default (allowlist mode) if not explicitly set.
 func (f *FilterConfig) IsDefaultDeny() bool {
 	return f.DefaultDeny == nil || *f.DefaultDeny
 }

@@ -135,7 +135,7 @@ type PacketFilter struct {
 	service     atomic.Pointer[ruleMap] // Auto-generated for coordinator services (read-only)
 
 	mu          sync.Mutex // Serializes writes
-	defaultDeny bool       // If true, deny by default (whitelist mode)
+	defaultDeny bool       // If true, deny by default (allowlist mode)
 }
 
 // NewPacketFilter creates a new packet filter.
@@ -476,7 +476,7 @@ func (f *PacketFilter) RuleCountBySource() RuleCounts {
 	return counts
 }
 
-// IsDefaultDeny returns true if the filter is in whitelist mode (deny by default).
+// IsDefaultDeny returns true if the filter is in allowlist mode (deny by default).
 func (f *PacketFilter) IsDefaultDeny() bool {
 	return f.defaultDeny
 }

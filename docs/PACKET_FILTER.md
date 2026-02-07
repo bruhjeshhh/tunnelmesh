@@ -4,7 +4,7 @@ TunnelMesh includes a built-in packet filter that controls which ports are acces
 
 ## Overview
 
-- **Default deny mode**: Block all incoming ports unless explicitly allowed (whitelist)
+- **Default deny mode**: Block all incoming ports unless explicitly allowed (allowlist)
 - **Per-peer rules**: Target specific source peers for fine-grained access control
 - **3-layer rule system**: Coordinator, peer config, and temporary rules merge together
 - **Real-time updates**: Admin panel changes push to peers immediately
@@ -60,8 +60,8 @@ Global rules pushed to all peers when they connect:
 
 ```yaml
 filter:
-  # default_deny defaults to true (whitelist mode) if not specified
-  # Set to false only if you want blacklist mode (allow all unless denied)
+  # default_deny defaults to true (allowlist mode) if not specified
+  # Set to false only if you want blocklist mode (allow all unless denied)
   rules:
     # Allow SSH across the entire mesh
     - port: 22
@@ -126,7 +126,7 @@ tunnelmesh filter list
 # 80    TCP       allow   *            config       -
 # 3306  TCP       deny    dev-node     temporary    2h
 #
-# Default policy: deny (whitelist mode - only allowed ports are accessible)
+# Default policy: deny (allowlist mode - only allowed ports are accessible)
 # Total rules: 3
 ```
 
@@ -272,7 +272,7 @@ ICMP traffic (ping, traceroute) is **always allowed** through the filter for dia
 
 ## Best Practices
 
-1. **Default is secure**: The filter defaults to `default_deny: true` (whitelist mode) if not specified. Only set `default_deny: false` if you explicitly want blacklist mode.
+1. **Default is secure**: The filter defaults to `default_deny: true` (allowlist mode) if not specified. Only set `default_deny: false` if you explicitly want blocklist mode.
 
 2. **Use coordinator for mesh-wide rules**: Common ports like SSH and metrics should be allowed at the coordinator level.
 

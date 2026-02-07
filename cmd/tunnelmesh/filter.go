@@ -241,7 +241,7 @@ func formatDuration(d time.Duration) string {
 
 func policyString(defaultDeny bool) string {
 	if defaultDeny {
-		return "deny (whitelist mode - only allowed ports are accessible)"
+		return "deny (allowlist mode - only allowed ports are accessible)"
 	}
-	return "allow (blacklist mode - all ports accessible unless denied)"
+	return "allow (blocklist mode - all ports accessible unless denied)"
 }

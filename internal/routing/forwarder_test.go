@@ -1052,7 +1052,7 @@ func TestForwarder_PacketFilter_DropsByDefault(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 	fwd.SetTUN(mockTun)
 
-	// Create filter with default deny (whitelist mode)
+	// Create filter with default deny (allowlist mode)
 	filter := NewPacketFilter(true)
 	fwd.SetFilter(filter)
 

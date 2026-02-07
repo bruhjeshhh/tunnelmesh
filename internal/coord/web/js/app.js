@@ -1673,7 +1673,7 @@ function renderFilterRules(data) {
         dom.filterInfo.style.display = 'block';
     }
     if (dom.filterDefaultPolicy) {
-        dom.filterDefaultPolicy.textContent = data.default_deny ? 'DENY (whitelist mode)' : 'ALLOW (blacklist mode)';
+        dom.filterDefaultPolicy.textContent = data.default_deny ? 'DENY (allowlist mode)' : 'ALLOW (blocklist mode)';
         dom.filterDefaultPolicy.className = data.default_deny ? 'policy-deny' : 'policy-allow';
     }
 
