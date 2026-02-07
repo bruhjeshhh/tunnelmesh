@@ -672,9 +672,9 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
-/* DNS group highlight - background shading for grouped rows */
+/* DNS group highlight - same shading as log rows */
 tr.dns-group-highlight td {
-    background: var(--color-card-hover-bg);
+    background: var(--color-bg-secondary);
 }
 
 td {
