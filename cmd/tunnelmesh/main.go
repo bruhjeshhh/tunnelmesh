@@ -1727,16 +1727,8 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "  Disconnected from mesh.")
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  To reconnect:")
-	// Check for active context to show appropriate command
-	if store, err := meshctx.Load(); err == nil && store.HasActive() {
-		fmt.Fprintf(os.Stderr, "    tunnelmesh join                    # rejoin using context %q\n", store.Active)
-	} else {
-		fmt.Fprintln(os.Stderr, "    tunnelmesh join --server <url> --token <token>")
-	}
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  To run as a background service:")
-	fmt.Fprintln(os.Stderr, "    tunnelmesh service install && tunnelmesh service start")
+	fmt.Fprintln(os.Stderr, "  To reconnect:         tunnelmesh join")
+	fmt.Fprintln(os.Stderr, "  To run as a service:  tunnelmesh service install && tunnelmesh service start")
 	fmt.Fprintln(os.Stderr)
 
 	return nil
