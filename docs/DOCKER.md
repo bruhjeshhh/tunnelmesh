@@ -79,9 +79,12 @@ docker compose logs --tail=100 server
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| Admin Dashboard | http://localhost:8880 | Mesh status and management |
-| Grafana | http://localhost:8880/grafana/ | Metrics dashboards |
-| Prometheus | http://localhost:8880/prometheus/ | Raw metrics |
+| Coordination API | http://localhost:8081 | Peers connect here |
+| Admin Dashboard | https://server-node.tunnelmesh/ | Mesh-only (requires joining the mesh) |
+| Grafana | https://server-node.tunnelmesh/grafana/ | Metrics dashboards (mesh-only) |
+| Prometheus | https://server-node.tunnelmesh/prometheus/ | Raw metrics (mesh-only) |
+
+**Note:** The admin panel and monitoring tools are only accessible from within the mesh network for security.
 
 ## Container Requirements
 

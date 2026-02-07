@@ -18,9 +18,8 @@ cp terraform.tfvars.example terraform.tfvars
 # Set your DO token
 export TF_VAR_do_token="dop_v1_xxx"
 
-# Generate auth tokens
+# Generate auth token
 openssl rand -hex 32  # For auth_token
-openssl rand -hex 32  # For admin_token
 
 # Edit terraform.tfvars with your domain and tokens
 
@@ -377,7 +376,6 @@ Each developer runs:
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token team-token \
-  --name $(whoami) \
   --context team
 ```
 
@@ -492,7 +490,6 @@ Each node in the `nodes` map supports these options:
 |----------|-------------|
 | `domain` | Your domain (must be in DigitalOcean DNS) |
 | `auth_token` | Mesh authentication token (`openssl rand -hex 32`) |
-| `admin_token` | Admin interface token (`openssl rand -hex 32`) |
 
 Set your DigitalOcean API token via environment:
 ```bash
@@ -668,9 +665,9 @@ All estimates use `s-1vcpu-512mb-10gb` ($4/mo) droplets. Monitoring adds minimal
 
 ## Security Best Practices
 
-1. **Strong tokens**: `openssl rand -hex 32` for both auth and admin
+1. **Strong tokens**: `openssl rand -hex 32` for auth token
 2. **Rotate periodically**: Update tokens and redeploy
-3. **Mesh-only admin**: Admin dashboard only accessible within mesh
+3. **Mesh-only admin**: Admin dashboard only accessible from within the mesh network
 4. **Enable monitoring**: Visibility into access patterns
 5. **Auto-updates**: Keep nodes patched
 
@@ -682,7 +679,6 @@ All estimates use `s-1vcpu-512mb-10gb` ($4/mo) droplets. Monitoring adds minimal
 # Required
 domain      = "example.com"
 auth_token  = "your-64-char-hex-auth-token"
-admin_token = "your-64-char-hex-admin-token"
 
 # Nodes - Multi-region with exit node
 nodes = {
