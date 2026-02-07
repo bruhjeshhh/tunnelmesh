@@ -1,6 +1,6 @@
-# Packet Filter
+# Internal Packet Filter
 
-TunnelMesh includes a built-in packet filter that controls which ports are accessible on each peer. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local services.
+TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on each peer within the mesh network. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local services.
 
 ## Overview
 
@@ -160,7 +160,7 @@ tunnelmesh filter remove --port 22 --protocol tcp --source-peer badpeer
 
 ## Admin Dashboard
 
-The admin panel provides a "Packet Filter" section for managing rules:
+The admin panel provides an "Internal Packet Filter" section for managing rules:
 
 1. **Select peer** to view their current filter rules
 2. **Add Rule** button opens a form with:
