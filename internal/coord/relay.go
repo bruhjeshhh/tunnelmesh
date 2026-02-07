@@ -289,6 +289,17 @@ func (r *relayManager) GetPersistent(peerName string) (*persistentConn, bool) {
 	return pc, ok
 }
 
+// GetConnectedPeerNames returns the names of all connected peers.
+func (r *relayManager) GetConnectedPeerNames() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := make([]string, 0, len(r.persistent))
+	for name := range r.persistent {
+		names = append(names, name)
+	}
+	return names
+}
+
 // BroadcastPeerReconnected notifies all other connected peers that a peer has reconnected.
 // Clients may use this to re-evaluate their connection state to that peer.
 func (r *relayManager) BroadcastPeerReconnected(reconnectedPeer string) {
@@ -482,9 +493,10 @@ func (r *relayManager) NotifyHolePunch(peerName string, requestingPeers []string
 
 // FilterRuleWire is the wire format for a filter rule.
 type FilterRuleWire struct {
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"` // "tcp" or "udp"
-	Action   string `json:"action"`   // "allow" or "deny"
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	SourcePeer string `json:"source_peer"` // Source peer (empty = any peer)
 }
 
 // PushFilterRules sends the full set of coordinator filter rules to a peer.
@@ -503,9 +515,10 @@ func (r *relayManager) PushFilterRules(peerName string, rules []config.FilterRul
 	wireRules := make([]FilterRuleWire, len(rules))
 	for i, r := range rules {
 		wireRules[i] = FilterRuleWire{
-			Port:     r.Port,
-			Protocol: r.Protocol,
-			Action:   r.Action,
+			Port:       r.Port,
+			Protocol:   r.Protocol,
+			Action:     r.Action,
+			SourcePeer: r.SourcePeer,
 		}
 	}
 
@@ -538,7 +551,7 @@ func (r *relayManager) PushFilterRules(peerName string, rules []config.FilterRul
 
 // PushFilterRuleAdd sends a single filter rule add to a peer.
 // Used when admin panel adds a temporary rule.
-func (r *relayManager) PushFilterRuleAdd(peerName string, port uint16, protocol, action string) {
+func (r *relayManager) PushFilterRuleAdd(peerName string, port uint16, protocol, action, sourcePeer string) {
 	r.mu.Lock()
 	pc, ok := r.persistent[peerName]
 	r.mu.Unlock()
@@ -549,9 +562,10 @@ func (r *relayManager) PushFilterRuleAdd(peerName string, port uint16, protocol,
 	}
 
 	rule := FilterRuleWire{
-		Port:     port,
-		Protocol: protocol,
-		Action:   action,
+		Port:       port,
+		Protocol:   protocol,
+		Action:     action,
+		SourcePeer: sourcePeer,
 	}
 
 	ruleJSON, err := json.Marshal(rule)
@@ -574,6 +588,7 @@ func (r *relayManager) PushFilterRuleAdd(peerName string, port uint16, protocol,
 			Uint16("port", port).
 			Str("protocol", protocol).
 			Str("action", action).
+			Str("source_peer", sourcePeer).
 			Msg("pushed filter rule add to peer")
 	default:
 		log.Debug().
@@ -583,7 +598,7 @@ func (r *relayManager) PushFilterRuleAdd(peerName string, port uint16, protocol,
 }
 
 // PushFilterRuleRemove sends a filter rule removal to a peer.
-func (r *relayManager) PushFilterRuleRemove(peerName string, port uint16, protocol string) {
+func (r *relayManager) PushFilterRuleRemove(peerName string, port uint16, protocol, sourcePeer string) {
 	r.mu.Lock()
 	pc, ok := r.persistent[peerName]
 	r.mu.Unlock()
@@ -593,13 +608,15 @@ func (r *relayManager) PushFilterRuleRemove(peerName string, port uint16, protoc
 		return
 	}
 
-	// Build message: [MsgTypeFilterRuleRemove][port:2][protocol_len:1][protocol]
-	msg := make([]byte, 4+len(protocol))
+	// Build message: [MsgTypeFilterRuleRemove][port:2][protocol_len:1][protocol][source_peer_len:1][source_peer]
+	msg := make([]byte, 5+len(protocol)+len(sourcePeer))
 	msg[0] = MsgTypeFilterRuleRemove
 	msg[1] = byte(port >> 8)
 	msg[2] = byte(port)
 	msg[3] = byte(len(protocol))
-	copy(msg[4:], protocol)
+	copy(msg[4:4+len(protocol)], protocol)
+	msg[4+len(protocol)] = byte(len(sourcePeer))
+	copy(msg[5+len(protocol):], sourcePeer)
 
 	select {
 	case pc.writeChan <- msg:
@@ -607,6 +624,7 @@ func (r *relayManager) PushFilterRuleRemove(peerName string, port uint16, protoc
 			Str("peer", peerName).
 			Uint16("port", port).
 			Str("protocol", protocol).
+			Str("source_peer", sourcePeer).
 			Msg("pushed filter rule remove to peer")
 	default:
 		log.Debug().

@@ -51,15 +51,25 @@ groups:
           summary: "Forwarder errors detected"
           description: "Forwarder error rate is elevated"
 
-      # Early warning: Elevated packet filter drops
+      # Early warning: Elevated packet filter drops (per source peer)
       - alert: TunnelMeshElevatedFilteredDrops
-        expr: sum by (peer) (rate(tunnelmesh_dropped_filtered_total[5m])) > 10
+        expr: sum by (peer, source_peer) (rate(tunnelmesh_dropped_filtered_total[5m])) > 10
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "High packet filter drop rate on {{ $labels.peer }}"
-          description: "Packet filter is blocking more than 10 packets/s - possible attack or misconfiguration"
+          description: "Packet filter blocking >10 packets/s from source '{{ $labels.source_peer }}' on {{ $labels.peer }} - possible attack or misconfiguration"
+
+      # Early warning: Multiple source peers being blocked
+      - alert: TunnelMeshMultipleSourcesBlocked
+        expr: count by (peer) (rate(tunnelmesh_dropped_filtered_total[5m]) > 1) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Multiple source peers being blocked on {{ $labels.peer }}"
+          description: "Packets from more than 3 source peers are being blocked - review filter rules"
 
       # Early warning: No filter rules with default-deny mode
       - alert: TunnelMeshNoFilterRules

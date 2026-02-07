@@ -80,6 +80,10 @@ type WGPacketHandler interface {
 	SendPacket(packet []byte) error
 }
 
+// FilterDropCallback is called when a packet is dropped by the filter.
+// It receives the protocol (TCP=6, UDP=17) and source peer name (may be empty).
+type FilterDropCallback func(protocol uint8, sourcePeer string)
+
 // Forwarder routes packets between the TUN device and tunnels.
 type Forwarder struct {
 	router             *Router
@@ -100,6 +104,7 @@ type Forwarder struct {
 	localIP            net.IP
 	localIPMu          sync.RWMutex
 	onDeadTunnel       func(peerName string) // Callback when tunnel write fails
+	onFilterDrop       FilterDropCallback    // Callback when filter drops a packet
 	deadTunnelDebounce sync.Map              // peerName → time.Time for debouncing
 	// Exit node fields
 	meshCIDR   *net.IPNet // Mesh network CIDR for split-tunnel detection
@@ -218,6 +223,12 @@ func (f *Forwarder) SetOnDeadTunnel(callback func(peerName string)) {
 	f.onDeadTunnel = callback
 }
 
+// SetOnFilterDrop sets a callback that is called when a packet is dropped by the filter.
+// This allows metrics to track drops per source peer.
+func (f *Forwarder) SetOnFilterDrop(callback FilterDropCallback) {
+	f.onFilterDrop = callback
+}
+
 // triggerDeadTunnel invokes the dead tunnel callback with debouncing.
 // Multiple rapid failures for the same peer will only trigger one callback
 // within a 5-second window to prevent callback storms.
@@ -304,8 +315,8 @@ func (f *Forwarder) HandleRelayPacket(sourcePeer string, data []byte) {
 
 	packet := data[FrameHeaderSize : 2+frameLen]
 
-	// Deliver to TUN
-	if err := f.ReceivePacket(packet); err != nil {
+	// Deliver to TUN with peer context for per-peer filtering
+	if err := f.ReceivePacketFromPeer(packet, sourcePeer); err != nil {
 		log.Warn().Err(err).Str("peer", sourcePeer).Int("len", len(packet)).Msg("failed to deliver relay packet to TUN")
 	} else {
 		log.Debug().Str("peer", sourcePeer).Int("len", len(packet)).Msg("delivered relay packet to TUN")
@@ -540,16 +551,24 @@ func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeN
 
 // ReceivePacket writes a received packet to the TUN device.
 // Incoming packets are filtered by the packet filter before delivery.
+// Does not apply peer-specific filtering - use ReceivePacketFromPeer for that.
 func (f *Forwarder) ReceivePacket(packet []byte) error {
+	return f.ReceivePacketFromPeer(packet, "")
+}
+
+// ReceivePacketFromPeer writes a received packet to the TUN device.
+// Applies peer-specific filtering rules based on the source peer.
+// Pass empty string for sourcePeer when peer is unknown (e.g., direct tunnel).
+func (f *Forwarder) ReceivePacketFromPeer(packet []byte, sourcePeer string) error {
 	collectStats := atomic.LoadUint32(&f.statsEnabled) == 1
 
-	// Apply packet filter to incoming traffic
+	// Apply packet filter to incoming traffic with peer context
 	f.filterMu.RLock()
 	filter := f.filter
 	f.filterMu.RUnlock()
 
 	if filter != nil {
-		result := filter.CheckPacket(packet)
+		result := filter.CheckPacketFromPeer(packet, sourcePeer)
 		if result.Drop {
 			f.incStat(collectStats, &f.stats.DroppedFiltered)
 			// Track by protocol
@@ -558,6 +577,10 @@ func (f *Forwarder) ReceivePacket(packet []byte) error {
 				f.incStat(collectStats, &f.stats.DroppedFilteredTCP)
 			case ProtoUDP:
 				f.incStat(collectStats, &f.stats.DroppedFilteredUDP)
+			}
+			// Notify callback for per-peer metrics
+			if f.onFilterDrop != nil {
+				f.onFilterDrop(result.Protocol, sourcePeer)
 			}
 			return nil // Silently drop filtered packets
 		}
@@ -901,8 +924,8 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 				return
 			}
 
-			// Write to TUN (use slice of buffer, no copy needed)
-			if err := f.ReceivePacket(buf.Data()[:result.n]); err != nil {
+			// Write to TUN with peer context for per-peer filtering
+			if err := f.ReceivePacketFromPeer(buf.Data()[:result.n], peerName); err != nil {
 				log.Debug().Err(err).Msg("receive packet failed")
 			}
 		}

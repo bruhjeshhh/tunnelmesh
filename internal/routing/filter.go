@@ -74,10 +74,12 @@ func ProtocolFromString(s string) uint8 {
 
 // FilterRule represents a single packet filter rule.
 type FilterRule struct {
-	Port     uint16       // Port number (1-65535)
-	Protocol uint8        // 6=TCP, 17=UDP
-	Action   FilterAction // Allow or deny
-	Expires  int64        // Unix timestamp, 0=permanent
+	Port       uint16       // Port number (1-65535)
+	Protocol   uint8        // 6=TCP, 17=UDP
+	Action     FilterAction // Allow or deny
+	Expires    int64        // Unix timestamp, 0=permanent
+	SourcePeer string       // Source peer name (empty = any peer)
+	TargetPeer string       // Target peer name (empty = any peer)
 }
 
 // IsExpired returns true if the rule has expired.
@@ -86,9 +88,11 @@ func (r FilterRule) IsExpired() bool {
 }
 
 // FilterRuleKey is used as map key for O(1) lookup.
+// SourcePeer is included for peer-specific rules; empty means any peer (global rule).
 type FilterRuleKey struct {
-	Port     uint16
-	Protocol uint8
+	Port       uint16
+	Protocol   uint8
+	SourcePeer string // Empty = any peer (global rule)
 }
 
 // FilterRuleWithSource combines a rule with its source for display.
@@ -145,7 +149,7 @@ func (f *PacketFilter) SetCoordinatorRules(rules []FilterRule) {
 
 	newMap := make(ruleMap, len(rules))
 	for _, r := range rules {
-		key := FilterRuleKey{Port: r.Port, Protocol: r.Protocol}
+		key := FilterRuleKey{Port: r.Port, Protocol: r.Protocol, SourcePeer: r.SourcePeer}
 		newMap[key] = r
 	}
 	f.coordinator.Store(&newMap)
@@ -159,7 +163,7 @@ func (f *PacketFilter) SetPeerConfigRules(rules []FilterRule) {
 
 	newMap := make(ruleMap, len(rules))
 	for _, r := range rules {
-		key := FilterRuleKey{Port: r.Port, Protocol: r.Protocol}
+		key := FilterRuleKey{Port: r.Port, Protocol: r.Protocol, SourcePeer: r.SourcePeer}
 		newMap[key] = r
 	}
 	f.peerConfig.Store(&newMap)
@@ -171,7 +175,7 @@ func (f *PacketFilter) AddTemporaryRule(rule FilterRule) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	key := FilterRuleKey{Port: rule.Port, Protocol: rule.Protocol}
+	key := FilterRuleKey{Port: rule.Port, Protocol: rule.Protocol, SourcePeer: rule.SourcePeer}
 
 	// Copy-on-write
 	oldMap := f.temporary.Load()
@@ -183,12 +187,19 @@ func (f *PacketFilter) AddTemporaryRule(rule FilterRule) {
 	f.temporary.Store(&newMap)
 }
 
-// RemoveTemporaryRule removes a rule from the temporary layer.
+// RemoveTemporaryRule removes a global rule from the temporary layer.
+// Use RemoveTemporaryRuleForPeer for peer-specific rules.
 func (f *PacketFilter) RemoveTemporaryRule(port uint16, protocol uint8) {
+	f.RemoveTemporaryRuleForPeer(port, protocol, "")
+}
+
+// RemoveTemporaryRuleForPeer removes a rule from the temporary layer for a specific peer.
+// Pass empty string for sourcePeer to remove global rules.
+func (f *PacketFilter) RemoveTemporaryRuleForPeer(port uint16, protocol uint8, sourcePeer string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	key := FilterRuleKey{Port: port, Protocol: protocol}
+	key := FilterRuleKey{Port: port, Protocol: protocol, SourcePeer: sourcePeer}
 
 	oldMap := f.temporary.Load()
 	if _, exists := (*oldMap)[key]; !exists {
@@ -214,20 +225,32 @@ func (f *PacketFilter) ClearTemporaryRules() {
 	f.temporary.Store(&emptyMap)
 }
 
-// effectiveAction determines the action for a port/protocol combination.
+// effectiveAction determines the action for a port/protocol/peer combination.
 // Returns (action, matched). If not matched, returns (deny/allow based on default, false).
-func (f *PacketFilter) effectiveAction(port uint16, protocol uint8) (FilterAction, bool) {
-	key := FilterRuleKey{Port: port, Protocol: protocol}
-
+// The sourcePeer parameter allows for peer-specific rule matching (empty = any peer).
+func (f *PacketFilter) effectiveAction(port uint16, protocol uint8, sourcePeer string) (FilterAction, bool) {
 	// Load all layers once (lock-free)
 	coordRules := f.coordinator.Load()
 	configRules := f.peerConfig.Load()
 	tempRules := f.temporary.Load()
 
-	// Check if ANY layer denies - deny wins (most restrictive)
 	layers := []*ruleMap{coordRules, configRules, tempRules}
+
+	// Check if ANY layer denies - deny wins (most restrictive)
+	// Check peer-specific rules first, then global rules
 	for _, layer := range layers {
-		if rule, ok := (*layer)[key]; ok {
+		// First check peer-specific deny
+		if sourcePeer != "" {
+			peerKey := FilterRuleKey{Port: port, Protocol: protocol, SourcePeer: sourcePeer}
+			if rule, ok := (*layer)[peerKey]; ok {
+				if !rule.IsExpired() && rule.Action == ActionDeny {
+					return ActionDeny, true
+				}
+			}
+		}
+		// Then check global deny
+		globalKey := FilterRuleKey{Port: port, Protocol: protocol, SourcePeer: ""}
+		if rule, ok := (*layer)[globalKey]; ok {
 			if !rule.IsExpired() && rule.Action == ActionDeny {
 				return ActionDeny, true
 			}
@@ -235,8 +258,20 @@ func (f *PacketFilter) effectiveAction(port uint16, protocol uint8) (FilterActio
 	}
 
 	// Check if any layer explicitly allows (reverse order for precedence display)
+	// Check peer-specific allow first, then global allow
 	for _, layer := range []*ruleMap{tempRules, configRules, coordRules} {
-		if rule, ok := (*layer)[key]; ok {
+		// First check peer-specific allow
+		if sourcePeer != "" {
+			peerKey := FilterRuleKey{Port: port, Protocol: protocol, SourcePeer: sourcePeer}
+			if rule, ok := (*layer)[peerKey]; ok {
+				if !rule.IsExpired() && rule.Action == ActionAllow {
+					return ActionAllow, true
+				}
+			}
+		}
+		// Then check global allow
+		globalKey := FilterRuleKey{Port: port, Protocol: protocol, SourcePeer: ""}
+		if rule, ok := (*layer)[globalKey]; ok {
 			if !rule.IsExpired() && rule.Action == ActionAllow {
 				return ActionAllow, true
 			}
@@ -252,44 +287,60 @@ func (f *PacketFilter) effectiveAction(port uint16, protocol uint8) (FilterActio
 
 // FilterResult contains the result of a filter check.
 type FilterResult struct {
-	Drop     bool  // Whether to drop the packet
-	Protocol uint8 // Protocol that was filtered (6=TCP, 17=UDP, 0=not filtered)
+	Drop       bool   // Whether to drop the packet
+	Protocol   uint8  // Protocol that was filtered (6=TCP, 17=UDP, 0=not filtered)
+	SourcePeer string // Source peer that was checked (for metrics)
 }
 
 // ShouldDrop returns true if the packet should be dropped.
 // This is the main filter check called on the hot path.
+// Does not consider peer-specific rules - use ShouldDropFromPeer for that.
 func (f *PacketFilter) ShouldDrop(packet []byte) bool {
 	result := f.CheckPacket(packet)
 	return result.Drop
 }
 
+// ShouldDropFromPeer returns true if the packet from the given peer should be dropped.
+func (f *PacketFilter) ShouldDropFromPeer(packet []byte, sourcePeer string) bool {
+	result := f.CheckPacketFromPeer(packet, sourcePeer)
+	return result.Drop
+}
+
 // CheckPacket checks a packet and returns detailed filter result.
 // Use this when you need to know what protocol was filtered.
+// Does not consider peer-specific rules - use CheckPacketFromPeer for that.
 func (f *PacketFilter) CheckPacket(packet []byte) FilterResult {
+	return f.CheckPacketFromPeer(packet, "")
+}
+
+// CheckPacketFromPeer checks a packet from a specific peer and returns detailed filter result.
+// The sourcePeer parameter enables peer-specific rule matching.
+// Pass empty string for sourcePeer to only match global rules.
+func (f *PacketFilter) CheckPacketFromPeer(packet []byte, sourcePeer string) FilterResult {
 	// Parse IP header to get protocol
 	if len(packet) < 20 {
-		return FilterResult{Drop: false, Protocol: 0}
+		return FilterResult{Drop: false, Protocol: 0, SourcePeer: sourcePeer}
 	}
 
 	protocol := packet[9]
 
 	// Only filter TCP (6) and UDP (17)
 	if protocol != ProtoTCP && protocol != ProtoUDP {
-		return FilterResult{Drop: false, Protocol: 0}
+		return FilterResult{Drop: false, Protocol: 0, SourcePeer: sourcePeer}
 	}
 
 	// Get IP header length
 	ihl := int(packet[0]&0x0F) * 4
 	if len(packet) < ihl+4 {
-		return FilterResult{Drop: false, Protocol: 0}
+		return FilterResult{Drop: false, Protocol: 0, SourcePeer: sourcePeer}
 	}
 
 	// Extract destination port from TCP/UDP header (bytes 2-3)
 	dstPort := binary.BigEndian.Uint16(packet[ihl+2 : ihl+4])
 
-	// Check filter rules
-	action, _ := f.effectiveAction(dstPort, protocol)
-	return FilterResult{Drop: action == ActionDeny, Protocol: protocol}
+	// Check filter rules with peer context
+	action, _ := f.effectiveAction(dstPort, protocol, sourcePeer)
+	return FilterResult{Drop: action == ActionDeny, Protocol: protocol, SourcePeer: sourcePeer}
 }
 
 // ListRules returns all rules from all layers with their sources.

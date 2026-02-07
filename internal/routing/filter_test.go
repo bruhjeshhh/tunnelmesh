@@ -502,6 +502,215 @@ func TestPacketFilter_IsDefaultDeny(t *testing.T) {
 	}
 }
 
+// Tests for per-peer filtering
+
+func TestPacketFilter_PeerSpecificRules(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 22)
+
+	// Add global allow rule for port 22
+	f.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	// Without peer context, should be allowed (global rule matches)
+	result := f.CheckPacketFromPeer(packet, "")
+	if result.Drop {
+		t.Error("expected packet to be allowed (global rule)")
+	}
+
+	// Add peer-specific deny rule for port 22 from "untrusted"
+	f.AddTemporaryRule(FilterRule{
+		Port:       22,
+		Protocol:   ProtoTCP,
+		Action:     ActionDeny,
+		SourcePeer: "untrusted",
+	})
+
+	// Packet from "untrusted" should be denied (peer-specific deny)
+	result = f.CheckPacketFromPeer(packet, "untrusted")
+	if !result.Drop {
+		t.Error("expected packet from 'untrusted' to be dropped")
+	}
+	if result.SourcePeer != "untrusted" {
+		t.Errorf("expected SourcePeer='untrusted', got %s", result.SourcePeer)
+	}
+
+	// Packet from "trusted" should still be allowed (no specific rule, uses global)
+	result = f.CheckPacketFromPeer(packet, "trusted")
+	if result.Drop {
+		t.Error("expected packet from 'trusted' to be allowed")
+	}
+}
+
+func TestPacketFilter_PeerSpecificAllow(t *testing.T) {
+	f := NewPacketFilter(true) // Default deny
+
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 22)
+
+	// No global rule - should be denied by default
+	result := f.CheckPacketFromPeer(packet, "peer1")
+	if !result.Drop {
+		t.Error("expected packet to be dropped (default deny)")
+	}
+
+	// Add peer-specific allow rule for port 22 from "trusted"
+	f.AddTemporaryRule(FilterRule{
+		Port:       22,
+		Protocol:   ProtoTCP,
+		Action:     ActionAllow,
+		SourcePeer: "trusted",
+	})
+
+	// Packet from "trusted" should be allowed
+	result = f.CheckPacketFromPeer(packet, "trusted")
+	if result.Drop {
+		t.Error("expected packet from 'trusted' to be allowed")
+	}
+
+	// Packet from other peer should still be denied
+	result = f.CheckPacketFromPeer(packet, "other")
+	if !result.Drop {
+		t.Error("expected packet from 'other' to be dropped")
+	}
+}
+
+func TestPacketFilter_PeerSpecificDenyOverridesGlobalAllow(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 22)
+
+	// Global allow for port 22
+	f.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	// Peer-specific deny for "badpeer"
+	f.SetPeerConfigRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionDeny, SourcePeer: "badpeer"},
+	})
+
+	// "badpeer" should be denied (peer-specific deny wins over global allow)
+	result := f.CheckPacketFromPeer(packet, "badpeer")
+	if !result.Drop {
+		t.Error("expected peer-specific deny to override global allow")
+	}
+
+	// Other peers should still be allowed via global rule
+	result = f.CheckPacketFromPeer(packet, "goodpeer")
+	if result.Drop {
+		t.Error("expected 'goodpeer' to be allowed via global rule")
+	}
+}
+
+func TestPacketFilter_ListRulesWithPeer(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	// Add global rule
+	f.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	// Add peer-specific rule
+	f.AddTemporaryRule(FilterRule{
+		Port:       22,
+		Protocol:   ProtoTCP,
+		Action:     ActionDeny,
+		SourcePeer: "specific-peer",
+	})
+
+	rules := f.ListRules()
+	if len(rules) != 2 {
+		t.Errorf("expected 2 rules, got %d", len(rules))
+	}
+
+	// Find the peer-specific rule
+	var foundPeerRule bool
+	for _, r := range rules {
+		if r.Rule.SourcePeer == "specific-peer" {
+			foundPeerRule = true
+			if r.Rule.Action != ActionDeny {
+				t.Error("expected peer-specific rule to have ActionDeny")
+			}
+		}
+	}
+
+	if !foundPeerRule {
+		t.Error("expected to find peer-specific rule in list")
+	}
+}
+
+func TestPacketFilter_RemoveTemporaryRuleWithPeer(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	// Add peer-specific rule
+	f.AddTemporaryRule(FilterRule{
+		Port:       22,
+		Protocol:   ProtoTCP,
+		Action:     ActionDeny,
+		SourcePeer: "peer1",
+	})
+
+	// Add global rule for same port
+	f.AddTemporaryRule(FilterRule{
+		Port:     22,
+		Protocol: ProtoTCP,
+		Action:   ActionAllow,
+	})
+
+	if f.RuleCount() != 2 {
+		t.Errorf("expected 2 rules, got %d", f.RuleCount())
+	}
+
+	// Remove peer-specific rule only
+	f.RemoveTemporaryRuleForPeer(22, ProtoTCP, "peer1")
+
+	if f.RuleCount() != 1 {
+		t.Errorf("expected 1 rule after removal, got %d", f.RuleCount())
+	}
+
+	// Global rule should still exist
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 22)
+	result := f.CheckPacketFromPeer(packet, "peer1")
+	if result.Drop {
+		t.Error("expected global allow rule to still be active")
+	}
+}
+
+func TestFilterResult_SourcePeer(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 22)
+
+	// Add global allow rule
+	f.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	// Check with peer - result should include peer
+	result := f.CheckPacketFromPeer(packet, "test-peer")
+	if result.SourcePeer != "test-peer" {
+		t.Errorf("expected SourcePeer='test-peer', got '%s'", result.SourcePeer)
+	}
+
+	// Check without peer
+	result = f.CheckPacketFromPeer(packet, "")
+	if result.SourcePeer != "" {
+		t.Errorf("expected empty SourcePeer, got '%s'", result.SourcePeer)
+	}
+}
+
 // Benchmark the hot path
 func BenchmarkPacketFilter_ShouldDrop(b *testing.B) {
 	f := NewPacketFilter(true)

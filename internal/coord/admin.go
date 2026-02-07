@@ -505,10 +505,11 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 
 // FilterRulesRequest is the request for adding/removing filter rules.
 type FilterRulesRequest struct {
-	PeerName string `json:"peer"`     // Target peer name
-	Port     uint16 `json:"port"`     // Port number
-	Protocol string `json:"protocol"` // "tcp" or "udp"
-	Action   string `json:"action"`   // "allow" or "deny"
+	PeerName   string `json:"peer"`        // Target peer name
+	Port       uint16 `json:"port"`        // Port number
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	SourcePeer string `json:"source_peer"` // Source peer (optional, empty = any peer)
 }
 
 // FilterRulesResponse is the response for listing filter rules.
@@ -520,11 +521,12 @@ type FilterRulesResponse struct {
 
 // FilterRuleInfo represents a filter rule for API responses.
 type FilterRuleInfo struct {
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"`
-	Action   string `json:"action"`
-	Source   string `json:"source"`  // "coordinator", "config", "temporary"
-	Expires  int64  `json:"expires"` // Unix timestamp, 0=permanent
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`
+	Action     string `json:"action"`
+	Source     string `json:"source"`      // "coordinator", "config", "temporary"
+	Expires    int64  `json:"expires"`     // Unix timestamp, 0=permanent
+	SourcePeer string `json:"source_peer"` // Source peer (empty = any peer)
 }
 
 // handleFilterRules handles GET (list) and POST/DELETE for filter rules.
@@ -557,11 +559,12 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 	rules := make([]FilterRuleInfo, 0, len(s.cfg.Filter.Rules))
 	for _, r := range s.cfg.Filter.Rules {
 		rules = append(rules, FilterRuleInfo{
-			Port:     r.Port,
-			Protocol: r.Protocol,
-			Action:   r.Action,
-			Source:   "coordinator",
-			Expires:  0,
+			Port:       r.Port,
+			Protocol:   r.Protocol,
+			Action:     r.Action,
+			Source:     "coordinator",
+			Expires:    0,
+			SourcePeer: r.SourcePeer,
 		})
 	}
 
@@ -600,8 +603,15 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push the rule to the peer via relay
-	s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action)
+	// Push the rule to peer(s) via relay
+	if req.PeerName == "__all__" {
+		// Broadcast to all connected peers
+		for _, peerName := range s.relay.GetConnectedPeerNames() {
+			s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+		}
+	} else {
+		s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -628,8 +638,15 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Push the rule removal to the peer via relay
-	s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol)
+	// Push the rule removal to peer(s) via relay
+	if req.PeerName == "__all__" {
+		// Broadcast to all connected peers
+		for _, peerName := range s.relay.GetConnectedPeerNames() {
+			s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
+		}
+	} else {
+		s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

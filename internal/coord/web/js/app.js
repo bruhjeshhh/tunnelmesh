@@ -1685,27 +1685,64 @@ function renderFilterRules(data) {
 
     if (dom.noFilterRules) dom.noFilterRules.style.display = 'none';
 
-    dom.filterRulesBody.innerHTML = data.rules.map(rule => `
+    dom.filterRulesBody.innerHTML = data.rules.map(rule => {
+        const sourcePeerDisplay = rule.source_peer ? rule.source_peer : '<span class="text-muted">Any</span>';
+        const sourcePeerEscaped = rule.source_peer || '';
+        return `
         <tr>
             <td>${rule.port}</td>
             <td>${rule.protocol.toUpperCase()}</td>
             <td class="${rule.action === 'allow' ? 'action-allow' : 'action-deny'}">${rule.action.toUpperCase()}</td>
+            <td>${sourcePeerDisplay}</td>
             <td>${rule.source}</td>
             <td>
                 ${rule.source === 'temporary' ?
-                    `<button class="btn-danger" onclick="removeFilterRule('${data.peer}', ${rule.port}, '${rule.protocol}')">Remove</button>` :
+                    `<button class="btn-danger" onclick="removeFilterRule('${data.peer}', ${rule.port}, '${rule.protocol}', '${sourcePeerEscaped}')">Remove</button>` :
                     '<span class="text-muted">-</span>'}
             </td>
         </tr>
-    `).join('');
+    `}).join('');
+}
+
+// Populate the source peer dropdown in the filter modal
+function populateSourcePeerSelect() {
+    const select = document.getElementById('filter-rule-source-peer');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Any peer (global rule)</option>';
+
+    // Add all known peers
+    const sortedPeers = [...state.data.peers].sort((a, b) => a.name.localeCompare(b.name));
+    sortedPeers.forEach(peer => {
+        const opt = document.createElement('option');
+        opt.value = peer.name;
+        opt.textContent = `${peer.name} (${peer.mesh_ip})`;
+        select.appendChild(opt);
+    });
+}
+
+// Populate the destination peer dropdown in the filter modal
+function populateDestPeerSelect() {
+    const select = document.getElementById('filter-rule-dest-peer');
+    if (!select) return;
+
+    select.innerHTML = '<option value="__all__">All peers</option>';
+
+    // Add all known peers
+    const sortedPeers = [...state.data.peers].sort((a, b) => a.name.localeCompare(b.name));
+    sortedPeers.forEach(peer => {
+        const opt = document.createElement('option');
+        opt.value = peer.name;
+        opt.textContent = `${peer.name} (${peer.mesh_ip})`;
+        select.appendChild(opt);
+    });
 }
 
 // Open filter rule modal
 function openFilterModal() {
-    if (!dom.filterPeerSelect?.value) {
-        showToast('Please select a peer first', 'warning');
-        return;
-    }
+    // Populate peer dropdowns
+    populateSourcePeerSelect();
+    populateDestPeerSelect();
     if (dom.filterModal) {
         dom.filterModal.style.display = 'flex';
     }
@@ -1720,17 +1757,22 @@ function closeFilterModal() {
     // Clear form
     const port = document.getElementById('filter-rule-port');
     if (port) port.value = '';
+    const sourcePeer = document.getElementById('filter-rule-source-peer');
+    if (sourcePeer) sourcePeer.value = '';
+    const destPeer = document.getElementById('filter-rule-dest-peer');
+    if (destPeer) destPeer.value = '__all__';
 }
 window.closeFilterModal = closeFilterModal;
 
 // Add a filter rule
 async function addFilterRule() {
-    const peerName = dom.filterPeerSelect?.value;
+    const destPeer = document.getElementById('filter-rule-dest-peer')?.value || '__all__';
     const port = parseInt(document.getElementById('filter-rule-port')?.value);
     const protocol = document.getElementById('filter-rule-protocol')?.value;
     const action = document.getElementById('filter-rule-action')?.value;
+    const sourcePeer = document.getElementById('filter-rule-source-peer')?.value || '';
 
-    if (!peerName || !port || !protocol || !action) {
+    if (!port || !protocol || !action) {
         showToast('Please fill in all fields', 'warning');
         return;
     }
@@ -1744,7 +1786,7 @@ async function addFilterRule() {
         const resp = await fetch('api/filter/rules', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ peer: peerName, port, protocol, action })
+            body: JSON.stringify({ peer: destPeer, port, protocol, action, source_peer: sourcePeer })
         });
 
         if (!resp.ok) {
@@ -1753,7 +1795,9 @@ async function addFilterRule() {
             return;
         }
 
-        showToast('Filter rule added', 'success');
+        const sourceDesc = sourcePeer ? ` from ${sourcePeer}` : '';
+        const destDesc = destPeer === '__all__' ? 'all peers' : destPeer;
+        showToast(`Filter rule sent to ${destDesc}: ${action} ${port}/${protocol.toUpperCase()}${sourceDesc}`, 'success');
         closeFilterModal();
         loadFilterRules();
     } catch (err) {
@@ -1764,8 +1808,9 @@ async function addFilterRule() {
 window.addFilterRule = addFilterRule;
 
 // Remove a filter rule
-async function removeFilterRule(peerName, port, protocol) {
-    if (!confirm(`Remove filter rule for port ${port}/${protocol.toUpperCase()}?`)) {
+async function removeFilterRule(peerName, port, protocol, sourcePeer) {
+    const sourceDesc = sourcePeer ? ` from ${sourcePeer}` : '';
+    if (!confirm(`Remove filter rule for port ${port}/${protocol.toUpperCase()}${sourceDesc}?`)) {
         return;
     }
 
@@ -1773,7 +1818,7 @@ async function removeFilterRule(peerName, port, protocol) {
         const resp = await fetch('api/filter/rules', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ peer: peerName, port, protocol })
+            body: JSON.stringify({ peer: peerName, port, protocol, source_peer: sourcePeer || '' })
         });
 
         if (!resp.ok) {

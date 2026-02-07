@@ -1175,3 +1175,63 @@ func TestForwarder_Filter_GetterSetter(t *testing.T) {
 	fwd.SetFilter(nil)
 	assert.Nil(t, fwd.Filter())
 }
+
+func TestForwarder_PacketFilter_PeerSpecific(t *testing.T) {
+	// Create filter with default deny
+	// Add global allow for port 22, but deny for "untrusted" peer
+	filter := NewPacketFilter(true)
+	filter.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow}, // Global allow
+	})
+	filter.AddTemporaryRule(FilterRule{
+		Port:       22,
+		Protocol:   ProtoTCP,
+		Action:     ActionDeny,
+		SourcePeer: "untrusted", // Peer-specific deny
+	})
+
+	// Create incoming TCP packet to port 22
+	srcIP := net.ParseIP("172.30.0.2").To4()
+	dstIP := net.ParseIP("172.30.0.1").To4()
+	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+
+	t.Run("trusted peer allowed", func(t *testing.T) {
+		router := NewRouter()
+		tunnelMgr := NewMockTunnelManager()
+		mockTun := newMockTUN()
+
+		fwd := NewForwarder(router, tunnelMgr)
+		fwd.SetTUN(mockTun)
+		fwd.SetFilter(filter)
+
+		// Packet from "trusted" peer should be allowed (uses global allow)
+		err := fwd.ReceivePacketFromPeer(packet, "trusted")
+		require.NoError(t, err)
+		written := mockTun.GetWrittenPackets()
+		assert.Equal(t, packet, written, "packet from trusted peer should pass")
+
+		stats := fwd.Stats()
+		assert.Equal(t, uint64(0), stats.DroppedFiltered, "no packets should be dropped")
+		assert.Equal(t, uint64(1), stats.PacketsReceived, "one packet should be received")
+	})
+
+	t.Run("untrusted peer blocked", func(t *testing.T) {
+		router := NewRouter()
+		tunnelMgr := NewMockTunnelManager()
+		mockTun := newMockTUN()
+
+		fwd := NewForwarder(router, tunnelMgr)
+		fwd.SetTUN(mockTun)
+		fwd.SetFilter(filter)
+
+		// Packet from "untrusted" peer should be dropped (peer-specific deny)
+		err := fwd.ReceivePacketFromPeer(packet, "untrusted")
+		require.NoError(t, err)
+		written := mockTun.GetWrittenPackets()
+		assert.Empty(t, written, "packet from untrusted peer should be dropped")
+
+		stats := fwd.Stats()
+		assert.Equal(t, uint64(1), stats.DroppedFiltered, "one packet should be dropped")
+		assert.Equal(t, uint64(0), stats.PacketsReceived, "no packets should be received")
+	})
+}

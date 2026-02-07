@@ -12,18 +12,17 @@ import (
 
 // ForwarderSnapshot holds the last-seen forwarder stats for delta calculation.
 type ForwarderSnapshot struct {
-	PacketsSent        uint64
-	PacketsReceived    uint64
-	BytesSent          uint64
-	BytesReceived      uint64
-	DroppedNoRoute     uint64
-	DroppedNoTunnel    uint64
-	DroppedNonIPv4     uint64
-	DroppedFilteredTCP uint64
-	DroppedFilteredUDP uint64
-	Errors             uint64
-	ExitPacketsSent    uint64
-	ExitBytesSent      uint64
+	PacketsSent     uint64
+	PacketsReceived uint64
+	BytesSent       uint64
+	BytesReceived   uint64
+	DroppedNoRoute  uint64
+	DroppedNoTunnel uint64
+	DroppedNonIPv4  uint64
+	DroppedFiltered uint64 // Total drops (for logging, not per-peer)
+	Errors          uint64
+	ExitPacketsSent uint64
+	ExitBytesSent   uint64
 }
 
 // Collector periodically collects metrics from the MeshNode.
@@ -172,13 +171,8 @@ func (c *Collector) collectForwarderStats() {
 		c.metrics.ForwarderErrors.Add(float64(stats.Errors - c.lastForwarder.Errors))
 	}
 
-	// Packet filter drops by protocol
-	if stats.DroppedFilteredTCP > c.lastForwarder.DroppedFilteredTCP {
-		c.metrics.DroppedFiltered.WithLabelValues("tcp").Add(float64(stats.DroppedFilteredTCP - c.lastForwarder.DroppedFilteredTCP))
-	}
-	if stats.DroppedFilteredUDP > c.lastForwarder.DroppedFilteredUDP {
-		c.metrics.DroppedFiltered.WithLabelValues("udp").Add(float64(stats.DroppedFilteredUDP - c.lastForwarder.DroppedFilteredUDP))
-	}
+	// Note: Packet filter drops by protocol/peer are tracked via callback (TrackFilterDrop)
+	// The forwarder calls SetOnFilterDrop with a callback that uses TrackFilterDrop
 
 	// Exit traffic stats
 	if stats.ExitPacketsSent > c.lastForwarder.ExitPacketsSent {
@@ -190,18 +184,17 @@ func (c *Collector) collectForwarderStats() {
 
 	// Store current for next delta
 	c.lastForwarder = ForwarderSnapshot{
-		PacketsSent:        stats.PacketsSent,
-		PacketsReceived:    stats.PacketsReceived,
-		BytesSent:          stats.BytesSent,
-		BytesReceived:      stats.BytesReceived,
-		DroppedNoRoute:     stats.DroppedNoRoute,
-		DroppedNoTunnel:    stats.DroppedNoTunnel,
-		DroppedNonIPv4:     stats.DroppedNonIPv4,
-		DroppedFilteredTCP: stats.DroppedFilteredTCP,
-		DroppedFilteredUDP: stats.DroppedFilteredUDP,
-		Errors:             stats.Errors,
-		ExitPacketsSent:    stats.ExitPacketsSent,
-		ExitBytesSent:      stats.ExitBytesSent,
+		PacketsSent:     stats.PacketsSent,
+		PacketsReceived: stats.PacketsReceived,
+		BytesSent:       stats.BytesSent,
+		BytesReceived:   stats.BytesReceived,
+		DroppedNoRoute:  stats.DroppedNoRoute,
+		DroppedNoTunnel: stats.DroppedNoTunnel,
+		DroppedNonIPv4:  stats.DroppedNonIPv4,
+		DroppedFiltered: stats.DroppedFiltered,
+		Errors:          stats.Errors,
+		ExitPacketsSent: stats.ExitPacketsSent,
+		ExitBytesSent:   stats.ExitBytesSent,
 	}
 }
 
@@ -424,6 +417,27 @@ func (w *RelayWrapper) GetLastRTT() time.Duration {
 // TrackReconnect is called by the connection observer when a reconnect happens.
 func (c *Collector) TrackReconnect(targetPeer string) {
 	c.metrics.ReconnectCount.WithLabelValues(targetPeer).Inc()
+}
+
+// TrackFilterDrop increments the dropped packet counter for the given protocol and source peer.
+// Protocol should be 6 for TCP, 17 for UDP.
+// sourcePeer is always available since all incoming paths provide peer context:
+// - HandleRelayPacket has sourcePeer from the relay message
+// - HandleTunnel has peerName from the tunnel association
+func (c *Collector) TrackFilterDrop(protocol uint8, sourcePeer string) {
+	protoStr := "other"
+	switch protocol {
+	case 6: // TCP
+		protoStr = "tcp"
+	case 17: // UDP
+		protoStr = "udp"
+	}
+	c.metrics.DroppedFiltered.WithLabelValues(protoStr, sourcePeer).Inc()
+}
+
+// FilterDropCallback returns a callback function for the forwarder to call on filter drops.
+func (c *Collector) FilterDropCallback() func(protocol uint8, sourcePeer string) {
+	return c.TrackFilterDrop
 }
 
 // ReconnectObserver returns a connection observer that tracks reconnects.

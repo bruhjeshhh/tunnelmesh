@@ -56,7 +56,7 @@ func newFilterListCmd() *cobra.Command {
 
 			// Print header
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintf(w, "PORT\tPROTOCOL\tACTION\tSOURCE\tEXPIRES\n")
+			_, _ = fmt.Fprintf(w, "PORT\tPROTOCOL\tACTION\tSOURCE PEER\tSOURCE\tEXPIRES\n")
 
 			for _, rule := range resp.Rules {
 				expires := "-"
@@ -68,8 +68,12 @@ func newFilterListCmd() *cobra.Command {
 						expires = "expired"
 					}
 				}
-				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
-					rule.Port, strings.ToUpper(rule.Protocol), rule.Action, rule.Source, expires)
+				sourcePeer := "*"
+				if rule.SourcePeer != "" {
+					sourcePeer = rule.SourcePeer
+				}
+				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
+					rule.Port, strings.ToUpper(rule.Protocol), rule.Action, sourcePeer, rule.Source, expires)
 			}
 			_ = w.Flush()
 
@@ -93,6 +97,7 @@ func newFilterAddCmd() *cobra.Command {
 		protocol   string
 		action     string
 		ttl        int64
+		sourcePeer string
 	)
 
 	cmd := &cobra.Command{
@@ -101,14 +106,20 @@ func newFilterAddCmd() *cobra.Command {
 		Long: `Add a temporary filter rule that persists until reboot.
 
 Examples:
-  # Allow SSH access
+  # Allow SSH access from any peer
   tunnelmesh filter add --port 22 --protocol tcp
 
   # Allow HTTP with 1 hour expiry
   tunnelmesh filter add --port 80 --protocol tcp --ttl 3600
 
   # Deny UDP port 53
-  tunnelmesh filter add --port 53 --protocol udp --action deny`,
+  tunnelmesh filter add --port 53 --protocol udp --action deny
+
+  # Allow SSH only from specific peer
+  tunnelmesh filter add --port 22 --protocol tcp --source-peer trusted-peer
+
+  # Block specific peer from accessing port 80
+  tunnelmesh filter add --port 80 --protocol tcp --action deny --source-peer untrusted-peer`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if port == 0 {
 				return fmt.Errorf("--port is required")
@@ -127,7 +138,7 @@ Examples:
 			}
 
 			client := control.NewClient(socketPath)
-			if err := client.FilterAdd(port, protocol, action, ttl); err != nil {
+			if err := client.FilterAddForPeer(port, protocol, action, ttl, sourcePeer); err != nil {
 				return fmt.Errorf("failed to add rule: %w", err)
 			}
 
@@ -135,7 +146,11 @@ Examples:
 			if ttl > 0 {
 				ttlStr = fmt.Sprintf("expires in %s", formatDuration(time.Duration(ttl)*time.Second))
 			}
-			fmt.Printf("Added rule: %s port %d/%s (%s)\n", action, port, strings.ToUpper(protocol), ttlStr)
+			peerStr := "all peers"
+			if sourcePeer != "" {
+				peerStr = fmt.Sprintf("peer '%s'", sourcePeer)
+			}
+			fmt.Printf("Added rule: %s port %d/%s from %s (%s)\n", action, port, strings.ToUpper(protocol), peerStr, ttlStr)
 			return nil
 		},
 	}
@@ -145,6 +160,7 @@ Examples:
 	cmd.Flags().StringVar(&protocol, "protocol", "tcp", "Protocol: tcp or udp")
 	cmd.Flags().StringVar(&action, "action", "allow", "Action: allow or deny")
 	cmd.Flags().Int64Var(&ttl, "ttl", 0, "Time to live in seconds (0 = permanent)")
+	cmd.Flags().StringVar(&sourcePeer, "source-peer", "", "Source peer name (empty = any peer)")
 
 	_ = cmd.MarkFlagRequired("port")
 
@@ -156,6 +172,7 @@ func newFilterRemoveCmd() *cobra.Command {
 		socketPath string
 		port       uint16
 		protocol   string
+		sourcePeer string
 	)
 
 	cmd := &cobra.Command{
@@ -167,8 +184,11 @@ Note: Only temporary rules (added via CLI or admin panel) can be removed.
 Rules from config files must be removed by editing the config.
 
 Examples:
+  # Remove global rule for port 22
   tunnelmesh filter remove --port 22 --protocol tcp
-  tunnelmesh filter remove --port 53 --protocol udp`,
+
+  # Remove peer-specific rule
+  tunnelmesh filter remove --port 22 --protocol tcp --source-peer untrusted-peer`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if port == 0 {
 				return fmt.Errorf("--port is required")
@@ -183,11 +203,15 @@ Examples:
 			}
 
 			client := control.NewClient(socketPath)
-			if err := client.FilterRemove(port, protocol); err != nil {
+			if err := client.FilterRemoveForPeer(port, protocol, sourcePeer); err != nil {
 				return fmt.Errorf("failed to remove rule: %w", err)
 			}
 
-			fmt.Printf("Removed temporary rule for port %d/%s\n", port, strings.ToUpper(protocol))
+			peerStr := "all peers"
+			if sourcePeer != "" {
+				peerStr = fmt.Sprintf("peer '%s'", sourcePeer)
+			}
+			fmt.Printf("Removed temporary rule for port %d/%s from %s\n", port, strings.ToUpper(protocol), peerStr)
 			return nil
 		},
 	}
@@ -195,6 +219,7 @@ Examples:
 	cmd.Flags().StringVar(&socketPath, "socket", "", "Control socket path")
 	cmd.Flags().Uint16Var(&port, "port", 0, "Port number (required)")
 	cmd.Flags().StringVar(&protocol, "protocol", "tcp", "Protocol: tcp or udp")
+	cmd.Flags().StringVar(&sourcePeer, "source-peer", "", "Source peer name (empty = global rule)")
 
 	_ = cmd.MarkFlagRequired("port")
 

@@ -186,6 +186,7 @@
                             <th>Port</th>
                             <th>Protocol</th>
                             <th>Action</th>
+                            <th>From Peer</th>
                             <th>Source</th>
                             <th>Actions</th>
                         </tr>
@@ -223,6 +224,20 @@
                             <option value="allow">Allow</option>
                             <option value="deny">Deny</option>
                         </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-source-peer">From Peer</label>
+                        <select id="filter-rule-source-peer">
+                            <option value="">Any peer (global rule)</option>
+                        </select>
+                        <small class="form-hint">Select a specific peer to restrict this rule to traffic from that peer</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-dest-peer">Push To</label>
+                        <select id="filter-rule-dest-peer">
+                            <option value="__all__">All peers</option>
+                        </select>
+                        <small class="form-hint">Send this rule to all connected peers or a specific peer</small>
                     </div>
                     <button class="btn-primary" onclick="addFilterRule()">Add Rule</button>
                 </div>

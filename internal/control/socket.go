@@ -55,16 +55,18 @@ type Response struct {
 
 // FilterAddRequest is the payload for filter.add command.
 type FilterAddRequest struct {
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"` // "tcp" or "udp"
-	Action   string `json:"action"`   // "allow" or "deny"
-	TTL      int64  `json:"ttl"`      // Seconds until expiry, 0 = permanent
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	TTL        int64  `json:"ttl"`         // Seconds until expiry, 0 = permanent
+	SourcePeer string `json:"source_peer"` // Source peer name (optional, empty = any)
 }
 
 // FilterRemoveRequest is the payload for filter.remove command.
 type FilterRemoveRequest struct {
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"`
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`
+	SourcePeer string `json:"source_peer"` // Source peer name (optional, empty = global rule)
 }
 
 // FilterListResponse is the response for filter.list command.
@@ -75,11 +77,12 @@ type FilterListResponse struct {
 
 // FilterRuleDetail includes rule info and source for display.
 type FilterRuleDetail struct {
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"`
-	Action   string `json:"action"`
-	Source   string `json:"source"`  // "coordinator", "config", "temporary"
-	Expires  int64  `json:"expires"` // Unix timestamp, 0 = permanent
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`
+	Action     string `json:"action"`
+	Source     string `json:"source"`      // "coordinator", "config", "temporary"
+	Expires    int64  `json:"expires"`     // Unix timestamp, 0 = permanent
+	SourcePeer string `json:"source_peer"` // Source peer name (empty = any peer)
 }
 
 // Server is a Unix socket control server.
@@ -225,11 +228,12 @@ func (s *Server) handleFilterList(filter *routing.PacketFilter) Response {
 			proto = "udp"
 		}
 		details = append(details, FilterRuleDetail{
-			Port:     r.Rule.Port,
-			Protocol: proto,
-			Action:   r.Rule.Action.String(),
-			Source:   r.Source.String(),
-			Expires:  r.Rule.Expires,
+			Port:       r.Rule.Port,
+			Protocol:   proto,
+			Action:     r.Rule.Action.String(),
+			Source:     r.Source.String(),
+			Expires:    r.Rule.Expires,
+			SourcePeer: r.Rule.SourcePeer,
 		})
 	}
 
@@ -265,10 +269,11 @@ func (s *Server) handleFilterAdd(filter *routing.PacketFilter, payload json.RawM
 	}
 
 	rule := routing.FilterRule{
-		Port:     req.Port,
-		Protocol: proto,
-		Action:   action,
-		Expires:  expires,
+		Port:       req.Port,
+		Protocol:   proto,
+		Action:     action,
+		Expires:    expires,
+		SourcePeer: req.SourcePeer,
 	}
 
 	filter.AddTemporaryRule(rule)
@@ -276,6 +281,7 @@ func (s *Server) handleFilterAdd(filter *routing.PacketFilter, payload json.RawM
 		Uint16("port", req.Port).
 		Str("protocol", req.Protocol).
 		Str("action", req.Action).
+		Str("source_peer", req.SourcePeer).
 		Int64("ttl", req.TTL).
 		Msg("added temporary filter rule via control socket")
 
@@ -293,10 +299,11 @@ func (s *Server) handleFilterRemove(filter *routing.PacketFilter, payload json.R
 		return Response{Success: false, Error: "protocol must be 'tcp' or 'udp'"}
 	}
 
-	filter.RemoveTemporaryRule(req.Port, proto)
+	filter.RemoveTemporaryRuleForPeer(req.Port, proto, req.SourcePeer)
 	log.Info().
 		Uint16("port", req.Port).
 		Str("protocol", req.Protocol).
+		Str("source_peer", req.SourcePeer).
 		Msg("removed temporary filter rule via control socket")
 
 	return Response{Success: true}
@@ -369,13 +376,20 @@ func (c *Client) FilterList() (*FilterListResponse, error) {
 	return &result, nil
 }
 
-// FilterAdd adds a temporary filter rule.
+// FilterAdd adds a temporary global filter rule.
 func (c *Client) FilterAdd(port uint16, protocol, action string, ttl int64) error {
+	return c.FilterAddForPeer(port, protocol, action, ttl, "")
+}
+
+// FilterAddForPeer adds a temporary filter rule for a specific source peer.
+// Pass empty string for sourcePeer to create a global rule (applies to all peers).
+func (c *Client) FilterAddForPeer(port uint16, protocol, action string, ttl int64, sourcePeer string) error {
 	payload, _ := json.Marshal(FilterAddRequest{
-		Port:     port,
-		Protocol: protocol,
-		Action:   action,
-		TTL:      ttl,
+		Port:       port,
+		Protocol:   protocol,
+		Action:     action,
+		TTL:        ttl,
+		SourcePeer: sourcePeer,
 	})
 
 	resp, err := c.Send(Request{Command: CmdFilterAdd, Payload: payload})
@@ -388,11 +402,18 @@ func (c *Client) FilterAdd(port uint16, protocol, action string, ttl int64) erro
 	return nil
 }
 
-// FilterRemove removes a temporary filter rule.
+// FilterRemove removes a temporary global filter rule.
 func (c *Client) FilterRemove(port uint16, protocol string) error {
+	return c.FilterRemoveForPeer(port, protocol, "")
+}
+
+// FilterRemoveForPeer removes a temporary filter rule for a specific source peer.
+// Pass empty string for sourcePeer to remove a global rule.
+func (c *Client) FilterRemoveForPeer(port uint16, protocol, sourcePeer string) error {
 	payload, _ := json.Marshal(FilterRemoveRequest{
-		Port:     port,
-		Protocol: protocol,
+		Port:       port,
+		Protocol:   protocol,
+		SourcePeer: sourcePeer,
 	})
 
 	resp, err := c.Send(Request{Command: CmdFilterRemove, Payload: payload})

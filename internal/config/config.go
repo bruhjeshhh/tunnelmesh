@@ -119,9 +119,10 @@ type LokiConfig struct {
 
 // FilterRule represents a single packet filter rule for config files.
 type FilterRule struct {
-	Port     uint16 `yaml:"port"`     // Port number (1-65535)
-	Protocol string `yaml:"protocol"` // "tcp" or "udp"
-	Action   string `yaml:"action"`   // "allow" or "deny"
+	Port       uint16 `yaml:"port"`        // Port number (1-65535)
+	Protocol   string `yaml:"protocol"`    // "tcp" or "udp"
+	Action     string `yaml:"action"`      // "allow" or "deny"
+	SourcePeer string `yaml:"source_peer"` // Source peer name (empty = any peer)
 }
 
 // ProtocolNumber returns the IP protocol number (6 for TCP, 17 for UDP).

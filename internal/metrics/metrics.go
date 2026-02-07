@@ -22,8 +22,8 @@ type PeerMetrics struct {
 	DroppedNonIPv4  prometheus.Counter
 	ForwarderErrors prometheus.Counter
 
-	// Packet filter stats (counters, labeled by protocol)
-	DroppedFiltered *prometheus.CounterVec // labels: protocol (tcp, udp)
+	// Packet filter stats (counters, labeled by protocol and source peer)
+	DroppedFiltered *prometheus.CounterVec // labels: protocol (tcp, udp), source_peer
 
 	// Packet filter gauges
 	FilterRulesTotal  *prometheus.GaugeVec // labels: source (coordinator, config, temporary)
@@ -121,12 +121,12 @@ func InitMetrics(peerName, meshIP, version string) *PeerMetrics {
 			ConstLabels: constLabels,
 		}),
 
-		// Packet filter counters (labeled by protocol)
+		// Packet filter counters (labeled by protocol and source peer)
 		DroppedFiltered: promauto.With(Registry).NewCounterVec(prometheus.CounterOpts{
 			Name:        "tunnelmesh_dropped_filtered_total",
 			Help:        "Packets dropped by packet filter",
 			ConstLabels: constLabels,
-		}, []string{"protocol"}),
+		}, []string{"protocol", "source_peer"}),
 
 		// Packet filter gauges
 		FilterRulesTotal: promauto.With(Registry).NewGaugeVec(prometheus.GaugeOpts{
