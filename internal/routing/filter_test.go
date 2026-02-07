@@ -62,6 +62,51 @@ func TestPacketFilter_SetPeerConfigRules(t *testing.T) {
 	}
 }
 
+func TestPacketFilter_SetServiceRules(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	// Add service rules (like coordinator service ports)
+	rules := []FilterRule{
+		{Port: 9443, Protocol: ProtoTCP, Action: ActionAllow},
+		{Port: 443, Protocol: ProtoTCP, Action: ActionAllow},
+	}
+	f.SetServiceRules(rules)
+
+	if f.RuleCount() != 2 {
+		t.Errorf("expected 2 rules, got %d", f.RuleCount())
+	}
+
+	// Verify service rules show in list
+	allRules := f.ListRules()
+	serviceCount := 0
+	for _, r := range allRules {
+		if r.Source == SourceService {
+			serviceCount++
+		}
+	}
+	if serviceCount != 2 {
+		t.Errorf("expected 2 service rules, got %d", serviceCount)
+	}
+
+	// Replace with new rules
+	newRules := []FilterRule{
+		{Port: 8080, Protocol: ProtoTCP, Action: ActionAllow},
+	}
+	f.SetServiceRules(newRules)
+
+	if f.RuleCount() != 1 {
+		t.Errorf("expected 1 rule after replacement, got %d", f.RuleCount())
+	}
+
+	// Verify service rules allow traffic (SYN to port 8080)
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 8080)
+	if f.ShouldDrop(packet) {
+		t.Error("expected service rule to allow SYN to port 8080")
+	}
+}
+
 func TestPacketFilter_TemporaryRules(t *testing.T) {
 	f := NewPacketFilter(true)
 
