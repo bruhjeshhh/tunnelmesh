@@ -32,6 +32,14 @@ const (
 	CmdFilterRemove = "filter.remove"
 )
 
+// Timeouts for control socket operations.
+const (
+	// SocketDialTimeout is the timeout for connecting to the control socket.
+	SocketDialTimeout = 5 * time.Second
+	// SocketReadWriteTimeout is the timeout for reading/writing on the socket.
+	SocketReadWriteTimeout = 5 * time.Second
+)
+
 // Request is a control command from the CLI.
 type Request struct {
 	Command string          `json:"command"`
@@ -168,7 +176,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	// Set read deadline
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(SocketReadWriteTimeout))
 
 	// Read request
 	decoder := json.NewDecoder(conn)
@@ -322,13 +330,13 @@ func NewClient(socketPath string) *Client {
 
 // Send sends a request and returns the response.
 func (c *Client) Send(req Request) (*Response, error) {
-	conn, err := net.DialTimeout("unix", c.socketPath, 5*time.Second)
+	conn, err := net.DialTimeout("unix", c.socketPath, SocketDialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("connect to control socket: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(SocketReadWriteTimeout))
 
 	// Send request
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
