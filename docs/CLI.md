@@ -5,8 +5,9 @@ Complete command-line reference for TunnelMesh with examples and walkthroughs.
 ## TL;DR - Most Common Commands
 
 ```bash
-# First time? Generate SSH keys (no config needed)
-tunnelmesh init
+# First time setup (no config needed)
+tunnelmesh init                                        # Generate SSH keys
+sudo tunnelmesh trust-ca -s https://coord.example.com  # Trust mesh CA for HTTPS
 
 # Run a coordination server
 sudo tunnelmesh serve -c server.yaml
@@ -32,7 +33,7 @@ sudo tunnelmesh service start
 > - `~/.tunnelmesh/config.yaml` (recommended for personal use)
 > - `peer.yaml` or `tunnelmesh.yaml` in current directory
 >
-> Only `tunnelmesh init`, `tunnelmesh version`, and `tunnelmesh service` subcommands work without a config.
+> Commands that work without a config: `init`, `version`, `trust-ca` (uses `-s` flag), and `service` subcommands.
 
 ---
 
