@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -277,7 +278,7 @@ func TestStoreListObjects(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	list, err := store.ListObjects("test-bucket", "", 0)
+	list, _, _, err := store.ListObjects("test-bucket", "", "", 0)
 	require.NoError(t, err)
 	assert.Len(t, list, 3)
 }
@@ -293,12 +294,12 @@ func TestStoreListObjectsWithPrefix(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	list, err := store.ListObjects("test-bucket", "docs/", 0)
+	list, _, _, err := store.ListObjects("test-bucket", "docs/", "", 0)
 	require.NoError(t, err)
 	assert.Len(t, list, 2)
 
 	for _, obj := range list {
-		assert.True(t, hasPrefix(obj.Key, "docs/"))
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"))
 	}
 }
 
@@ -313,15 +314,16 @@ func TestStoreListObjectsWithMaxKeys(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	list, err := store.ListObjects("test-bucket", "", 2)
+	list, isTruncated, _, err := store.ListObjects("test-bucket", "", "", 2)
 	require.NoError(t, err)
 	assert.Len(t, list, 2)
+	assert.True(t, isTruncated)
 }
 
 func TestStoreListObjectsBucketNotFound(t *testing.T) {
 	store := newTestStore(t)
 
-	_, err := store.ListObjects("nonexistent", "", 0)
+	_, _, _, err := store.ListObjects("nonexistent", "", "", 0)
 	assert.ErrorIs(t, err, ErrBucketNotFound)
 }
 
@@ -329,9 +331,10 @@ func TestStoreListObjectsEmpty(t *testing.T) {
 	store := newTestStore(t)
 	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
 
-	list, err := store.ListObjects("test-bucket", "", 0)
+	list, isTruncated, _, err := store.ListObjects("test-bucket", "", "", 0)
 	require.NoError(t, err)
 	assert.Empty(t, list)
+	assert.False(t, isTruncated)
 }
 
 func TestStoreOverwriteObject(t *testing.T) {

@@ -2,11 +2,14 @@
 package s3
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -191,7 +194,7 @@ func (s *Store) DeleteBucket(bucket string) error {
 	}
 
 	// Check if bucket is empty (only contains dirs and _meta.json)
-	objects, err := s.listObjectsUnsafe(bucket, "", 1)
+	objects, _, _, err := s.listObjectsUnsafe(bucket, "", "", 1)
 	if err != nil {
 		return err
 	}
@@ -300,14 +303,17 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 		return nil, fmt.Errorf("create meta dir: %w", err)
 	}
 
-	// Write object data
+	// Write object data while computing MD5 hash
 	file, err := os.Create(objectPath)
 	if err != nil {
 		return nil, fmt.Errorf("create object file: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
-	written, err := io.Copy(file, reader)
+	hash := md5.New()
+	teeReader := io.TeeReader(reader, hash)
+
+	written, err := io.Copy(file, teeReader)
 	if err != nil {
 		_ = os.Remove(objectPath)
 		return nil, fmt.Errorf("write object: %w", err)
@@ -322,8 +328,8 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 		}
 	}
 
-	// Generate ETag (simplified - just use size for now, real impl uses MD5)
-	etag := fmt.Sprintf("\"%x\"", written)
+	// Generate ETag from MD5 hash (S3-compatible format)
+	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash.Sum(nil)))
 
 	// Write object metadata
 	objMeta := ObjectMeta{
@@ -447,24 +453,28 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	return nil
 }
 
-// ListObjects lists objects in a bucket with optional prefix filter.
-func (s *Store) ListObjects(bucket, prefix string, maxKeys int) ([]ObjectMeta, error) {
+// ListObjects lists objects in a bucket with optional prefix filter and pagination.
+// marker is the key to start after (exclusive) for pagination.
+// Returns (objects, isTruncated, nextMarker, error).
+func (s *Store) ListObjects(bucket, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	// Check bucket exists
 	if _, err := s.getBucketMeta(bucket); err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 
-	return s.listObjectsUnsafe(bucket, prefix, maxKeys)
+	return s.listObjectsUnsafe(bucket, prefix, marker, maxKeys)
 }
 
 // listObjectsUnsafe lists objects without lock (caller must hold lock).
-func (s *Store) listObjectsUnsafe(bucket, prefix string, maxKeys int) ([]ObjectMeta, error) {
+// Returns (objects, isTruncated, nextMarker, error).
+func (s *Store) listObjectsUnsafe(bucket, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
 	metaDir := filepath.Join(s.bucketPath(bucket), "meta")
 
 	var objects []ObjectMeta
+	passedMarker := marker == "" // If no marker, we've already passed it
 
 	err := filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -493,7 +503,15 @@ func (s *Store) listObjectsUnsafe(bucket, prefix string, maxKeys int) ([]ObjectM
 		key = filepath.ToSlash(key)
 
 		// Apply prefix filter
-		if prefix != "" && !hasPrefix(key, prefix) {
+		if prefix != "" && !strings.HasPrefix(key, prefix) {
+			return nil
+		}
+
+		// Skip until we pass the marker
+		if !passedMarker {
+			if key == marker {
+				passedMarker = true
+			}
 			return nil
 		}
 
@@ -510,8 +528,8 @@ func (s *Store) listObjectsUnsafe(bucket, prefix string, maxKeys int) ([]ObjectM
 
 		objects = append(objects, meta)
 
-		// Check max keys limit
-		if maxKeys > 0 && len(objects) >= maxKeys {
+		// Collect maxKeys + 1 to detect truncation
+		if maxKeys > 0 && len(objects) > maxKeys {
 			return filepath.SkipAll
 		}
 
@@ -519,13 +537,17 @@ func (s *Store) listObjectsUnsafe(bucket, prefix string, maxKeys int) ([]ObjectM
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("walk meta dir: %w", err)
+		return nil, false, "", fmt.Errorf("walk meta dir: %w", err)
 	}
 
-	return objects, nil
-}
+	// Check if results are truncated (only if maxKeys > 0)
+	var isTruncated bool
+	var nextMarker string
+	if maxKeys > 0 && len(objects) > maxKeys {
+		isTruncated = true
+		objects = objects[:maxKeys] // Trim to maxKeys
+		nextMarker = objects[maxKeys-1].Key
+	}
 
-// hasPrefix checks if key starts with prefix.
-func hasPrefix(key, prefix string) bool {
-	return len(key) >= len(prefix) && key[:len(prefix)] == prefix
+	return objects, isTruncated, nextMarker, nil
 }

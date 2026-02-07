@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -223,9 +224,15 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 	}
 
 	prefix := r.URL.Query().Get("prefix")
+	marker := r.URL.Query().Get("marker")
 	maxKeys := 1000 // default
+	if mk := r.URL.Query().Get("max-keys"); mk != "" {
+		if parsed, err := strconv.Atoi(mk); err == nil && parsed > 0 && parsed <= 1000 {
+			maxKeys = parsed
+		}
+	}
 
-	objects, err := s.store.ListObjects(bucket, prefix, maxKeys)
+	objects, isTruncated, nextMarker, err := s.store.ListObjects(bucket, prefix, marker, maxKeys)
 	if err != nil {
 		if err == ErrBucketNotFound {
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
@@ -238,8 +245,10 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 	resp := ListBucketResult{
 		Name:        bucket,
 		Prefix:      prefix,
+		Marker:      marker,
 		MaxKeys:     maxKeys,
-		IsTruncated: false,
+		IsTruncated: isTruncated,
+		NextMarker:  nextMarker,
 	}
 
 	for _, obj := range objects {
@@ -263,9 +272,22 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 	}
 
 	prefix := r.URL.Query().Get("prefix")
+	startAfter := r.URL.Query().Get("start-after")
+	continuationToken := r.URL.Query().Get("continuation-token")
 	maxKeys := 1000 // default
+	if mk := r.URL.Query().Get("max-keys"); mk != "" {
+		if parsed, err := strconv.Atoi(mk); err == nil && parsed > 0 && parsed <= 1000 {
+			maxKeys = parsed
+		}
+	}
 
-	objects, err := s.store.ListObjects(bucket, prefix, maxKeys)
+	// continuation-token takes precedence over start-after
+	marker := startAfter
+	if continuationToken != "" {
+		marker = continuationToken
+	}
+
+	objects, isTruncated, nextMarker, err := s.store.ListObjects(bucket, prefix, marker, maxKeys)
 	if err != nil {
 		if err == ErrBucketNotFound {
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
@@ -276,11 +298,14 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 	}
 
 	resp := ListBucketResultV2{
-		Name:        bucket,
-		Prefix:      prefix,
-		MaxKeys:     maxKeys,
-		KeyCount:    len(objects),
-		IsTruncated: false,
+		Name:                  bucket,
+		Prefix:                prefix,
+		StartAfter:            startAfter,
+		ContinuationToken:     continuationToken,
+		MaxKeys:               maxKeys,
+		KeyCount:              len(objects),
+		IsTruncated:           isTruncated,
+		NextContinuationToken: nextMarker,
 	}
 
 	for _, obj := range objects {
@@ -498,20 +523,25 @@ type ListBucketResult struct {
 	XMLName     xml.Name     `xml:"ListBucketResult"`
 	Name        string       `xml:"Name"`
 	Prefix      string       `xml:"Prefix"`
+	Marker      string       `xml:"Marker,omitempty"`
 	MaxKeys     int          `xml:"MaxKeys"`
 	IsTruncated bool         `xml:"IsTruncated"`
+	NextMarker  string       `xml:"NextMarker,omitempty"`
 	Contents    []ObjectInfo `xml:"Contents"`
 }
 
 // ListBucketResultV2 is the response for listing objects (V2).
 type ListBucketResultV2 struct {
-	XMLName     xml.Name     `xml:"ListBucketResult"`
-	Name        string       `xml:"Name"`
-	Prefix      string       `xml:"Prefix"`
-	MaxKeys     int          `xml:"MaxKeys"`
-	KeyCount    int          `xml:"KeyCount"`
-	IsTruncated bool         `xml:"IsTruncated"`
-	Contents    []ObjectInfo `xml:"Contents"`
+	XMLName               xml.Name     `xml:"ListBucketResult"`
+	Name                  string       `xml:"Name"`
+	Prefix                string       `xml:"Prefix"`
+	StartAfter            string       `xml:"StartAfter,omitempty"`
+	ContinuationToken     string       `xml:"ContinuationToken,omitempty"`
+	MaxKeys               int          `xml:"MaxKeys"`
+	KeyCount              int          `xml:"KeyCount"`
+	IsTruncated           bool         `xml:"IsTruncated"`
+	NextContinuationToken string       `xml:"NextContinuationToken,omitempty"`
+	Contents              []ObjectInfo `xml:"Contents"`
 }
 
 // ObjectInfo represents an object in a listing.
