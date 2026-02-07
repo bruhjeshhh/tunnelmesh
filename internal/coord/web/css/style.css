@@ -1321,6 +1321,51 @@ a.logs-container {
     text-align: center;
 }
 
+/* Resize handle (GitHub-style) */
+.resize-handle {
+    height: 8px;
+    background: var(--color-bg-secondary);
+    border-top: 1px solid var(--color-border-primary);
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.resize-handle:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.resize-handle:active {
+    background: var(--color-bg-tertiary);
+}
+
+.resize-handle-grip {
+    width: 36px;
+    height: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+}
+
+.resize-handle-grip::before,
+.resize-handle-grip::after {
+    content: '';
+    width: 36px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--color-border-primary);
+    transition: background 0.15s ease;
+}
+
+.resize-handle:hover .resize-handle-grip::before,
+.resize-handle:hover .resize-handle-grip::after {
+    background: var(--color-text-secondary);
+}
+
 /* Packet Filter Section */
 .filter-peer-select {
     padding: 1rem;

@@ -130,6 +130,10 @@ function initDOMCache() {
 
     // Toast container
     dom.toastContainer = document.getElementById('toast-container');
+
+    // Logs resize handle
+    dom.logsContainer = document.getElementById('logs-link');
+    dom.logsResizeHandle = document.getElementById('logs-resize-handle');
 }
 
 // Toast notification system
@@ -2036,7 +2040,66 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // Logs panel resize handle
+    if (dom.logsResizeHandle && dom.logsContainer) {
+        initLogsResize();
+    }
 });
+
+// Initialize logs panel resize functionality
+function initLogsResize() {
+    const handle = dom.logsResizeHandle;
+    const container = dom.logsContainer;
+    const MIN_HEIGHT = 100;
+    const MAX_HEIGHT = 800;
+
+    let isResizing = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startY = e.clientY;
+        startHeight = container.offsetHeight;
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        const delta = e.clientY - startY;
+        const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
+        container.style.maxHeight = newHeight + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+    });
+
+    // Touch support for mobile
+    handle.addEventListener('touchstart', (e) => {
+        isResizing = true;
+        startY = e.touches[0].clientY;
+        startHeight = container.offsetHeight;
+        e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener('touchmove', (e) => {
+        if (!isResizing) return;
+        const delta = e.touches[0].clientY - startY;
+        const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
+        container.style.maxHeight = newHeight + 'px';
+    }, { passive: true });
+
+    document.addEventListener('touchend', () => {
+        isResizing = false;
+    });
 
 // Cleanup on page unload to prevent memory leaks
 window.addEventListener('beforeunload', cleanup);
