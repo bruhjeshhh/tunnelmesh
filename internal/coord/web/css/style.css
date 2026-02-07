@@ -1326,7 +1326,6 @@ a.logs-container {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    border-bottom: 1px solid var(--color-border-secondary);
 }
 
 .filter-peer-select label {
@@ -1338,7 +1337,7 @@ a.logs-container {
     padding: 0.5rem;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: 0;
     color: var(--color-text-primary);
     font-size: 0.875rem;
     min-width: 200px;
@@ -1347,12 +1346,24 @@ a.logs-container {
 .filter-peer-select select:focus {
     outline: none;
     border-color: var(--color-accent-blue);
-    box-shadow: 0 0 0 2px var(--color-focus-ring);
+    box-shadow: none;
 }
 
 #filter-info {
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-secondary);
+}
+
+/* Filter section uses square corners for all interactive elements */
+#filter-section .btn-primary,
+#filter-section .btn-danger,
+#filter-section select {
+    border-radius: 0;
+}
+
+#filter-section .btn-primary:focus,
+#filter-section .btn-danger:focus,
+#filter-section select:focus {
+    box-shadow: none;
 }
 
 .filter-policy {
@@ -1369,13 +1380,13 @@ a.logs-container {
     color: var(--color-text-secondary);
 }
 
-/* Action badges - muted badge style */
+/* Action badges - muted badge style with square corners */
 .action-badge {
     display: inline-block;
-    padding: 0.125rem 0.5rem;
-    border-radius: 2rem;
-    font-size: 0.75rem;
-    font-weight: 500;
+    padding: 0.1rem 0.3rem;
+    border-radius: 0;
+    font-size: 0.65rem;
+    font-weight: 600;
     text-transform: uppercase;
 }
 
