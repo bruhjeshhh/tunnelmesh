@@ -2134,6 +2134,7 @@ function initLogsResize() {
     document.addEventListener('touchend', () => {
         isResizing = false;
     });
+}
 
 // Cleanup on page unload to prevent memory leaks
 window.addEventListener('beforeunload', cleanup);
