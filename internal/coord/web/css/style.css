@@ -1423,3 +1423,33 @@ a.logs-container {
     border-color: var(--color-accent-blue);
     box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
+
+/* Filter modal styling - square corners to match filter section */
+#filter-modal .modal-content {
+    border-radius: 0;
+}
+
+#filter-modal .form-group input,
+#filter-modal .form-group select {
+    border-radius: 0;
+}
+
+#filter-modal .form-group input:focus,
+#filter-modal .form-group select:focus {
+    box-shadow: none;
+}
+
+#filter-modal .btn-primary {
+    border-radius: 0;
+}
+
+#filter-modal .btn-primary:focus {
+    box-shadow: none;
+}
+
+#filter-modal .form-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
