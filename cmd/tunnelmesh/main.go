@@ -128,9 +128,39 @@ func main() {
 		Short: "TunnelMesh - P2P SSH tunnel mesh network",
 		Long: `TunnelMesh creates encrypted P2P tunnels between peers using SSH.
 
-Use 'tunnelmesh serve' to run a coordination server.
-Use 'tunnelmesh join' to connect as a peer.
-Use 'tunnelmesh service' to manage system service installation.`,
+QUICK START - Create a new mesh:
+
+  # 1. On the coordinator server:
+  tunnelmesh init --server
+  tunnelmesh serve --config server.yaml
+
+  # 2. Create your identity (once per user):
+  tunnelmesh user setup
+
+  # 3. Register with the mesh (first user becomes admin):
+  tunnelmesh user register
+
+QUICK START - Join an existing mesh:
+
+  # 1. Create your identity (if you haven't already):
+  tunnelmesh user setup
+
+  # 2. Join using invite token from admin:
+  tunnelmesh join --server coord.example.com --token <token> --context work
+
+  # 3. Register to get S3 storage access:
+  tunnelmesh user register
+
+  # 4. Install as system service (optional):
+  tunnelmesh service install
+
+MANAGING BUCKETS:
+
+  tunnelmesh buckets list
+  tunnelmesh buckets create my-data
+  tunnelmesh buckets objects my-data
+
+For more help on any command, use: tunnelmesh <command> --help`,
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
