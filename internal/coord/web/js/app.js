@@ -1673,8 +1673,9 @@ function renderFilterRules(data) {
         dom.filterInfo.style.display = 'block';
     }
     if (dom.filterDefaultPolicy) {
-        dom.filterDefaultPolicy.textContent = data.default_deny ? 'DENY (allowlist mode)' : 'ALLOW (blocklist mode)';
-        dom.filterDefaultPolicy.className = data.default_deny ? 'policy-deny' : 'policy-allow';
+        const policyText = data.default_deny ? 'deny' : 'allow';
+        const modeText = data.default_deny ? 'allowlist mode' : 'blocklist mode';
+        dom.filterDefaultPolicy.innerHTML = `<span class="action-badge ${policyText}">${policyText}</span> <span class="text-muted">(${modeText})</span>`;
     }
 
     if (!data.rules || data.rules.length === 0) {
@@ -1710,7 +1711,7 @@ function renderFilterRules(data) {
         <tr>
             <td>${rule.port}</td>
             <td>${rule.protocol.toUpperCase()}</td>
-            <td class="${rule.action === 'allow' ? 'action-allow' : 'action-deny'}">${rule.action.toUpperCase()}</td>
+            <td><span class="action-badge ${rule.action}">${rule.action}</span></td>
             <td>${sourcePeerDisplay}</td>
             <td>${rule.source}</td>
             <td>
