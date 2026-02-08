@@ -14,13 +14,14 @@ import (
 
 // mockAuthorizer is a test authorizer that allows all requests.
 type mockAuthorizer struct {
-	userID    string
-	allowAll  bool
-	denyAll   bool
-	allowVerb map[string]bool
+	userID          string
+	allowAll        bool
+	denyAll         bool
+	allowVerb       map[string]bool
+	allowedPrefixes map[string][]string // bucket -> prefixes (nil = unrestricted)
 }
 
-func (m *mockAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket string) (string, error) {
+func (m *mockAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket, objectKey string) (string, error) {
 	if m.denyAll {
 		return "", ErrAccessDenied
 	}
@@ -31,6 +32,17 @@ func (m *mockAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucke
 		return m.userID, nil
 	}
 	return "", ErrAccessDenied
+}
+
+func (m *mockAuthorizer) GetAllowedPrefixes(userID, bucket string) []string {
+	if m.allowedPrefixes == nil {
+		return nil // unrestricted
+	}
+	prefixes, ok := m.allowedPrefixes[bucket]
+	if !ok {
+		return nil // unrestricted if bucket not configured
+	}
+	return prefixes
 }
 
 func newTestServer(t *testing.T) (*Server, *Store) {
@@ -453,4 +465,167 @@ func TestNestedObjectKey(t *testing.T) {
 
 	data, _ := io.ReadAll(w.Body)
 	assert.Equal(t, content, data)
+}
+
+func TestListObjects_PrefixFiltered(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
+
+	// Create objects in different prefixes
+	_, _ = store.PutObject("my-bucket", "teamA/doc1.txt", bytes.NewReader([]byte("a1")), 2, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "teamA/doc2.txt", bytes.NewReader([]byte("a2")), 2, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "teamB/doc1.txt", bytes.NewReader([]byte("b1")), 2, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "teamC/doc1.txt", bytes.NewReader([]byte("c1")), 2, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "root.txt", bytes.NewReader([]byte("root")), 4, "text/plain", nil)
+
+	// Create authorizer that only allows teamA/ prefix
+	auth := &mockAuthorizer{
+		userID:   "alice",
+		allowAll: true,
+		allowedPrefixes: map[string][]string{
+			"my-bucket": {"teamA/"},
+		},
+	}
+	server := NewServer(store, auth, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/my-bucket", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp ListBucketResult
+	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Should only see teamA/* objects
+	assert.Len(t, resp.Contents, 2)
+	keys := []string{resp.Contents[0].Key, resp.Contents[1].Key}
+	assert.Contains(t, keys, "teamA/doc1.txt")
+	assert.Contains(t, keys, "teamA/doc2.txt")
+}
+
+func TestListObjects_MultiplePrefixesFiltered(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
+
+	_, _ = store.PutObject("my-bucket", "teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "teamB/doc.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "teamC/doc.txt", bytes.NewReader([]byte("c")), 1, "text/plain", nil)
+
+	// User can access both teamA/ and teamB/
+	auth := &mockAuthorizer{
+		userID:   "alice",
+		allowAll: true,
+		allowedPrefixes: map[string][]string{
+			"my-bucket": {"teamA/", "teamB/"},
+		},
+	}
+	server := NewServer(store, auth, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/my-bucket", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp ListBucketResult
+	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
+
+	assert.Len(t, resp.Contents, 2)
+	keys := []string{resp.Contents[0].Key, resp.Contents[1].Key}
+	assert.Contains(t, keys, "teamA/doc.txt")
+	assert.Contains(t, keys, "teamB/doc.txt")
+}
+
+func TestListObjects_UnrestrictedAccess(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
+
+	_, _ = store.PutObject("my-bucket", "teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "teamB/doc.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "root.txt", bytes.NewReader([]byte("r")), 1, "text/plain", nil)
+
+	// nil prefixes = unrestricted
+	auth := &mockAuthorizer{
+		userID:          "alice",
+		allowAll:        true,
+		allowedPrefixes: nil,
+	}
+	server := NewServer(store, auth, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/my-bucket", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp ListBucketResult
+	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Should see all objects
+	assert.Len(t, resp.Contents, 3)
+}
+
+func TestListObjectsV2_PrefixFiltered(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
+
+	_, _ = store.PutObject("my-bucket", "projects/teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
+	_, _ = store.PutObject("my-bucket", "projects/teamB/doc.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil)
+
+	auth := &mockAuthorizer{
+		userID:   "alice",
+		allowAll: true,
+		allowedPrefixes: map[string][]string{
+			"my-bucket": {"projects/teamA/"},
+		},
+	}
+	server := NewServer(store, auth, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/my-bucket?list-type=2", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp ListBucketResultV2
+	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
+
+	assert.Len(t, resp.Contents, 1)
+	assert.Equal(t, "projects/teamA/doc.txt", resp.Contents[0].Key)
+	assert.Equal(t, 1, resp.KeyCount)
+}
+
+func TestListObjects_EmptyPrefixesNoAccess(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
+
+	_, _ = store.PutObject("my-bucket", "doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
+
+	// Empty slice = no access
+	auth := &mockAuthorizer{
+		userID:   "alice",
+		allowAll: true,
+		allowedPrefixes: map[string][]string{
+			"my-bucket": {},
+		},
+	}
+	server := NewServer(store, auth, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/my-bucket", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp ListBucketResult
+	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
+
+	// No objects visible
+	assert.Len(t, resp.Contents, 0)
 }

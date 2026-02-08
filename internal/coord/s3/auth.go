@@ -105,7 +105,7 @@ func NewRBACAuthorizer(credentials *CredentialStore, authorizer *auth.Authorizer
 
 // AuthorizeRequest authenticates and authorizes an S3 request.
 // It extracts credentials from the Authorization header and checks RBAC permissions.
-func (a *RBACAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket string) (userID string, err error) {
+func (a *RBACAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket, objectKey string) (userID string, err error) {
 	var accessKey, secret string
 	var isBasicAuth bool
 
@@ -148,11 +148,16 @@ func (a *RBACAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucke
 	}
 
 	// Check RBAC permissions
-	if !a.authorizer.Authorize(userID, verb, resource, bucket) {
+	if !a.authorizer.Authorize(userID, verb, resource, bucket, objectKey) {
 		return "", ErrAccessDenied
 	}
 
 	return userID, nil
+}
+
+// GetAllowedPrefixes returns the object prefixes a user can access in a bucket.
+func (a *RBACAuthorizer) GetAllowedPrefixes(userID, bucket string) []string {
+	return a.authorizer.GetAllowedPrefixes(userID, bucket)
 }
 
 // parseAuthHeader parses an AWS-style Authorization header.
@@ -233,6 +238,11 @@ type AllowAllAuthorizer struct {
 }
 
 // AuthorizeRequest always allows the request.
-func (a *AllowAllAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket string) (string, error) {
+func (a *AllowAllAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket, objectKey string) (string, error) {
 	return a.UserID, nil
+}
+
+// GetAllowedPrefixes returns nil (unrestricted) since this authorizer allows everything.
+func (a *AllowAllAuthorizer) GetAllowedPrefixes(userID, bucket string) []string {
+	return nil
 }

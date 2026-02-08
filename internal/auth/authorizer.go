@@ -53,28 +53,29 @@ func NewAuthorizerWithGroups() *Authorizer {
 }
 
 // Authorize checks if a user can perform a verb on a resource in a bucket.
+// The objectKey parameter is used for object-level prefix permission checks.
 // Returns true if any of the user's direct bindings or group bindings allow the action.
-func (a *Authorizer) Authorize(userID, verb, resource, bucketName string) bool {
+func (a *Authorizer) Authorize(userID, verb, resource, bucketName, objectKey string) bool {
 	// Check direct user bindings first
-	if a.checkUserBindings(userID, verb, resource, bucketName) {
+	if a.checkUserBindings(userID, verb, resource, bucketName, objectKey) {
 		return true
 	}
 
 	// Check group bindings if groups are enabled
 	if a.Groups != nil && a.GroupBindings != nil {
-		return a.checkGroupBindings(userID, verb, resource, bucketName)
+		return a.checkGroupBindings(userID, verb, resource, bucketName, objectKey)
 	}
 
 	return false
 }
 
 // checkUserBindings checks direct user role bindings.
-func (a *Authorizer) checkUserBindings(userID, verb, resource, bucketName string) bool {
+func (a *Authorizer) checkUserBindings(userID, verb, resource, bucketName, objectKey string) bool {
 	bindings := a.Bindings.GetForUser(userID)
 
 	for _, binding := range bindings {
-		// Check bucket scope
-		if !binding.AppliesToBucket(bucketName) {
+		// Check bucket and object prefix scope
+		if !binding.AppliesToObject(bucketName, objectKey) {
 			continue
 		}
 
@@ -102,7 +103,7 @@ func (a *Authorizer) checkUserBindings(userID, verb, resource, bucketName string
 }
 
 // checkGroupBindings checks group-based role bindings.
-func (a *Authorizer) checkGroupBindings(userID, verb, resource, bucketName string) bool {
+func (a *Authorizer) checkGroupBindings(userID, verb, resource, bucketName, objectKey string) bool {
 	// Get all groups the user belongs to
 	userGroups := a.Groups.GetGroupsForUser(userID)
 
@@ -110,8 +111,8 @@ func (a *Authorizer) checkGroupBindings(userID, verb, resource, bucketName strin
 		bindings := a.GroupBindings.GetForGroup(groupName)
 
 		for _, binding := range bindings {
-			// Check bucket scope
-			if !binding.AppliesToBucket(bucketName) {
+			// Check bucket and object prefix scope
+			if !binding.AppliesToObject(bucketName, objectKey) {
 				continue
 			}
 
@@ -204,4 +205,60 @@ func (a *Authorizer) GetRole(name string) *Role {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.roles[name]
+}
+
+// GetAllowedPrefixes returns all object prefixes a user can access in a bucket.
+// Returns nil if user has unrestricted access (at least one binding with no prefix).
+// Returns empty slice if user has no access to the bucket.
+func (a *Authorizer) GetAllowedPrefixes(userID, bucketName string) []string {
+	prefixes := make(map[string]bool)
+	hasUnrestrictedAccess := false
+	hasAnyAccess := false
+
+	// Check direct bindings
+	for _, binding := range a.Bindings.GetForUser(userID) {
+		if !binding.AppliesToBucket(bucketName) {
+			continue
+		}
+		hasAnyAccess = true
+		if binding.ObjectPrefix == "" {
+			hasUnrestrictedAccess = true
+		} else {
+			prefixes[binding.ObjectPrefix] = true
+		}
+	}
+
+	// Check group bindings if groups are enabled
+	if a.Groups != nil && a.GroupBindings != nil {
+		for _, groupName := range a.Groups.GetGroupsForUser(userID) {
+			for _, binding := range a.GroupBindings.GetForGroup(groupName) {
+				if !binding.AppliesToBucket(bucketName) {
+					continue
+				}
+				hasAnyAccess = true
+				if binding.ObjectPrefix == "" {
+					hasUnrestrictedAccess = true
+				} else {
+					prefixes[binding.ObjectPrefix] = true
+				}
+			}
+		}
+	}
+
+	// Unrestricted access = nil (no filtering needed)
+	if hasUnrestrictedAccess {
+		return nil
+	}
+
+	// No access = empty slice
+	if !hasAnyAccess {
+		return []string{}
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(prefixes))
+	for prefix := range prefixes {
+		result = append(result, prefix)
+	}
+	return result
 }

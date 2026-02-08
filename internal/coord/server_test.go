@@ -1028,6 +1028,6 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	assert.Equal(t, secretKey, recoveredSecret)
 
 	// Verify role bindings were recovered
-	canRead := srv2.s3Authorizer.Authorize(testUserID, "get", "objects", "test-bucket")
+	canRead := srv2.s3Authorizer.Authorize(testUserID, "get", "objects", "test-bucket", "")
 	assert.True(t, canRead, "user should have read permission after restart")
 }

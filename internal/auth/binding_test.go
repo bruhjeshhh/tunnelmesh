@@ -59,6 +59,54 @@ func TestRoleBindingAppliesToBucket(t *testing.T) {
 	}
 }
 
+func TestRoleBinding_AppliesToObject(t *testing.T) {
+	tests := []struct {
+		name         string
+		bucketScope  string
+		objectPrefix string
+		bucket       string
+		key          string
+		want         bool
+	}{
+		// No scope = applies to everything
+		{"no scope, any bucket/key", "", "", "mybucket", "any/key.txt", true},
+		{"no scope, empty key", "", "", "mybucket", "", true},
+
+		// Bucket scope only (no prefix)
+		{"bucket match, no prefix", "mybucket", "", "mybucket", "any/key.txt", true},
+		{"bucket match, empty key", "mybucket", "", "mybucket", "", true},
+		{"bucket mismatch", "mybucket", "", "other", "any/key.txt", false},
+
+		// Prefix scope
+		{"prefix match", "mybucket", "projects/teamA/", "mybucket", "projects/teamA/file.txt", true},
+		{"prefix match nested", "mybucket", "projects/", "mybucket", "projects/teamA/sub/file.txt", true},
+		{"prefix mismatch", "mybucket", "projects/teamA/", "mybucket", "projects/teamB/file.txt", false},
+		{"prefix exact match", "mybucket", "config.json", "mybucket", "config.json", true},
+		{"prefix partial mismatch", "mybucket", "projects/teamA/", "mybucket", "projects/teamABC/file.txt", false},
+
+		// Empty key (bucket-level operations like list) - always passes prefix check
+		{"empty key with prefix", "mybucket", "projects/", "mybucket", "", true},
+
+		// Bucket mismatch with prefix
+		{"bucket mismatch with prefix", "mybucket", "projects/", "other", "projects/file.txt", false},
+
+		// No bucket scope but with prefix (applies to all buckets with that prefix)
+		{"no bucket scope with prefix", "", "shared/", "anybucket", "shared/file.txt", true},
+		{"no bucket scope prefix mismatch", "", "shared/", "anybucket", "private/file.txt", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			binding := RoleBinding{
+				BucketScope:  tt.bucketScope,
+				ObjectPrefix: tt.objectPrefix,
+			}
+			got := binding.AppliesToObject(tt.bucket, tt.key)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestBindingStore(t *testing.T) {
 	store := NewBindingStore()
 	require.NotNil(t, store)
