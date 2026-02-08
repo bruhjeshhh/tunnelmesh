@@ -12,6 +12,68 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// statusRecorder wraps http.ResponseWriter to capture the HTTP status code.
+// Note: Not thread-safe. Must only be used within a single request handler.
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if !r.wroteHeader {
+		r.status = code
+		r.wroteHeader = true
+		r.ResponseWriter.WriteHeader(code)
+	}
+	// Subsequent calls are silently ignored to prevent "http: superfluous response.WriteHeader call" warnings
+}
+
+// getStatus returns the recorded status, defaulting to 200 if WriteHeader was never called.
+func (r *statusRecorder) getStatus() int {
+	if r.status == 0 {
+		return http.StatusOK
+	}
+	return r.status
+}
+
+// classifyS3Status converts HTTP status code to metric status string.
+func classifyS3Status(httpStatus int) string {
+	switch {
+	case httpStatus >= 200 && httpStatus < 300:
+		return "success"
+	case httpStatus == http.StatusNotFound:
+		return "not_found"
+	case httpStatus == http.StatusForbidden:
+		return "access_denied" // Could be access_denied or quota_exceeded
+	case httpStatus >= 400 && httpStatus < 500:
+		return "error"
+	case httpStatus >= 500:
+		return "error"
+	default:
+		return "error"
+	}
+}
+
+// classifyS3StatusWithError converts HTTP status and error to metric status string.
+// This allows distinguishing between quota_exceeded and access_denied (both use 403).
+func classifyS3StatusWithError(httpStatus int, err error) string {
+	// Check error type first for semantic classification
+	if err != nil {
+		switch err {
+		case ErrQuotaExceeded:
+			return "quota_exceeded"
+		case ErrAccessDenied:
+			return "access_denied"
+		case ErrBucketNotFound, ErrObjectNotFound:
+			return "not_found"
+		}
+	}
+
+	// Fall back to HTTP status classification
+	return classifyS3Status(httpStatus)
+}
+
 // Server provides an S3-compatible HTTP interface.
 type Server struct {
 	store      *Store
@@ -351,38 +413,50 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 
 // getObject handles GET /{bucket}/{key}.
 func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	var storeErr error // Capture error for metrics classification
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
+			s.metrics.RecordRequest("GetObject", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket, key)
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
 	reader, meta, err := s.store.GetObject(bucket, key)
 	if err != nil {
+		storeErr = err // Capture for metrics
 		switch err {
 		case ErrBucketNotFound:
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		case ErrObjectNotFound:
-			s.writeError(w, http.StatusNotFound, "NoSuchKey", "Object not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchKey", "Object not found")
 		default:
-			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		}
 		return
 	}
 	defer func() { _ = reader.Close() }()
 
 	// Set response headers
-	w.Header().Set("Content-Type", meta.ContentType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
-	w.Header().Set("ETag", meta.ETag)
-	w.Header().Set("Last-Modified", meta.LastModified.Format(http.TimeFormat))
+	rec.Header().Set("Content-Type", meta.ContentType)
+	rec.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
+	rec.Header().Set("ETag", meta.ETag)
+	rec.Header().Set("Last-Modified", meta.LastModified.Format(http.TimeFormat))
 
 	// Copy user metadata
 	for k, v := range meta.Metadata {
-		w.Header().Set(k, v)
+		rec.Header().Set(k, v)
 	}
 
-	n, err := io.Copy(w, reader)
+	n, err := io.Copy(rec, reader)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to stream object")
 	}
@@ -393,9 +467,20 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 // putObject handles PUT /{bucket}/{key}.
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	var storeErr error // Capture error for metrics classification
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
+			s.metrics.RecordRequest("PutObject", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "put", "objects", bucket, key)
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
@@ -414,19 +499,20 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 	meta, err := s.store.PutObject(bucket, key, r.Body, r.ContentLength, contentType, metadata)
 	if err != nil {
+		storeErr = err // Capture for metrics
 		switch err {
 		case ErrBucketNotFound:
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		case ErrQuotaExceeded:
-			s.writeError(w, http.StatusForbidden, "QuotaExceeded", "Storage quota exceeded")
+			s.writeError(rec, http.StatusForbidden, "QuotaExceeded", "Storage quota exceeded")
 		default:
-			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		}
 		return
 	}
 
-	w.Header().Set("ETag", meta.ETag)
-	w.WriteHeader(http.StatusOK)
+	rec.Header().Set("ETag", meta.ETag)
+	rec.WriteHeader(http.StatusOK)
 
 	if s.metrics != nil && meta.Size > 0 {
 		s.metrics.RecordUpload(meta.Size)

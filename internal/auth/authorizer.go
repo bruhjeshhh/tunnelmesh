@@ -3,6 +3,9 @@ package auth
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
+
+	"github.com/tunnelmesh/tunnelmesh/internal/logging/audit"
 )
 
 // SystemBucket is the reserved bucket name for coordinator internal data.
@@ -15,6 +18,7 @@ type Authorizer struct {
 	GroupBindings *GroupBindingStore // Optional: for group-based authorization
 	roles         map[string]*Role   // role name -> role
 	mu            sync.RWMutex
+	auditLogger   atomic.Pointer[audit.Logger] // Optional: for security audit logging (lock-free)
 }
 
 // NewAuthorizer creates a new authorizer with built-in roles.
@@ -57,16 +61,25 @@ func NewAuthorizerWithGroups() *Authorizer {
 // Returns true if any of the user's direct bindings or group bindings allow the action.
 func (a *Authorizer) Authorize(userID, verb, resource, bucketName, objectKey string) bool {
 	// Check direct user bindings first
-	if a.checkUserBindings(userID, verb, resource, bucketName, objectKey) {
-		return true
+	allowed := a.checkUserBindings(userID, verb, resource, bucketName, objectKey)
+
+	// Check group bindings if groups are enabled and not already allowed
+	if !allowed && a.Groups != nil && a.GroupBindings != nil {
+		allowed = a.checkGroupBindings(userID, verb, resource, bucketName, objectKey)
 	}
 
-	// Check group bindings if groups are enabled
-	if a.Groups != nil && a.GroupBindings != nil {
-		return a.checkGroupBindings(userID, verb, resource, bucketName, objectKey)
+	// Log authorization decision for security audit (lock-free read)
+	if logger := a.auditLogger.Load(); logger != nil {
+		result := "allowed"
+		reason := ""
+		if !allowed {
+			result = "denied"
+			reason = "no matching role binding"
+		}
+		logger.LogAuthz(userID, verb, resource, bucketName, objectKey, result, reason)
 	}
 
-	return false
+	return allowed
 }
 
 // checkUserBindings checks direct user role bindings.
@@ -205,6 +218,13 @@ func (a *Authorizer) GetRole(name string) *Role {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.roles[name]
+}
+
+// SetAuditLogger sets the audit logger for security event logging.
+// This is optional - if not set, no audit logging will occur.
+// Safe for concurrent use (lock-free atomic operation).
+func (a *Authorizer) SetAuditLogger(logger *audit.Logger) {
+	a.auditLogger.Store(logger)
 }
 
 // GetAllowedPrefixes returns all object prefixes a user can access in a bucket.
