@@ -37,8 +37,14 @@ func NewS3Filesystem(store *s3.Store, bucket, prefix string, readOnly bool) *S3F
 }
 
 // normalizePath converts a path to S3 object key format.
+// S3 always uses forward slashes, regardless of platform.
 func (f *S3Filesystem) normalizePath(path string) string {
+	// Use forward slashes for S3 compatibility
+	path = strings.ReplaceAll(path, "\\", "/")
+	// Clean the path (removes .., ., double slashes)
 	path = filepath.Clean(path)
+	// Convert back to forward slashes (filepath.Clean uses OS separator)
+	path = strings.ReplaceAll(path, "\\", "/")
 	path = strings.TrimPrefix(path, "/")
 	// filepath.Clean returns "." for empty path
 	if path == "." {
@@ -182,9 +188,11 @@ func (f *S3Filesystem) Remove(filename string) error {
 	return f.store.DeleteObject(f.bucket, key)
 }
 
-// Join joins path elements.
+// Join joins path elements using forward slashes (S3 compatible).
 func (f *S3Filesystem) Join(elem ...string) string {
-	return filepath.Join(elem...)
+	// Use forward slashes for S3 compatibility
+	result := filepath.Join(elem...)
+	return strings.ReplaceAll(result, "\\", "/")
 }
 
 // TempFile creates a temporary file.
