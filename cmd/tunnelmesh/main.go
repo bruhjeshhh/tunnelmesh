@@ -404,6 +404,9 @@ func runServeFromService(ctx context.Context, configPath string) error {
 	// Start periodic stats history saving
 	srv.StartPeriodicSave(ctx)
 
+	// Start periodic S3 cleanup (tombstoned objects, expired shares)
+	srv.StartPeriodicCleanup(ctx)
+
 	// Start HTTP server in goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
@@ -439,6 +442,14 @@ func runServeFromService(ctx context.Context, configPath string) error {
 				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
 				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
 					log.Error().Err(err).Msg("failed to start admin server")
+				}
+
+				// Start NFS server if S3 is enabled
+				if cfg.S3.Enabled {
+					nfsAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", coord.NFSPort))
+					if err := srv.StartNFSServer(nfsAddr, tlsCert); err != nil {
+						log.Error().Err(err).Msg("failed to start NFS server")
+					}
 				}
 			}
 		}
@@ -602,6 +613,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Start periodic stats history saving
 	srv.StartPeriodicSave(ctx)
 
+	// Start periodic S3 cleanup (tombstoned objects, expired shares)
+	srv.StartPeriodicCleanup(ctx)
+
 	// Start HTTP server in goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
@@ -638,6 +652,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
 				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
 					log.Error().Err(err).Msg("failed to start admin server")
+				}
+
+				// Start NFS server if S3 is enabled
+				if cfg.S3.Enabled {
+					nfsAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", coord.NFSPort))
+					if err := srv.StartNFSServer(nfsAddr, tlsCert); err != nil {
+						log.Error().Err(err).Msg("failed to start NFS server")
+					}
 				}
 			}
 		}

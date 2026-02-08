@@ -2,6 +2,8 @@
 
 TunnelMesh includes an S3-compatible object storage service that runs on the coordinator. This provides mesh-only accessible storage for shared files, configurations, and internal coordinator state.
 
+File shares can also be mounted as network drives via NFS - see the [NFS documentation](NFS.md).
+
 ## Overview
 
 The S3 storage service:
@@ -17,8 +19,8 @@ Add the S3 configuration to your server config:
 ```yaml
 s3:
   enabled: true
-  data_dir: /var/lib/tunnelmesh/s3  # Storage directory
-  max_size_gb: 100                   # Quota (0 = unlimited)
+  max_size: "100Gi"                  # Storage quota (required)
+  data_dir: /var/lib/tunnelmesh/s3   # Storage directory
   port: 9000                         # S3 API port
 ```
 
@@ -27,13 +29,23 @@ s3:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `enabled` | `false` | Enable S3 storage service |
+| `max_size` | - | Storage quota (required, e.g., `10Gi`, `500Mi`, `1Ti`) |
 | `data_dir` | `{data_dir}/s3` | Directory for object storage |
-| `max_size_gb` | `0` | Storage quota in GB (0 = unlimited) |
 | `port` | `9000` | Port for S3 API (mesh IP only) |
+| `object_expiry_days` | `9125` | Days until objects auto-expire (25 years) |
+| `share_expiry_days` | `365` | Days until file shares expire (1 year) |
+| `tombstone_retention_days` | `90` | Days to keep soft-deleted items before purge |
+
+### Size Format
+
+The `max_size` option accepts Kubernetes-style size notation:
+- `Ki`, `Mi`, `Gi`, `Ti` - binary units (1Ki = 1024 bytes)
+- `K`, `M`, `G`, `T` - also supported as aliases
+- Plain numbers are interpreted as bytes
 
 ## API Endpoints
 
-The S3 API is available at `https://coord.tunnelmesh:9000` (or your configured port).
+The S3 API is available at `https://this.tm:9000` (or your configured port).
 
 ### Supported Operations
 
@@ -122,6 +134,65 @@ _tunnelmesh/
 
 This bucket is only accessible to service users with the `system` role.
 
+## File Shares
+
+File shares are user-accessible storage areas backed by S3 buckets. They provide an easy way to share files across the mesh with automatic permission management.
+
+### Creating File Shares
+
+File shares can be created via the admin panel's Data tab or the API:
+
+```bash
+# Via API
+curl -X POST https://this.tm/api/shares \
+  -H "Content-Type: application/json" \
+  -d '{"name": "team-files", "description": "Shared team files", "quota_bytes": 10737418240}'
+```
+
+### Share Properties
+
+| Property | Description |
+|----------|-------------|
+| Name | DNS-safe identifier (alphanumeric + hyphens, max 63 chars) |
+| Description | Optional description |
+| Quota | Per-share storage limit (0 = unlimited, max 1TB) |
+| Owner | Creator gets bucket-admin role automatically |
+| Expires | Configurable expiry date (or use default from `share_expiry_days`) |
+| Guest Read | Allow guest user read access (default: true) |
+
+### Default Permissions
+
+When a file share is created:
+- The creator becomes the owner with `bucket-admin` role
+- If "Guest Read" is enabled (default): all mesh users (`everyone` group) get `bucket-read` access
+- If "Guest Read" is disabled: access is controlled entirely via RBAC bindings
+- Additional permissions can be granted via role bindings in the Data tab
+
+### Accessing Share Contents
+
+File shares are backed by S3 buckets with a `fs+` prefix. Access them via:
+
+**S3 API:**
+```bash
+aws s3 ls s3://fs+team-files/ --endpoint-url https://this.tm:9000
+```
+
+**NFS Mount:**
+```bash
+sudo mount -t nfs this.tm:/team-files /mnt/team-files
+```
+
+**S3 Explorer:** Browse in the admin panel's Data tab.
+
+See the [NFS documentation](NFS.md) for detailed mount instructions.
+
+### Soft Delete (Tombstoning)
+
+Deleted file shares are tombstoned rather than immediately removed:
+- Share data is retained for `tombstone_retention_days` (default: 90)
+- Recreating a share with the same name restores the previous content
+- After the retention period, data is permanently purged
+
 ## Using with AWS CLI
 
 Configure the AWS CLI to use your mesh S3:
@@ -132,7 +203,7 @@ aws configure --profile tunnelmesh
 # Enter your access key and secret key
 
 # Set endpoint
-export AWS_ENDPOINT_URL=https://coord.tunnelmesh:9000
+export AWS_ENDPOINT_URL=https://this.tm:9000
 
 # List buckets
 aws s3 ls --profile tunnelmesh --endpoint-url $AWS_ENDPOINT_URL
@@ -159,7 +230,7 @@ cfg, _ := config.LoadDefaultConfig(context.TODO(),
 )
 
 client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-    o.BaseEndpoint = aws.String("https://coord.tunnelmesh:9000")
+    o.BaseEndpoint = aws.String("https://this.tm:9000")
     o.UsePathStyle = true
 })
 ```
@@ -170,7 +241,7 @@ client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 import boto3
 
 s3 = boto3.client('s3',
-    endpoint_url='https://coord.tunnelmesh:9000',
+    endpoint_url='https://this.tm:9000',
     aws_access_key_id='ACCESS_KEY',
     aws_secret_access_key='SECRET_KEY',
 )
@@ -181,7 +252,7 @@ response = s3.list_buckets()
 
 ## Storage Quotas
 
-When `max_size_gb` is configured, the service enforces storage limits:
+When `max_size` is configured, the service enforces storage limits:
 
 - Object uploads are rejected if quota would be exceeded
 - Quota is tracked per-bucket and total
