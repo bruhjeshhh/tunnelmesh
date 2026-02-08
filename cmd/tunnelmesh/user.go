@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -100,6 +101,17 @@ Examples:
 	registerCmd.Flags().String("server", "", "Server URL to register with (bypasses context)")
 	userCmd.AddCommand(registerCmd)
 
+	// Rename subcommand
+	renameCmd := &cobra.Command{
+		Use:   "rename <name>",
+		Short: "Change your display name",
+		Long:  `Update your display name locally and re-register with the mesh to sync it.`,
+		Args:  cobra.ExactArgs(1),
+		RunE:  runUserRename,
+	}
+	renameCmd.Flags().String("server", "", "Server URL to register with (bypasses context)")
+	userCmd.AddCommand(renameCmd)
+
 	return userCmd
 }
 
@@ -119,6 +131,13 @@ func runUserSetup(cmd *cobra.Command, args []string) error {
 		if response != "y" && response != "yes" {
 			fmt.Println("Cancelled.")
 			return nil
+		}
+	}
+
+	// Use OS username if not provided via flag
+	if userName == "" {
+		if u, err := user.Current(); err == nil {
+			userName = u.Username
 		}
 	}
 
@@ -155,6 +174,38 @@ func runUserSetup(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runUserRename(cmd *cobra.Command, args []string) error {
+	newName := args[0]
+
+	// Load identity
+	identityPath, err := defaultIdentityPath()
+	if err != nil {
+		return fmt.Errorf("get identity path: %w", err)
+	}
+
+	identity, err := auth.LoadUserIdentity(identityPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("no identity found. Run 'tunnelmesh user setup' first")
+	}
+	if err != nil {
+		return fmt.Errorf("load identity: %w", err)
+	}
+
+	oldName := identity.User.Name
+	identity.User.Name = newName
+
+	// Save updated identity
+	if err := identity.Save(identityPath); err != nil {
+		return fmt.Errorf("save identity: %w", err)
+	}
+
+	fmt.Printf("Renamed: %s -> %s\n", oldName, newName)
+	fmt.Println()
+	fmt.Println("Run 'tunnelmesh user register' to sync with the mesh.")
+
+	return nil
+}
+
 func runUserRecover(cmd *cobra.Command, args []string) error {
 	identityPath, err := defaultIdentityPath()
 	if err != nil {
@@ -186,6 +237,16 @@ func runUserRecover(cmd *cobra.Command, args []string) error {
 	// Validate mnemonic
 	if err := auth.ValidateMnemonic(mnemonic); err != nil {
 		return fmt.Errorf("invalid recovery phrase: %w", err)
+	}
+
+	// Prompt for name if not provided via flag
+	if userName == "" {
+		fmt.Print("Enter your display name: ")
+		name, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read name: %w", err)
+		}
+		userName = strings.TrimSpace(name)
 	}
 
 	// Create identity
@@ -270,9 +331,42 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 
 	identity, err := auth.LoadUserIdentity(identityPath)
 	if os.IsNotExist(err) {
-		return fmt.Errorf("no identity found. Run 'tunnelmesh user setup' first")
-	}
-	if err != nil {
+		// No identity exists - run setup first
+		fmt.Println("No user identity found. Setting up...")
+		fmt.Println()
+
+		// Use OS username as display name
+		var userName string
+		if u, err := user.Current(); err == nil {
+			userName = u.Username
+		}
+
+		// Generate mnemonic
+		mnemonic, err := auth.GenerateMnemonic()
+		if err != nil {
+			return fmt.Errorf("generate mnemonic: %w", err)
+		}
+
+		// Create identity
+		identity, err = auth.NewUserIdentity(mnemonic, userName)
+		if err != nil {
+			return fmt.Errorf("create identity: %w", err)
+		}
+
+		// Save identity
+		if err := identity.Save(identityPath); err != nil {
+			return fmt.Errorf("save identity: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Println("Identity created successfully!")
+		fmt.Printf("User ID: %s\n", identity.User.ID)
+		fmt.Println()
+		fmt.Println("IMPORTANT: Save your recovery phrase in a safe place:")
+		fmt.Println()
+		fmt.Printf("  %s\n", mnemonic)
+		fmt.Println()
+	} else if err != nil {
 		return fmt.Errorf("load identity: %w", err)
 	}
 
@@ -402,12 +496,17 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save registration: %w", err)
 	}
 
-	// Update context with registration info (if using a context)
-	if activeCtx != nil {
-		store, _ := context.Load()
-		activeCtx.UserID = regResp.UserID
-		activeCtx.RegistrationPath = regPath
-		store.Add(*activeCtx)
+	// Update context with registration info
+	// Even with --server flag, update active context if one exists
+	store, _ := context.Load()
+	ctxToUpdate := activeCtx
+	if ctxToUpdate == nil {
+		ctxToUpdate = store.GetActive()
+	}
+	if ctxToUpdate != nil {
+		ctxToUpdate.UserID = regResp.UserID
+		ctxToUpdate.RegistrationPath = regPath
+		store.Add(*ctxToUpdate)
 		if err := store.Save(); err != nil {
 			fmt.Printf("Warning: failed to update context store: %v\n", err)
 		}
