@@ -60,7 +60,7 @@ type Peer struct {
 	PCPMapped         bool         `json:"pcp_mapped,omitempty"`          // Whether peer has PCP/NAT-PMP port mapping
 	Location          *GeoLocation `json:"location,omitempty"`            // Geographic location
 	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Can act as exit node for other peers
-	ExitNode          string       `json:"exit_node,omitempty"`           // Name of peer used as exit node
+	ExitPeer          string       `json:"exit_node,omitempty"`           // Name of peer used as exit node
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
@@ -75,7 +75,7 @@ type RegisterRequest struct {
 	Version           string       `json:"version,omitempty"`             // Application version
 	Location          *GeoLocation `json:"location,omitempty"`            // Geographic location (manual config)
 	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Allow this node to act as exit node
-	ExitNode          string       `json:"exit_node,omitempty"`           // Name of peer to use as exit node
+	ExitPeer          string       `json:"exit_node,omitempty"`           // Name of peer to use as exit node
 	Aliases           []string     `json:"aliases,omitempty"`             // Custom DNS aliases for this peer
 }
 
@@ -90,8 +90,8 @@ type RegisterResponse struct {
 	CoordMeshIP   string `json:"coord_mesh_ip,omitempty"`  // Coordinator's mesh IP for "this.tunnelmesh" resolution
 	ServerVersion string `json:"server_version,omitempty"` // Server version for compatibility check
 	PeerName      string `json:"peer_name,omitempty"`      // Assigned peer name (may differ from request if renamed)
-	UserID        string `json:"user_id,omitempty"`        // Derived user ID for RBAC (SHA256(pubkey)[:8] hex)
-	IsFirstUser   bool   `json:"is_first_user,omitempty"`  // True if this is the first user (becomes admin)
+	PeerID        string `json:"peer_id,omitempty"`        // Derived peer ID for RBAC (SHA256(pubkey)[:8] hex)
+	IsFirstPeer   bool   `json:"is_first_peer,omitempty"`  // True if this is the first peer (becomes admin)
 }
 
 // PeerStats contains traffic statistics reported by peers.

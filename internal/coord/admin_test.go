@@ -147,7 +147,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	assert.Equal(t, "United Kingdom", overview.Peers[0].Location.Country)
 }
 
-func TestAdminOverview_ExitNodeInfo(t *testing.T) {
+func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:    ":0",
 		AuthToken: "test-token",
@@ -201,12 +201,12 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 
 	// Verify exit node info
 	assert.True(t, exitNodeInfo.AllowsExitTraffic, "exit-node should allow exit traffic")
-	assert.Equal(t, "", exitNodeInfo.ExitNode, "exit-node should not have an exit node")
+	assert.Equal(t, "", exitNodeInfo.ExitPeer, "exit-node should not have an exit node")
 	assert.Contains(t, exitNodeInfo.ExitClients, "client1", "exit-node should have client1 as exit client")
 
 	// Verify client info
 	assert.False(t, clientInfo.AllowsExitTraffic, "client1 should not allow exit traffic")
-	assert.Equal(t, "exit-node", clientInfo.ExitNode, "client1 should use exit-node")
+	assert.Equal(t, "exit-node", clientInfo.ExitPeer, "client1 should use exit-node")
 	assert.Empty(t, clientInfo.ExitClients, "client1 should not have exit clients")
 }
 
@@ -789,12 +789,12 @@ func makeTestAdmin(srv *Server) {
 	// Bind to both for consistent behavior
 	srv.s3Authorizer.Bindings.Add(&auth.RoleBinding{
 		Name:     "test-admin-binding-empty",
-		UserID:   "",
+		PeerID:   "",
 		RoleName: auth.RoleAdmin,
 	})
 	srv.s3Authorizer.Bindings.Add(&auth.RoleBinding{
 		Name:     "test-admin-binding-guest",
-		UserID:   "guest",
+		PeerID:   "guest",
 		RoleName: auth.RoleAdmin,
 	})
 }
@@ -1013,7 +1013,7 @@ func TestUserPermissions(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	var resp struct {
-		UserID  string   `json:"user_id"`
+		PeerID  string   `json:"peer_id"`
 		IsAdmin bool     `json:"is_admin"`
 		Panels  []string `json:"panels"`
 	}
@@ -1021,7 +1021,7 @@ func TestUserPermissions(t *testing.T) {
 	require.NoError(t, err)
 
 	// Guest user should not be admin
-	assert.Equal(t, "guest", resp.UserID)
+	assert.Equal(t, "guest", resp.PeerID)
 	assert.False(t, resp.IsAdmin)
 }
 
@@ -1036,7 +1036,7 @@ func TestUserPermissions_Admin(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	var resp struct {
-		UserID  string   `json:"user_id"`
+		PeerID  string   `json:"peer_id"`
 		IsAdmin bool     `json:"is_admin"`
 		Panels  []string `json:"panels"`
 	}
@@ -1044,7 +1044,7 @@ func TestUserPermissions_Admin(t *testing.T) {
 	require.NoError(t, err)
 
 	// makeTestAdmin grants admin to empty user, which becomes "guest"
-	assert.Equal(t, "guest", resp.UserID)
+	assert.Equal(t, "guest", resp.PeerID)
 	assert.True(t, resp.IsAdmin)
 	assert.GreaterOrEqual(t, len(resp.Panels), 10) // Admin gets all panels
 }
