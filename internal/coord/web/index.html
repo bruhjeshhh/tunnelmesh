@@ -14,6 +14,7 @@
     <script src="js/lib/utils.js"></script>
     <script src="js/lib/format.js"></script>
     <script src="js/lib/events.js"></script>
+    <script src="js/lib/refresh.js"></script>
     <script src="js/lib/api.js"></script>
     <script src="js/lib/pagination.js"></script>
     <script src="js/lib/table.js"></script>
@@ -45,272 +46,17 @@
 
     <nav id="main-tabs">
         <div class="tab-container">
-            <button class="tab active" data-tab="mesh">Mesh</button>
+            <button class="tab active" data-tab="app">App</button>
             <span class="tab-separator">|</span>
             <button class="tab" data-tab="data">Data</button>
+            <span class="tab-separator">|</span>
+            <button class="tab" data-tab="mesh">Mesh</button>
         </div>
     </nav>
 
-    <!-- Mesh Tab Content -->
-    <div id="mesh-tab" class="tab-content active">
-
-    <section id="alerts-section" style="display: none;">
-        <div class="alert-tiles">
-            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
-                <div class="alert-content">
-                    <span class="alert-count" id="alert-count-warning">0</span>
-                    <span class="alert-label">Warning</span>
-                </div>
-            </a>
-            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts">
-                <div class="alert-content">
-                    <span class="alert-count" id="alert-count-critical">0</span>
-                    <span class="alert-label">Critical</span>
-                </div>
-            </a>
-            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts">
-                <div class="alert-content">
-                    <span class="alert-count" id="alert-count-page">0</span>
-                    <span class="alert-label">Page</span>
-                </div>
-            </a>
-        </div>
-    </section>
-
-    <section id="visualizer-section">
-        <div class="visualizer-card">
-            <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
-                <h2>Network Topology</h2>
-            </div>
-            <div class="collapsible-content">
-                <div class="visualizer-container">
-                    <canvas id="visualizer-canvas"></canvas>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section id="map-section" style="display: none;">
-        <div class="map-card">
-            <div class="map-header section-toggle" onclick="toggleSection(this)">
-                <h2>Node Locations</h2>
-            </div>
-            <div class="collapsible-content">
-                <div id="node-map" class="map-container"></div>
-            </div>
-        </div>
-    </section>
-
-    <section id="charts-section">
-        <div class="charts-card">
-            <div class="charts-header section-toggle" onclick="toggleSection(this)">
-                <h2>Network Activity</h2>
-            </div>
-            <div class="collapsible-content">
-                <div class="charts-container">
-                    <div class="chart-wrapper" id="throughput-wrapper">
-                        <h3>Throughput</h3>
-                        <canvas id="throughput-chart"></canvas>
-                    </div>
-                    <div class="chart-wrapper" id="packets-wrapper">
-                        <h3>Packets/s</h3>
-                        <canvas id="packets-chart"></canvas>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
+    <!-- App Tab Content -->
+    <div id="app-tab" class="tab-content active">
     <main>
-        <section id="peers-section">
-            <h2 class="section-toggle" onclick="toggleSection(this)">Connected Peers</h2>
-            <div class="collapsible-content">
-                <table id="peers">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Mesh IP</th>
-                            <th>Advertised IPs</th>
-                            <th>Ports</th>
-                            <th>Status</th>
-                            <th>Latency</th>
-                            <th>Throughput</th>
-                            <th>Packets/s</th>
-                            <th>Version</th>
-                        </tr>
-                    </thead>
-                    <tbody id="peers-body"></tbody>
-                </table>
-                <div id="peers-pagination" class="show-more-container" style="display: none;">
-                    <span id="peers-show-more"><button class="show-more-link" onclick="showMorePeers()">show more (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button></span><span id="peers-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeers()">show less</button></span>
-                </div>
-                <div id="no-peers" class="empty-state" style="display: none;">
-                    No peers connected yet.
-                </div>
-            </div>
-        </section>
-
-        <section id="logs-section" class="logs-card" style="display: none;">
-            <h2 class="section-toggle" onclick="toggleSection(this)">Peer Logs</h2>
-            <div class="collapsible-content">
-                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
-                    <div id="logs-content"></div>
-                    <div id="no-logs" class="empty-state">No logs available</div>
-                </a>
-                <div id="logs-resize-handle" class="resize-handle">
-                    <div class="resize-handle-grip"></div>
-                </div>
-            </div>
-        </section>
-
-        <section id="wireguard-section" style="display: none;">
-            <div class="section-header section-toggle" onclick="toggleSection(this)">
-                <h2>WireGuard Peers</h2>
-                <button id="add-wg-client-btn" class="btn-primary" onclick="event.stopPropagation()">+ Add Peer</button>
-            </div>
-            <div class="collapsible-content">
-                <table id="wireguard-clients">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Mesh IP</th>
-                            <th>DNS Name</th>
-                            <th>Status</th>
-                            <th>Last Seen</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="wg-clients-body"></tbody>
-                </table>
-                <div id="wg-pagination" class="show-more-container" style="display: none;">
-                    <span id="wg-show-more"><button class="show-more-link" onclick="showMoreWg()">show more (<span id="wg-shown-count">0</span> / <span id="wg-total-count">0</span>)</button></span><span id="wg-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessWg()">show less</button></span>
-                </div>
-                <div id="no-wg-clients" class="empty-state" style="display: none;">
-                    No WireGuard peers yet. Add a peer to generate a QR code.
-                </div>
-            </div>
-        </section>
-
-        <section id="filter-section" style="display: none;">
-            <div class="section-header section-toggle" onclick="toggleSection(this)">
-                <h2>Internal Packet Filter</h2>
-                <button id="add-filter-rule-btn" class="btn-primary" onclick="event.stopPropagation(); openFilterModal();">+ Add Rule</button>
-            </div>
-            <div class="collapsible-content">
-                <div class="filter-peer-select">
-                    <label for="filter-peer">Peer:</label>
-                    <select id="filter-peer" onchange="onFilterPeerChange()">
-                    </select>
-                </div>
-                <div id="filter-info" style="display: none;">
-                    <p class="filter-policy">Default Policy: <strong id="filter-default-policy">--</strong></p>
-                </div>
-                <div id="filter-temp-warning" class="filter-warning" style="display: none;">
-                    ⚠ Temporary rules will be lost when the peer restarts.
-                </div>
-                <table id="filter-rules">
-                    <thead>
-                        <tr>
-                            <th>Port</th>
-                            <th>Protocol</th>
-                            <th>Action</th>
-                            <th>From Peer</th>
-                            <th>Source</th>
-                            <th>Expires</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="filter-rules-body"></tbody>
-                </table>
-                <div id="no-filter-rules" class="empty-state" style="display: none;">
-                    No filter rules configured for this peer.
-                </div>
-            </div>
-        </section>
-
-        <!-- Packet Filter Modal -->
-        <div id="filter-modal" class="modal" style="display: none;">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3>Add Filter Rule</h3>
-                    <button class="modal-close" onclick="closeFilterModal()">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label for="filter-rule-port">Port</label>
-                        <input type="number" id="filter-rule-port" min="1" max="65535" placeholder="e.g., 22, 80, 443">
-                    </div>
-                    <div class="form-group">
-                        <label for="filter-rule-protocol">Protocol</label>
-                        <select id="filter-rule-protocol">
-                            <option value="tcp">TCP</option>
-                            <option value="udp">UDP</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="filter-rule-action">Action</label>
-                        <select id="filter-rule-action">
-                            <option value="allow">Allow</option>
-                            <option value="deny">Deny</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="filter-rule-source-peer">From Peer</label>
-                        <select id="filter-rule-source-peer">
-                            <option value="">Any peer (global rule)</option>
-                        </select>
-                        <small class="form-hint">Select a specific peer to restrict this rule to traffic from that peer</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="filter-rule-dest-peer">To Peer</label>
-                        <select id="filter-rule-dest-peer">
-                            <option value="__all__">All peers</option>
-                        </select>
-                        <small class="form-hint">Send this rule to all connected peers or a specific peer</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="filter-rule-ttl">Time to Live (optional)</label>
-                        <select id="filter-rule-ttl">
-                            <option value="0">Permanent</option>
-                            <option value="3600">1 hour</option>
-                            <option value="86400">1 day</option>
-                            <option value="604800">1 week</option>
-                            <option value="2592000">30 days</option>
-                        </select>
-                        <small class="form-hint">Rule will automatically expire after the specified time</small>
-                    </div>
-                    <button class="btn-primary" onclick="addFilterRule()">Add Rule</button>
-                </div>
-            </div>
-        </div>
-
-        <section id="dns-section">
-            <h2 class="section-toggle" onclick="toggleSection(this)">DNS Records</h2>
-            <div class="collapsible-content">
-                <table id="dns">
-                    <thead>
-                        <tr>
-                            <th>Hostname</th>
-                            <th>Mesh IP</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dns-body"></tbody>
-                </table>
-                <div id="dns-pagination" class="show-more-container" style="display: none;">
-                    <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
-                </div>
-                <div id="no-dns" class="empty-state" style="display: none;">
-                    No DNS records yet.
-                </div>
-            </div>
-        </section>
-    </main>
-    </div><!-- End Mesh Tab -->
-
-    <!-- Data Tab Content -->
-    <div id="data-tab" class="tab-content">
-    <main>
-        <!-- Objects Section (GitHub-style file browser) -->
         <section id="s3-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Objects</h2>
@@ -421,7 +167,7 @@
             </div>
         </section>
 
-        <section id="shares-section">
+        <section id="shares-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Shares</h2>
                 <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
@@ -450,7 +196,277 @@
             </div>
         </section>
 
-        <section id="peers-mgmt-section">
+        <section id="docker-section" class="panel" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Docker</h2>
+                <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="docker-containers">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Ports</th>
+                            <th>Network</th>
+                            <th>Uptime</th>
+                            <th>CPU</th>
+                            <th>Memory</th>
+                            <th>Disk</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="docker-containers-body"></tbody>
+                </table>
+                <div id="no-docker-containers" class="empty-state" style="display: none;">
+                    No Docker containers found.
+                </div>
+                <div id="docker-pagination" class="show-more-container" style="display: none;">
+                    <span id="docker-show-more"><button class="show-more-link" onclick="showMoreDocker()">show more (<span id="docker-shown-count">0</span> / <span id="docker-total-count">0</span>)</button></span><span id="docker-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDocker()">show less</button></span>
+                </div>
+            </div>
+        </section>
+    </main>
+    </div><!-- End App Tab -->
+
+    <!-- Mesh Tab Content -->
+    <div id="mesh-tab" class="tab-content">
+    <main>
+    <section id="alerts-section" style="display: none;">
+        <div class="alert-tiles">
+            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-warning">0</span>
+                    <span class="alert-label">Warning</span>
+                </div>
+            </a>
+            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-critical">0</span>
+                    <span class="alert-label">Critical</span>
+                </div>
+            </a>
+            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-page">0</span>
+                    <span class="alert-label">Page</span>
+                </div>
+            </a>
+        </div>
+    </section>
+
+    <section id="visualizer-section" style="display: none;">
+        <div class="visualizer-card">
+            <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
+                <h2>Topology</h2>
+            </div>
+            <div class="collapsible-content">
+                <div class="visualizer-container">
+                    <canvas id="visualizer-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="map-section" style="display: none;">
+        <div class="map-card">
+            <div class="map-header section-toggle" onclick="toggleSection(this)">
+                <h2>Map</h2>
+            </div>
+            <div class="collapsible-content">
+                <div id="node-map" class="map-container"></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="charts-section" style="display: none;">
+        <div class="charts-card">
+            <div class="charts-header section-toggle" onclick="toggleSection(this)">
+                <h2>Charts</h2>
+            </div>
+            <div class="collapsible-content">
+                <div class="charts-container">
+                    <div class="chart-wrapper" id="throughput-wrapper">
+                        <h3>Throughput</h3>
+                        <canvas id="throughput-chart"></canvas>
+                    </div>
+                    <div class="chart-wrapper" id="packets-wrapper">
+                        <h3>Packets/s</h3>
+                        <canvas id="packets-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <main>
+        <section id="peers-section" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">Network</h2>
+            <div class="collapsible-content">
+                <table id="peers">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Mesh IP</th>
+                            <th>Status</th>
+                            <th>Latency</th>
+                            <th>Throughput</th>
+                            <th>Packets/s</th>
+                            <th>Version</th>
+                        </tr>
+                    </thead>
+                    <tbody id="peers-body"></tbody>
+                </table>
+                <div id="no-peers" class="empty-state" style="display: none;">
+                    No peers connected yet.
+                </div>
+                <div id="peers-pagination" class="show-more-container" style="display: none;">
+                    <span id="peers-show-more"><button class="show-more-link" onclick="showMorePeers()">show more (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button></span><span id="peers-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeers()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
+        <section id="logs-section" class="logs-card" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
+            <div class="collapsible-content">
+                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
+                    <div id="logs-content"></div>
+                    <div id="no-logs" class="empty-state">No logs available</div>
+                </a>
+                <div id="logs-resize-handle" class="resize-handle">
+                    <div class="resize-handle-grip"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="wireguard-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>WireGuard</h2>
+                <button id="add-wg-client-btn" class="btn-primary" onclick="event.stopPropagation()">+ Add Peer</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="wireguard-clients">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Mesh IP</th>
+                            <th>DNS Name</th>
+                            <th>Status</th>
+                            <th>Last Seen</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wg-clients-body"></tbody>
+                </table>
+                <div id="no-wg-clients" class="empty-state" style="display: none;">
+                    No WireGuard peers yet. Add a peer to generate a QR code.
+                </div>
+                <div id="wg-pagination" class="show-more-container" style="display: none;">
+                    <span id="wg-show-more"><button class="show-more-link" onclick="showMoreWg()">show more (<span id="wg-shown-count">0</span> / <span id="wg-total-count">0</span>)</button></span><span id="wg-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessWg()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
+        <section id="filter-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Filter</h2>
+                <button id="add-filter-rule-btn" class="btn-primary" onclick="event.stopPropagation(); openFilterModal();">+ Add Rule</button>
+            </div>
+            <div class="collapsible-content">
+                <div class="filter-peer-select">
+                    <label for="filter-peer">Peer:</label>
+                    <select id="filter-peer" onchange="onFilterPeerChange()">
+                    </select>
+                </div>
+                <div id="filter-info" style="display: none;">
+                    <p class="filter-policy">Default Policy: <strong id="filter-default-policy">--</strong></p>
+                </div>
+                <div id="filter-temp-warning" class="filter-warning" style="display: none;">
+                    ⚠ Temporary rules will be lost when the peer restarts.
+                </div>
+                <table id="filter-rules">
+                    <thead>
+                        <tr>
+                            <th>Port</th>
+                            <th>Protocol</th>
+                            <th>Action</th>
+                            <th>From Peer</th>
+                            <th>Source</th>
+                            <th>Expires</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="filter-rules-body"></tbody>
+                </table>
+                <div id="no-filter-rules" class="empty-state" style="display: none;">
+                    No filter rules configured for this peer.
+                </div>
+            </div>
+        </section>
+
+        <!-- Packet Filter Modal -->
+        <div id="filter-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Add Filter Rule</h3>
+                    <button class="modal-close" onclick="closeFilterModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="filter-rule-port">Port</label>
+                        <input type="number" id="filter-rule-port" min="1" max="65535" placeholder="e.g., 22, 80, 443">
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-protocol">Protocol</label>
+                        <select id="filter-rule-protocol">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-action">Action</label>
+                        <select id="filter-rule-action">
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-source-peer">From Peer</label>
+                        <select id="filter-rule-source-peer">
+                            <option value="">Any peer (global rule)</option>
+                        </select>
+                        <small class="form-hint">Select a specific peer to restrict this rule to traffic from that peer</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-dest-peer">To Peer</label>
+                        <select id="filter-rule-dest-peer">
+                            <option value="__all__">All peers</option>
+                        </select>
+                        <small class="form-hint">Send this rule to all connected peers or a specific peer</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-ttl">Time to Live (optional)</label>
+                        <select id="filter-rule-ttl">
+                            <option value="0">Permanent</option>
+                            <option value="3600">1 hour</option>
+                            <option value="86400">1 day</option>
+                            <option value="604800">1 week</option>
+                            <option value="2592000">30 days</option>
+                        </select>
+                        <small class="form-hint">Rule will automatically expire after the specified time</small>
+                    </div>
+                    <button class="btn-primary" onclick="addFilterRule()">Add Rule</button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+    </div><!-- End Mesh Tab -->
+    <!-- Data Tab Content -->
+    <div id="data-tab" class="tab-content">
+    <main>
+        <!-- Objects Section (GitHub-style file browser) -->
+        <section id="peers-mgmt-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Peers</h2>
             </div>
@@ -477,7 +493,7 @@
             </div>
         </section>
 
-        <section id="groups-section">
+        <section id="groups-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Groups</h2>
                 <button id="add-group-btn" class="btn-primary" onclick="event.stopPropagation(); openGroupModal();">+ Add Group</button>
@@ -503,9 +519,9 @@
             </div>
         </section>
 
-        <section id="bindings-section">
+        <section id="bindings-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
-                <h2>Role Bindings</h2>
+                <h2>Bindings</h2>
                 <button id="add-binding-btn" class="btn-primary" onclick="event.stopPropagation(); openBindingModal();">+ Add Binding</button>
             </div>
             <div class="collapsible-content">
@@ -528,6 +544,27 @@
                 </div>
                 <div id="bindings-pagination" class="show-more-container" style="display: none;">
                     <span id="bindings-show-more"><button class="show-more-link" onclick="showMoreBindings()">show more (<span id="bindings-shown-count">0</span> / <span id="bindings-total-count">0</span>)</button></span><span id="bindings-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessBindings()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
+        <section id="dns-section" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">DNS</h2>
+            <div class="collapsible-content">
+                <table id="dns">
+                    <thead>
+                        <tr>
+                            <th>Hostname</th>
+                            <th>Mesh IP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dns-body"></tbody>
+                </table>
+                <div id="dns-pagination" class="show-more-container" style="display: none;">
+                    <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
+                </div>
+                <div id="no-dns" class="empty-state" style="display: none;">
+                    No DNS records yet.
                 </div>
             </div>
         </section>
@@ -710,6 +747,7 @@
         </a>
     </footer>
 
+    <script src="js/docker.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

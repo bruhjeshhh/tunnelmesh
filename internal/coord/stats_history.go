@@ -90,14 +90,17 @@ func (rb *RingBuffer) Count() int {
 
 // StatsHistory manages per-peer stats history with thread-safe access.
 type StatsHistory struct {
-	mu    sync.RWMutex
-	peers map[string]*RingBuffer
+	mu              sync.RWMutex
+	peers           map[string]*RingBuffer
+	coordinatorName string // Coordinator's peer name for organizing S3 stats
 }
 
 // NewStatsHistory creates a new stats history store.
-func NewStatsHistory() *StatsHistory {
+// coordinatorName is used to organize stats in S3 as stats/{coordinator}/{peer}.network.json
+func NewStatsHistory(coordinatorName string) *StatsHistory {
 	return &StatsHistory{
-		peers: make(map[string]*RingBuffer),
+		peers:           make(map[string]*RingBuffer),
+		coordinatorName: coordinatorName,
 	}
 }
 
@@ -158,38 +161,48 @@ type persistedHistory struct {
 }
 
 // Save persists the stats history to S3 or a JSON file.
-// If s3Store is provided, saves to S3; otherwise saves to local file.
+// If s3Store is provided, saves each peer to stats/{coordinator}/{peer_name}.network.json.
+// Otherwise saves aggregated data to local file (fallback for non-S3 setups).
 func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 
+	// Save to S3 - one file per peer as stats/{coordinator}/{peer_name}.network.json
+	if s3Store != nil {
+		for peerName, rb := range sh.peers {
+			points := rb.GetLast(rb.Count())
+			if len(points) == 0 {
+				continue
+			}
+
+			peerHistory := map[string]interface{}{
+				"peer_name": peerName,
+				"history":   points,
+			}
+
+			// Use coordinator subfolder to organize stats by which coordinator collected them
+			peerPath := "stats/" + sh.coordinatorName + "/" + peerName + ".network.json"
+			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
+				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
+			} else {
+				log.Debug().Str("peer", peerName).Str("path", peerPath).Int("points", len(points)).Msg("saved peer network stats to S3")
+			}
+		}
+		return nil
+	}
+
+	// Fallback to file-based persistence (aggregated)
 	data := persistedHistory{
 		Peers: make(map[string][]StatsDataPoint),
 	}
 
 	for peerID, rb := range sh.peers {
-		// Get all data points, oldest first (for proper chronological order)
 		points := rb.GetLast(rb.Count())
 		if len(points) > 0 {
-			// Reverse to get oldest first
-			reversed := make([]StatsDataPoint, len(points))
-			for i, dp := range points {
-				reversed[len(points)-1-i] = dp
-			}
-			data.Peers[peerID] = reversed
+			data.Peers[peerID] = points
 		}
 	}
 
-	// Save to S3 if available, otherwise use file
-	if s3Store != nil {
-		if err := s3Store.SaveStatsHistory(data); err != nil {
-			return err
-		}
-		log.Debug().Msg("saved stats history to S3")
-		return nil
-	}
-
-	// Fallback to file-based persistence
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -251,7 +264,11 @@ func (sh *StatsHistory) applyLoadedData(data *persistedHistory) {
 	cutoff := time.Now().Add(-3 * 24 * time.Hour) // Only load last 3 days
 	for peerID, points := range data.Peers {
 		rb := NewRingBuffer(MaxHistoryPoints)
-		for _, dp := range points {
+
+		// Data is saved newest-first, but ring buffer needs oldest-first for Push()
+		// to maintain correct temporal order. Reverse before pushing.
+		for i := len(points) - 1; i >= 0; i-- {
+			dp := points[i]
 			// Skip data older than 3 days
 			if dp.Timestamp.Before(cutoff) {
 				continue

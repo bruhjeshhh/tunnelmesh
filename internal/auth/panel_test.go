@@ -14,7 +14,7 @@ func TestPanelRegistry_BuiltinPanels(t *testing.T) {
 
 	// Should have all built-in panels
 	panels := registry.List()
-	assert.Len(t, panels, 13) // visualizer, map, charts, peers, logs, wireguard, filter, dns, s3, shares, users, groups, bindings
+	assert.Len(t, panels, 14) // visualizer, map, charts, peers, logs, wireguard, filter, dns, s3, shares, users, groups, bindings, docker
 
 	// Check specific panels exist
 	assert.NotNil(t, registry.Get(PanelVisualizer))
@@ -35,14 +35,18 @@ func TestPanelRegistry_BuiltinPanelsAreMarked(t *testing.T) {
 func TestPanelRegistry_ListByTab(t *testing.T) {
 	registry := NewPanelRegistry()
 
-	meshPanels := registry.ListByTab(PanelTabMesh)
+	appPanels := registry.ListByTab(PanelTabApp)
 	dataPanels := registry.ListByTab(PanelTabData)
+	meshPanels := registry.ListByTab(PanelTabMesh)
 
-	// Mesh tab should have: visualizer, map, charts, peers, logs, wireguard, filter, dns
-	assert.Len(t, meshPanels, 8)
+	// App tab should have: s3, shares, docker
+	assert.Len(t, appPanels, 3)
 
-	// Data tab should have: s3, shares, users, groups, bindings
-	assert.Len(t, dataPanels, 5)
+	// Data tab should have: peer-mgmt, groups, bindings, dns
+	assert.Len(t, dataPanels, 4)
+
+	// Mesh tab should have: visualizer, map, charts, peers, logs, wireguard, filter
+	assert.Len(t, meshPanels, 7)
 }
 
 func TestPanelRegistry_RegisterExternal(t *testing.T) {
@@ -218,7 +222,7 @@ func TestAuthorizer_GetAccessiblePanels_Admin(t *testing.T) {
 	auth.Bindings.Add(NewRoleBinding("alice", RoleAdmin, ""))
 
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 13) // All built-in panels
+	assert.Len(t, panels, 14) // All built-in panels
 }
 
 func TestAuthorizer_GetAccessiblePanels_DirectBindings(t *testing.T) {
@@ -281,7 +285,7 @@ func TestAuthorizer_GetAccessiblePanels_AdminViaGroup(t *testing.T) {
 
 	// admins should get all panels via IsAdmin check
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 13) // All panels
+	assert.Len(t, panels, 14) // All panels
 }
 
 // --- Default panel tests ---

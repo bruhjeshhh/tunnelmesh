@@ -548,8 +548,6 @@ function renderPeersTable() {
         <tr>
             <td><strong>${peerNameEscaped}</strong>${alertBadge}${exitBadge}${exitVia}</td>
             <td><code>${peer.mesh_ip}</code>${tunnelSuffix}</td>
-            <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
-            <td class="ports-cell">${formatPorts(peer)}</td>
             <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
             <td>${formatLatency(peer.coordinator_rtt_ms)}</td>
             <td class="sparkline-cell">
@@ -1133,41 +1131,6 @@ function rebuildChartDatasets() {
         state.charts.packets.data.datasets = packetsDatasets;
         state.charts.packets.update();
     }
-}
-
-function formatAdvertisedIPs(peer) {
-    const parts = [];
-
-    if (peer.public_ips && peer.public_ips.length > 0) {
-        const natBadge = peer.behind_nat ? '<span class="nat-badge">NAT</span>' : '';
-        parts.push(
-            `<span class="ip-label">Public:</span> ${peer.public_ips.map((ip) => `<code class="obscured-ip">${ip}</code>`).join(', ')}${natBadge}`,
-        );
-    }
-    if (peer.private_ips && peer.private_ips.length > 0) {
-        parts.push(
-            `<span class="ip-label">Private:</span> ${peer.private_ips.map((ip) => `<code>${ip}</code>`).join(', ')}`,
-        );
-    }
-    // Show IPv6 external address if available (visually obscured)
-    if (peer.udp_external_addr6) {
-        // Extract just the IP from [ip]:port format
-        const ipv6Match = peer.udp_external_addr6.match(/^\[([^\]]+)\]/);
-        const ipv6 = ipv6Match ? ipv6Match[1] : peer.udp_external_addr6;
-        parts.push(`<span class="ip-label">IPv6:</span> <code class="obscured-ip">${ipv6}</code>`);
-    }
-
-    return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
-}
-
-function formatPorts(peer) {
-    const sshPort = peer.ssh_port || 2222;
-    const udpPort = peer.udp_port || 0;
-    const parts = [`<span class="port-label">SSH:</span> <code>${sshPort}</code>`];
-    if (udpPort > 0) {
-        parts.push(`<span class="port-label">UDP:</span> <code>${udpPort}</code>`);
-    }
-    return parts.join('<br>');
 }
 
 // WireGuard Client Management
@@ -2089,11 +2052,11 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 70,
         },
-        { id: 'dns', sectionId: 'dns-section', tab: 'mesh', title: 'DNS Records', category: 'network', sortOrder: 80 },
+        { id: 'dns', sectionId: 'dns-section', tab: 'data', title: 'DNS Records', category: 'data', sortOrder: 80 },
         {
             id: 's3',
             sectionId: 's3-section',
-            tab: 'data',
+            tab: 'app',
             title: 'Object Viewer',
             category: 'storage',
             resizable: true,
@@ -2102,13 +2065,20 @@ function registerBuiltinPanels() {
         {
             id: 'shares',
             sectionId: 'shares-section',
-            tab: 'data',
+            tab: 'app',
             title: 'Shares',
             category: 'storage',
             hasActionButton: true,
             sortOrder: 20,
         },
-        { id: 'peer-mgmt', sectionId: 'peers-mgmt-section', tab: 'data', title: 'Peers', category: 'admin', sortOrder: 30 },
+        {
+            id: 'peer-mgmt',
+            sectionId: 'peers-mgmt-section',
+            tab: 'data',
+            title: 'Peers',
+            category: 'admin',
+            sortOrder: 30,
+        },
         {
             id: 'groups',
             sectionId: 'groups-section',
@@ -2126,6 +2096,15 @@ function registerBuiltinPanels() {
             category: 'admin',
             hasActionButton: true,
             sortOrder: 50,
+        },
+        {
+            id: 'docker',
+            sectionId: 'docker-section',
+            tab: 'app',
+            title: 'Docker Containers',
+            category: 'admin',
+            hasActionButton: true,
+            sortOrder: 30,
         },
     ];
 
@@ -2171,6 +2150,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize tab navigation
     initTabs();
+
+    // Initialize refresh coordinator
+    initRefreshCoordinator();
 
     // Initialize visualizer
     initVisualizer();
@@ -2464,7 +2446,7 @@ async function createGroup() {
         if (resp.ok) {
             showToast(`Group "${name}" created`, 'success');
             closeGroupModal();
-            fetchGroups();
+            TM.refresh.trigger('groups');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create group', 'error');
@@ -2482,7 +2464,7 @@ async function deleteGroup(name) {
         const resp = await fetch(`api/groups/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast(`Group "${name}" deleted`, 'success');
-            fetchGroups();
+            TM.refresh.trigger('groups');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete group', 'error');
@@ -2595,11 +2577,8 @@ async function createShare() {
         if (resp.ok) {
             showToast(`File share "${name}" created`, 'success');
             closeShareModal();
-            fetchShares();
-            fetchBindings(); // Refresh bindings since share creation adds admin binding
-            if (typeof TM !== 'undefined' && TM.s3explorer) {
-                TM.s3explorer.refresh(); // Refresh S3 explorer to show new bucket
-            }
+            // Trigger refresh for shares panel (will cascade to bindings and S3)
+            TM.refresh.trigger('shares');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create share', 'error');
@@ -2617,11 +2596,8 @@ async function deleteShare(name) {
         const resp = await fetch(`api/shares/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast(`File share "${name}" deleted`, 'success');
-            fetchShares();
-            fetchBindings(); // Refresh bindings since share deletion removes bindings
-            if (typeof TM !== 'undefined' && TM.s3explorer) {
-                TM.s3explorer.refresh(); // Refresh S3 explorer to remove bucket
-            }
+            // Trigger refresh for shares panel (will cascade to bindings and S3)
+            TM.refresh.trigger('shares');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete share', 'error');
@@ -2633,6 +2609,54 @@ async function deleteShare(name) {
 window.deleteShare = deleteShare;
 
 // =====================
+// Refresh Coordinator
+// =====================
+
+function initRefreshCoordinator() {
+    if (!TM.refresh) {
+        console.warn('TM.refresh not loaded, panel refresh coordination disabled');
+        return;
+    }
+
+    // Register all panel refresh functions
+    TM.refresh.register('peers', () => fetchData(false));
+    TM.refresh.register('wg-clients', fetchWGClients);
+    TM.refresh.register('logs', fetchLogs);
+    TM.refresh.register('alerts', fetchAlerts);
+    TM.refresh.register('filter', loadFilterRules);
+    TM.refresh.register('peers-mgmt', fetchPeersMgmt);
+    TM.refresh.register('groups', fetchGroups);
+    TM.refresh.register('shares', fetchShares);
+    TM.refresh.register('bindings', fetchBindings);
+    TM.refresh.register('docker', loadDockerContainers);
+
+    // Register S3 explorer refresh (init if needed, then refresh)
+    // Use promise chain instead of async/await to avoid blocking
+    TM.refresh.register('s3', () => {
+        initS3Explorer()
+            .then(() => {
+                if (TM.s3explorer) {
+                    TM.s3explorer.refresh();
+                }
+            })
+            .catch((err) => {
+                console.error('Failed to initialize S3 explorer:', err);
+            });
+    });
+
+    // Define dependencies: when X changes, also refresh Y
+    // When shares change, refresh bindings (share creation/deletion modifies bindings)
+    // and S3 explorer (shares create S3 buckets)
+    TM.refresh.addDependency('shares', ['bindings', 's3']);
+
+    // When bindings change, refresh S3 explorer (permissions might have changed)
+    TM.refresh.addDependency('bindings', ['s3']);
+
+    // When peers-mgmt (users) changes, refresh groups and bindings (user changes affect group/role assignments)
+    // Note: Removed groups → peers-mgmt to avoid circular dependency
+    TM.refresh.addDependency('peers-mgmt', ['groups', 'bindings']);
+}
+
 // Tab Navigation
 // =====================
 
@@ -2666,11 +2690,13 @@ function switchTab(tabName) {
             }
         });
     } else if (tabName === 'data') {
-        fetchPeersMgmt();
-        fetchGroups();
-        fetchShares();
-        fetchBindings();
-        initS3Explorer();
+        // Refresh all data panels without cascading (we're already listing all of them)
+        TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+    } else if (tabName === 'app') {
+        // Load Docker panel lazily when app tab is accessed
+        if (TM.refresh) {
+            TM.refresh.trigger('docker', { cascade: false });
+        }
     }
 }
 window.switchTab = switchTab;
@@ -2803,7 +2829,7 @@ async function createBinding() {
         if (resp.ok) {
             showToast('Role binding created', 'success');
             closeBindingModal();
-            fetchBindings();
+            TM.refresh.trigger('bindings');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create binding', 'error');
@@ -2821,7 +2847,7 @@ async function deleteBinding(name) {
         const resp = await fetch(`api/bindings/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast('Role binding deleted', 'success');
-            fetchBindings();
+            TM.refresh.trigger('bindings');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete binding', 'error');

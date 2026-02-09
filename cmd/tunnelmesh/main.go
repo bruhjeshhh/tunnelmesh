@@ -32,6 +32,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/control"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
+	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
@@ -415,13 +416,39 @@ func runServeFromService(ctx context.Context, configPath string) error {
 			Msg("joining mesh as client")
 
 		// Callback to start admin HTTPS server after joining mesh
-		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter) {
 			// Initialize coordinator metrics on the peer metrics registry
 			// so they're exposed on the /metrics endpoint
 			srv.SetMetricsRegistry(metrics.Registry)
 
 			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
 			srv.SetCoordMeshIP(meshIP)
+
+			// Initialize Docker manager for coordinator (for API endpoints)
+			// Auto-detect Docker socket if not configured
+			log.Info().Msg("Checking for Docker socket for coordinator")
+			if cfg.JoinMesh.Docker.Socket == "" {
+				if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+					cfg.JoinMesh.Docker.Socket = "unix:///var/run/docker.sock"
+					log.Info().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+				} else {
+					log.Info().Err(err).Msg("Docker socket not found at /var/run/docker.sock")
+				}
+			} else {
+				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
+			}
+			if cfg.JoinMesh.Docker.Socket != "" {
+				// Create Docker manager with systemStore for stats persistence
+				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
+				if err := dockerMgr.Start(ctx); err != nil {
+					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
+				} else {
+					// Set packet filter for automatic port forwarding
+					dockerMgr.SetFilter(filter)
+					srv.SetDockerManager(dockerMgr)
+					log.Info().Msg("Coordinator Docker manager started with packet filter")
+				}
+			}
 
 			if cfg.Admin.Enabled && tlsMgr != nil {
 				// Load TLS cert for admin HTTPS
@@ -626,13 +653,39 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			Msg("joining mesh as client")
 
 		// Callback to start admin HTTPS server after joining mesh
-		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter) {
 			// Initialize coordinator metrics on the peer metrics registry
 			// so they're exposed on the /metrics endpoint
 			srv.SetMetricsRegistry(metrics.Registry)
 
 			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
 			srv.SetCoordMeshIP(meshIP)
+
+			// Initialize Docker manager for coordinator (for API endpoints)
+			// Auto-detect Docker socket if not configured
+			log.Info().Msg("Checking for Docker socket for coordinator")
+			if cfg.JoinMesh.Docker.Socket == "" {
+				if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+					cfg.JoinMesh.Docker.Socket = "unix:///var/run/docker.sock"
+					log.Info().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+				} else {
+					log.Info().Err(err).Msg("Docker socket not found at /var/run/docker.sock")
+				}
+			} else {
+				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
+			}
+			if cfg.JoinMesh.Docker.Socket != "" {
+				// Create Docker manager with systemStore for stats persistence
+				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
+				if err := dockerMgr.Start(ctx); err != nil {
+					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
+				} else {
+					// Set packet filter for automatic port forwarding
+					dockerMgr.SetFilter(filter)
+					srv.SetDockerManager(dockerMgr)
+					log.Info().Msg("Coordinator Docker manager started with packet filter")
+				}
+			}
 
 			if cfg.Admin.Enabled && tlsMgr != nil {
 				// Load TLS cert for admin HTTPS
@@ -859,8 +912,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 }
 
 // OnJoinedFunc is called after successfully joining the mesh.
-// It receives the mesh IP and TLS manager (if TLS cert was provided).
-type OnJoinedFunc func(meshIP string, tlsMgr *peer.TLSManager)
+// It receives the mesh IP, TLS manager (if TLS cert was provided), and packet filter.
+type OnJoinedFunc func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter)
 
 func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	return runJoinWithConfigAndCallback(ctx, cfg, nil)
@@ -1039,12 +1092,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			Msg("TUN device created")
 	}
 
-	// Notify callback if provided (used by server to start admin HTTPS on mesh IP)
-	// Must be after TUN device creation so the mesh IP is assigned to an interface
-	if onJoined != nil {
-		onJoined(resp.MeshIP, tlsMgr)
-	}
-
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
 	identity.Location = location // Set location for heartbeat reporting
@@ -1082,6 +1129,12 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 	forwarder.SetFilter(filter)
 
+	// Notify callback if provided (used by server to start admin HTTPS and configure Docker)
+	// Must be after TUN device and packet filter creation
+	if onJoined != nil {
+		onJoined(resp.MeshIP, tlsMgr, filter)
+	}
+
 	// Start control socket for CLI commands
 	socketPath := cfg.ControlSocket
 	if socketPath == "" {
@@ -1092,6 +1145,24 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		log.Warn().Err(err).Msg("failed to start control socket, CLI commands may not work")
 	} else {
 		defer func() { _ = ctrlServer.Stop() }()
+	}
+
+	// Initialize Docker manager for automatic port forwarding
+	// Auto-detect Docker socket if not configured
+	if cfg.Docker.Socket == "" {
+		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+			cfg.Docker.Socket = "unix:///var/run/docker.sock"
+			log.Debug().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+		}
+	}
+	if cfg.Docker.Socket != "" {
+		dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
+		if err := dockerMgr.Start(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to start Docker manager")
+		} else {
+			defer func() { _ = dockerMgr.Stop() }()
+			log.Info().Msg("Docker manager started")
+		}
 	}
 
 	// Configure exit node settings

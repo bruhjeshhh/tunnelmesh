@@ -26,6 +26,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
+	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
@@ -98,6 +99,8 @@ type Server struct {
 	filter            *routing.PacketFilter // Global packet filter
 	filterSavePending atomic.Bool           // Debounce flag for async filter saves
 	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	// Docker orchestration (when coordinator joins mesh)
+	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
 	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
 }
@@ -196,6 +199,12 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("create IP allocator: %w", err)
 	}
 
+	// Determine coordinator name for stats organization
+	coordinatorName := "coordinator"
+	if cfg.JoinMesh != nil && cfg.JoinMesh.Name != "" {
+		coordinatorName = cfg.JoinMesh.Name
+	}
+
 	srv := &Server{
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
@@ -203,7 +212,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		ipAlloc:      ipAlloc,
 		dnsCache:     make(map[string]string),
 		aliasOwner:   make(map[string]string),
-		statsHistory: NewStatsHistory(),
+		statsHistory: NewStatsHistory(coordinatorName),
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
@@ -543,6 +552,15 @@ func (s *Server) Shutdown() error {
 	if err := s.SaveFilterRules(); err != nil {
 		log.Error().Err(err).Msg("failed to save filter rules")
 		errs = append(errs, fmt.Errorf("save filter rules: %w", err))
+	}
+
+	// Stop Docker manager if running
+	if s.dockerMgr != nil {
+		log.Info().Msg("stopping Docker manager")
+		if err := s.dockerMgr.Stop(); err != nil {
+			log.Error().Err(err).Msg("failed to stop Docker manager")
+			errs = append(errs, fmt.Errorf("stop docker manager: %w", err))
+		}
 	}
 
 	if len(errs) > 0 {
@@ -1689,6 +1707,19 @@ func (s *Server) SetCoordMeshIP(ip string) {
 func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	s.coordMetrics = InitCoordMetrics(registry)
 	log.Debug().Msg("coordinator metrics initialized")
+}
+
+// SetDockerManager sets the Docker manager for the coordinator.
+// This is called when the coordinator joins the mesh and has Docker enabled.
+func (s *Server) SetDockerManager(mgr *docker.Manager) {
+	s.dockerMgr = mgr
+	log.Info().Msg("Docker manager initialized on coordinator")
+}
+
+// GetSystemStore returns the S3 system store for the coordinator.
+// Returns nil if S3 is not enabled.
+func (s *Server) GetSystemStore() *s3.SystemStore {
+	return s.s3SystemStore
 }
 
 // StartAdminServer starts the admin interface on the specified address.
