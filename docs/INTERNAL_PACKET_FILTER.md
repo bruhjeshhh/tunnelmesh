@@ -1,6 +1,8 @@
 # Internal Packet Filter
 
-TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on each peer within the mesh network. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local services.
+TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on each peer within the
+mesh network. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local
+services.
 
 ## Overview
 
@@ -43,11 +45,13 @@ Conflict Resolution: MOST RESTRICTIVE WINS
 
 ## Service Ports
 
-When a peer connects to the coordinator, the coordinator automatically pushes service port rules. These allow access to essential coordinator services:
+When a peer connects to the coordinator, the coordinator automatically pushes service port rules. These allow access to
+essential coordinator services:
 
 - **Admin dashboard port** (typically 443 or 8080)
 
 Service rules:
+
 - Are shown in the admin UI with source "service"
 - Cannot be removed via CLI or admin panel
 - Persist as long as the peer is connected
@@ -107,7 +111,7 @@ filter:
 ### Rule Fields
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| ------- | ------ | ---------- | ------------- |
 | `port` | integer | Yes | Port number (1-65535) |
 | `protocol` | string | Yes | `tcp` or `udp` |
 | `action` | string | Yes | `allow` or `deny` |
@@ -156,7 +160,8 @@ tunnelmesh filter remove --port 22 --protocol tcp
 tunnelmesh filter remove --port 22 --protocol tcp --source-peer badpeer
 ```
 
-**Note**: Only temporary rules (added via CLI or admin panel) can be removed. Rules from config files must be removed by editing the config.
+**Note**: Only temporary rules (added via CLI or admin panel) can be removed. Rules from config files must be removed by
+editing the config.
 
 ## Admin Dashboard
 
@@ -174,6 +179,7 @@ The admin panel provides an "Internal Packet Filter" section for managing rules:
 Rules pushed via admin panel take effect immediately on the target peer(s).
 
 **Important notes:**
+
 - When pushing to "All peers", a confirmation dialog is shown
 - A peer cannot create a rule filtering traffic from itself (self-targeting is prevented)
 - A warning banner appears when temporary rules exist, reminding that they won't persist after peer restart
@@ -232,7 +238,7 @@ Traffic from `badpeer` to port 22 is denied, while all other peers are allowed.
 ### Prometheus Metrics
 
 | Metric | Labels | Description |
-|--------|--------|-------------|
+| -------- | -------- | ------------- |
 | `tunnelmesh_dropped_filtered_total` | `protocol`, `source_peer` | Counter of packets dropped by filter |
 | `tunnelmesh_filter_rules_total` | `source` | Gauge of rule counts by source |
 | `tunnelmesh_filter_default_deny` | - | 1 if default-deny mode, 0 otherwise |
@@ -273,7 +279,8 @@ Default alerts in `monitoring/prometheus/alerts.yml`:
 
 ## ICMP Handling
 
-ICMP traffic (ping, traceroute) is **always allowed** through the filter for diagnostic purposes. Only TCP and UDP packets are subject to filter rules.
+ICMP traffic (ping, traceroute) is **always allowed** through the filter for diagnostic purposes. Only TCP and UDP
+packets are subject to filter rules.
 
 ## Best Practices
 

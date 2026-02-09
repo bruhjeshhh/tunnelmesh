@@ -7,7 +7,8 @@ This guide walks you through setting up a TunnelMesh network from scratch. You'l
 
 ## Part 1: Setting Up the Coordination Server
 
-The coordination server is the central hub that peers register with. It doesn't route traffic—peers connect directly to each other.
+The coordination server is the central hub that peers register with. It doesn't route traffic—peers connect directly to
+each other.
 
 ### Linux (amd64)
 
@@ -97,7 +98,8 @@ notepad "C:\ProgramData\TunnelMesh\server.yaml"
 
 ### Create a Context and Install the Server Service
 
-TunnelMesh uses **contexts** to manage multiple mesh configurations. Each context tracks a config file, allocated IP, and service status.
+TunnelMesh uses **contexts** to manage multiple mesh configurations. Each context tracks a config file, allocated IP,
+and service status.
 
 #### Linux/macOS
 
@@ -132,7 +134,8 @@ tunnelmesh service start
 tunnelmesh service status
 ```
 
-**Note:** The service name is derived from the context name. The "server" context creates a service named "tunnelmesh-server".
+**Note:** The service name is derived from the context name. The "server" context creates a service named
+"tunnelmesh-server".
 
 ---
 
@@ -147,6 +150,7 @@ You should see an empty peer list—this will populate as peers join.
 ## Part 2: Setting Up Peers
 
 Peers are the peers that form the mesh network. Each peer:
+
 - Registers with the coordination server
 - Gets assigned a mesh IP address
 - Establishes direct SSH tunnels with other peers
@@ -166,6 +170,7 @@ tunnelmesh init
 ```
 
 This creates:
+
 - `~/.tunnelmesh/id_ed25519` (private key)
 - `~/.tunnelmesh/id_ed25519.pub` (public key)
 
@@ -269,12 +274,14 @@ Check the admin dashboard on the server—your peer should now appear in the lis
 ### Coordination Server
 
 Open port **8080** (or your configured port) for:
+
 - Peer registration (HTTP)
 - Admin dashboard access
 
 ### Peers
 
 Open port **2222** (or your configured `ssh_port`) for:
+
 - Incoming SSH tunnel connections from other peers
 
 If a peer is behind NAT and cannot receive incoming connections, TunnelMesh will automatically use reverse connections through peers that are reachable.
@@ -292,6 +299,7 @@ tunnelmesh context list
 ```
 
 Example output:
+
 ```
 NAME      SERVER                      STATUS     ACTIVE
 home      http://home-server:8080     running    *
@@ -356,7 +364,7 @@ cat /etc/tunnelmesh/peer.yaml
 ### DNS resolution not working
 
 1. Confirm `dns.enabled: true` in config
-2. Check if DNS is listening: `netstat -ln | grep 5353`
+ 2. Check if DNS is listening: `netstat -ln | grep 5353` 
 3. Configure system to use the local resolver (see main README)
 
 ---
@@ -386,11 +394,13 @@ sudo nano /etc/tunnelmesh/peer.yaml
 ```
 
 Add:
+
 ```yaml
 allow_exit_traffic: true
 ```
 
 Restart the service:
+
 ```bash
 tunnelmesh service restart
 ```
@@ -406,11 +416,13 @@ sudo nano /etc/tunnelmesh/peer.yaml
 ```
 
 Add:
+
 ```yaml
 exit_node: "exit-peer-name"  # Name of your exit peer peer
 ```
 
 Restart:
+
 ```bash
 sudo tunnelmesh service restart
 ```

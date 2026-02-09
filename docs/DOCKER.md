@@ -38,7 +38,7 @@ docker build -t tunnelmesh:latest -f docker/Dockerfile .
 The included `docker-compose.yml` sets up a complete mesh environment:
 
 | Service | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `server` | Coordination server with admin UI |
 | `client` | Mesh peer (5 replicas by default) |
 | `prometheus` | Metrics collection |
@@ -78,11 +78,11 @@ docker compose logs --tail=100 server
 ### Accessing Services
 
 | Service | URL | Notes |
-|---------|-----|-------|
-| Coordination API | http://localhost:8081 | Peers connect here |
-| Admin Dashboard | https://server-peer.tunnelmesh/ | Mesh-only (requires joining the mesh) |
-| Grafana | https://server-peer.tunnelmesh/grafana/ | Metrics dashboards (mesh-only) |
-| Prometheus | https://server-peer.tunnelmesh/prometheus/ | Raw metrics (mesh-only) |
+| --------- | ----- | ------- |
+| Coordination API | <http://localhost:8081> | Peers connect here |
+| Admin Dashboard | <https://server-peer.tunnelmesh/> | Mesh-only (requires joining the mesh) |
+| Grafana | <https://server-peer.tunnelmesh/grafana/> | Metrics dashboards (mesh-only) |
+| Prometheus | <https://server-peer.tunnelmesh/prometheus/> | Raw metrics (mesh-only) |
 
 **Note:** The admin panel and monitoring tools are only accessible from within the mesh network for security.
 
@@ -197,7 +197,7 @@ docker compose exec server ls -la /results/
 docker cp tunnelmesh-server:/results ./benchmark-results/
 
 # View latest result
-docker compose exec server cat /results/benchmark_*.json | jq . | tail -50
+ docker compose exec server cat /results/benchmark_*.json | jq . | tail -50 
 ```
 
 ## Health Checks
@@ -253,7 +253,7 @@ Ensure the container has proper privileges:
 
 ```bash
 # Check capabilities
-docker inspect tunnelmesh-server | jq '.[0].HostConfig.CapAdd'
+ docker inspect tunnelmesh-server | jq '.[0].HostConfig.CapAdd' 
 
 # Should include: ["NET_ADMIN"]
 ```
@@ -290,7 +290,7 @@ docker compose exec server tunnelmesh status
 docker compose exec server tunnelmesh serve --log-level debug
 
 # View peer discovery
-docker compose logs server 2>&1 | grep -i peer
+ docker compose logs server 2>&1 | grep -i peer 
 ```
 
 ## Production Considerations

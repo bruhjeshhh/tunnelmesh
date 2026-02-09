@@ -1,6 +1,7 @@
 # Cloud Deployment with Terraform
 
-Deploy TunnelMesh infrastructure to DigitalOcean using Terraform. This guide covers various deployment scenarios from simple single-node setups to multi-region mesh networks.
+Deploy TunnelMesh infrastructure to DigitalOcean using Terraform. This guide covers various deployment scenarios from
+simple single-node setups to multi-region mesh networks.
 
 ## Prerequisites
 
@@ -32,11 +33,13 @@ terraform apply
 
 ## Deployment Scenarios
 
-TunnelMesh is flexible. Whether you need a simple personal VPN, a global team mesh, or a sophisticated multi-region network with exit peers, there's a configuration for you.
+TunnelMesh is flexible. Whether you need a simple personal VPN, a global team mesh, or a sophisticated multi-region
+network with exit peers, there's a configuration for you.
 
 ### Scenario 1: All-in-One (Starter)
 
-**The simplest deployment.** A single $4/month droplet runs everything: coordinator, mesh peer, and WireGuard concentrator. Perfect for personal use, small teams, or testing.
+**The simplest deployment.** A single $4/month droplet runs everything: coordinator, mesh peer, and WireGuard
+concentrator. Perfect for personal use, small teams, or testing.
 
 ```
                     ┌─────────────────────────────────────┐
@@ -61,12 +64,14 @@ TunnelMesh is flexible. Whether you need a simple personal VPN, a global team me
 ```
 
 **Use cases:**
+
 - Personal VPN for travel
 - Small team (2-5 people) secure communication
 - Home lab remote access
 - Learning and experimentation
 
 **Configuration:**
+
 ```hcl
 nodes = {
   "tunnelmesh" = {
@@ -84,7 +89,8 @@ nodes = {
 
 ### Scenario 2: Coordinator + WireGuard Gateway
 
-**Separate concerns.** The coordinator handles orchestration while a dedicated peer provides WireGuard access for mobile devices. Better isolation and the ability to place the WireGuard endpoint closer to your users.
+**Separate concerns.** The coordinator handles orchestration while a dedicated peer provides WireGuard access for mobile
+devices. Better isolation and the ability to place the WireGuard endpoint closer to your users.
 
 ```
 ┌─────────────────────────────┐          ┌─────────────────────────────┐
@@ -107,11 +113,13 @@ nodes = {
 ```
 
 **Use cases:**
+
 - Place WireGuard endpoint in a region closer to mobile users
 - Reduce attack surface on the coordinator
 - Scale WireGuard capacity independently
 
 **Configuration:**
+
 ```hcl
 nodes = {
   "tunnelmesh" = {
@@ -132,7 +140,9 @@ nodes = {
 
 ### Scenario 3: Exit Peer (Split-Tunnel VPN)
 
-**Route internet traffic through a specific location.** Your traffic exits from a peer in another region while mesh-to-mesh communication stays direct. Great for privacy, accessing geo-restricted content, or compliance requirements.
+**Route internet traffic through a specific location.** Your traffic exits from a peer in another region while
+mesh-to-mesh communication stays direct. Great for privacy, accessing geo-restricted content, or compliance
+requirements.
 
 ```
 ┌──────────────────┐                               ┌──────────────────┐
@@ -154,12 +164,14 @@ nodes = {
 ```
 
 **Use cases:**
+
 - Access geo-restricted streaming services
 - Privacy: your ISP sees encrypted tunnel traffic, not destinations
 - Compliance: ensure traffic exits from a specific jurisdiction
 - Bypass censorship in restrictive networks
 
 **Configuration:**
+
 ```hcl
 nodes = {
   "tunnelmesh" = {
@@ -183,6 +195,7 @@ nodes = {
 ```
 
 On your local machine:
+
 ```bash
 sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
 ```
@@ -191,7 +204,8 @@ sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
 
 ### Scenario 4: Multi-Region Mesh
 
-**Global presence.** WireGuard entry points in multiple regions provide low-latency access for a distributed team. Users connect to their nearest gateway and gain access to the entire mesh.
+**Global presence.** WireGuard entry points in multiple regions provide low-latency access for a distributed team. Users
+connect to their nearest gateway and gain access to the entire mesh.
 
 ```
                               ┌─────────────────────────────────┐
@@ -219,12 +233,14 @@ sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
 ```
 
 **Use cases:**
+
 - Distributed development teams
 - Global gaming groups wanting low-latency connections
 - International organizations with regional offices
 - Content creators collaborating across time zones
 
 **Configuration:**
+
 ```hcl
 nodes = {
   "tunnelmesh" = {
@@ -252,7 +268,8 @@ nodes = {
 
 ### Scenario 5: Home Lab Gateway
 
-**Access your home network from anywhere.** Run a cloud coordinator and connect your home server as a peer. Mobile devices connect via WireGuard and can reach everything on your home LAN.
+**Access your home network from anywhere.** Run a cloud coordinator and connect your home server as a peer. Mobile
+devices connect via WireGuard and can reach everything on your home LAN.
 
 ```
                           Cloud (DigitalOcean)
@@ -292,12 +309,14 @@ nodes = {
 ```
 
 **Use cases:**
+
 - Access home NAS and media server while traveling
 - Check security cameras remotely
 - SSH into home machines
 - Run home automation from anywhere
 
 **Configuration:**
+
 ```hcl
 # Cloud
 nodes = {
@@ -322,6 +341,7 @@ dns:
 ```
 
 On the home server:
+
 ```bash
 sudo tunnelmesh join --config peer.yaml --context homelab
 sudo tunnelmesh service install
@@ -332,7 +352,8 @@ sudo tunnelmesh service start
 
 ### Scenario 6: Development Team Secure Mesh
 
-**Connect developer machines directly.** No VPN concentrator bottleneck. Developers can SSH into each other's machines, share local development servers, and collaborate as if on the same LAN.
+**Connect developer machines directly.** No VPN concentrator bottleneck. Developers can SSH into each other's machines,
+share local development servers, and collaborate as if on the same LAN.
 
 ```
                               ┌─────────────────────────────────┐
@@ -356,12 +377,14 @@ sudo tunnelmesh service start
 ```
 
 **Use cases:**
+
 - Pair programming with remote colleagues
 - Share local development servers without ngrok
 - Access team members' databases for debugging
 - Collaborative CTF/security research
 
 **Configuration:**
+
 ```hcl
 # Just the coordinator in the cloud
 nodes = {
@@ -372,6 +395,7 @@ nodes = {
 ```
 
 Each developer runs:
+
 ```bash
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
@@ -383,7 +407,8 @@ sudo tunnelmesh join \
 
 ### Scenario 7: Gaming Group Low-Latency Mesh
 
-**Direct connections for multiplayer gaming.** Skip the public internet. Peers connect directly via UDP for minimal latency. Host game servers on any peer's machine.
+**Direct connections for multiplayer gaming.** Skip the public internet. Peers connect directly via UDP for minimal
+latency. Host game servers on any peer's machine.
 
 ```
                               ┌─────────────────────────────────┐
@@ -410,12 +435,14 @@ sudo tunnelmesh join \
 ```
 
 **Use cases:**
+
 - Minecraft servers with friends
 - LAN party games over the internet
 - Competitive gaming with minimal latency
 - Game streaming between peers
 
 **Configuration:**
+
 ```hcl
 nodes = {
   "tunnelmesh" = {
@@ -425,6 +452,7 @@ nodes = {
 ```
 
 Players join from their gaming PCs:
+
 ```bash
 # Automatic UDP hole-punching for lowest latency
 sudo tunnelmesh join \
@@ -443,7 +471,7 @@ Each peer in the `nodes` map supports these options:
 ### Core Options
 
 | Option | Type | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `coordinator` | bool | Run coordination server (max 1 per mesh) |
 | `peer` | bool | Join mesh as a peer |
 | `wireguard` | bool | Enable WireGuard concentrator for mobile clients |
@@ -451,14 +479,14 @@ Each peer in the `nodes` map supports these options:
 ### Exit Peer Options
 
 | Option | Type | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `allow_exit_traffic` | bool | Allow other peers to route internet through this peer |
 | `exit_node` | string | Route this node's internet through specified peer |
 
 ### Infrastructure Options
 
 | Option | Type | Default | Description |
-|--------|------|---------|-------------|
+| -------- | ------ | --------- | ------------- |
 | `region` | string | `ams3` | DigitalOcean region |
 | `size` | string | `s-1vcpu-512mb-10gb` | Droplet size |
 | `wg_port` | number | `51820` | WireGuard UDP port |
@@ -468,7 +496,7 @@ Each peer in the `nodes` map supports these options:
 ### Location Options
 
 | Option | Type | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `location.latitude` | number | Manual GPS latitude |
 | `location.longitude` | number | Manual GPS longitude |
 | `location.city` | string | City name for display |
@@ -477,7 +505,7 @@ Each peer in the `nodes` map supports these options:
 ### DNS Options
 
 | Option | Type | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `dns_aliases` | list | Additional DNS names for this peer |
 
 ---
@@ -487,11 +515,12 @@ Each peer in the `nodes` map supports these options:
 ### Required Variables
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `domain` | Your domain (must be in DigitalOcean DNS) |
 | `auth_token` | Mesh authentication token (`openssl rand -hex 32`) |
 
 Set your DigitalOcean API token via environment:
+
 ```bash
 export TF_VAR_do_token="dop_v1_xxx"
 ```
@@ -499,7 +528,7 @@ export TF_VAR_do_token="dop_v1_xxx"
 ### Default Settings
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `default_region` | `ams3` | Default droplet region |
 | `default_droplet_size` | `s-1vcpu-512mb-10gb` | Default size ($4/mo) |
 | `default_wg_port` | `51820` | Default WireGuard port |
@@ -509,7 +538,7 @@ export TF_VAR_do_token="dop_v1_xxx"
 ### Feature Flags
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `locations_enabled` | `false` | Geographic peer visualization (uses ip-api.com) |
 | `monitoring_enabled` | `false` | Prometheus/Grafana/Loki stack |
 | `auto_update_enabled` | `true` | Automatic binary updates |
@@ -518,7 +547,7 @@ export TF_VAR_do_token="dop_v1_xxx"
 ### Monitoring Settings
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `prometheus_retention_days` | `3` | Metrics retention |
 | `loki_retention_days` | `3` | Log retention |
 
@@ -537,7 +566,7 @@ loki_retention_days       = 7
 ### Included Services
 
 | Service | Purpose | Access |
-|---------|---------|--------|
+| --------- | --------- | -------- |
 | Prometheus | Metrics collection | `/prometheus/` |
 | Grafana | Dashboards | `/grafana/` (admin/admin) |
 | Loki | Log aggregation | Internal |
@@ -551,6 +580,7 @@ loki_retention_days       = 7
 - Resource utilization
 
 Access Grafana from within the mesh:
+
 ```
 https://tunnelmesh.example.com/grafana/
 ```
@@ -562,6 +592,7 @@ https://tunnelmesh.example.com/grafana/
 The `locations_enabled` flag enables a world map visualization showing where your mesh peers are located.
 
 **Disabled by default** because it:
+
 1. Uses external API (ip-api.com) for geolocation
 2. Sends peer public IPs to external service
 3. Requires coordinator internet access
@@ -595,7 +626,7 @@ terraform output
 ```
 
 | Output | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `coord_url` | Coordinator URL |
 | `admin_url` | Admin dashboard URL |
 | `peer_config_example` | Example peer configuration |
@@ -651,7 +682,7 @@ terraform destroy
 ## Cost Reference
 
 | Configuration | Droplets | Monthly Cost |
-|---------------|----------|--------------|
+| --------------- | ---------- | -------------- |
 | All-in-One | 1 | ~$4 |
 | Coord + WG Peer | 2 | ~$8 |
 | Multi-Region (3) | 3 | ~$12 |

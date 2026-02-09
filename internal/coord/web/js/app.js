@@ -2526,7 +2526,7 @@ function renderSharesTable() {
         <tr>
             <td><strong>${escapeHtml(s.name)}</strong></td>
             <td>${escapeHtml(s.description || '-')}</td>
-            <td>${escapeHtml(s.owner)}</td>
+            <td>${escapeHtml(s.owner_name || s.owner || '-')}</td>
             <td>${s.quota_bytes ? formatBytes(s.quota_bytes) : 'Unlimited'}</td>
             <td>${s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
             <td>${s.expires_at ? formatExpiry(s.expires_at) : 'Never'}</td>
@@ -2719,6 +2719,7 @@ function renderBindingsTable() {
             <td>${escapeHtml(b.role_name)}</td>
             <td>${escapeHtml(b.bucket_scope || 'All')}</td>
             <td>${escapeHtml(b.object_prefix || '-')}</td>
+            <td>${escapeHtml(b.panel_scope || '-')}</td>
             <td>${b.created_at ? TM.format.formatRelativeTime(b.created_at) : '-'}</td>
             <td>
                 ${

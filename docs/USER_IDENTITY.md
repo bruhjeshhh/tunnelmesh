@@ -41,11 +41,13 @@ tunnelmesh join --server coord.example.com --token <token> --context work --name
 ```
 
 Both devices will have:
+
 - **Same User ID** - same RBAC permissions
 - **Different Peer Names** - separate mesh identities
 - **Different Mesh IPs** - unique network addresses
 
-If you try to join with the same hostname as an existing peer with a different key, the coordinator will auto-suffix your name (e.g., `laptop` becomes `laptop-2`).
+If you try to join with the same hostname as an existing peer with a different key, the coordinator will auto-suffix
+your name (e.g., `laptop` becomes `laptop-2`).
 
 ## RBAC System
 
@@ -54,7 +56,7 @@ TunnelMesh uses Kubernetes-style Role-Based Access Control.
 ### Built-in Groups
 
 | Group | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `everyone` | All registered users - default group for new peers |
 | `all_admin_users` | Admin users with full access |
 | `all_service_users` | Service accounts (internal use) |
@@ -62,7 +64,7 @@ TunnelMesh uses Kubernetes-style Role-Based Access Control.
 ### Built-in Roles
 
 | Role | Description | Permissions |
-|------|-------------|-------------|
+| ------ | ------------- | ------------- |
 | `admin` | Full access | All operations on all resources |
 | `bucket-admin` | Bucket management | Create/delete buckets, full object access |
 | `bucket-write` | Write access | Read buckets, full object CRUD |
@@ -149,18 +151,19 @@ Service users authenticate to S3 like regular users but have their keypair deriv
 
 ```
 SSH Key (id_ed25519)
-       |
+ |
        v
 ED25519 Public Key
-       |
+ |
        v
 SHA256(public_key)[:8] as hex
-       |
+ |
        v
 User ID (16 characters)
 ```
 
 S3 credentials are derived from the public key:
+
 ```
 Public Key -> HKDF("s3-access-key") -> Access Key (20 chars)
 Public Key -> HKDF("s3-secret-key") -> Secret Key (40 chars)

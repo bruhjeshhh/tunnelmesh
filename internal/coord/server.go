@@ -85,18 +85,21 @@ type Server struct {
 	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
 	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
 	// S3 storage
-	s3Store       *s3.Store            // S3 file-based storage
-	s3Server      *s3.Server           // S3 HTTP server
-	s3Authorizer  *auth.Authorizer     // RBAC authorizer for S3
-	s3Credentials *s3.CredentialStore  // S3 credential store
-	s3SystemStore *s3.SystemStore      // System bucket accessor
-	fileShareMgr  *s3.FileShareManager // File share manager
+	s3Store             *s3.Store            // S3 file-based storage
+	s3Server            *s3.Server           // S3 HTTP server
+	s3Authorizer        *auth.Authorizer     // RBAC authorizer for S3
+	s3Credentials       *s3.CredentialStore  // S3 credential store
+	s3SystemStore       *s3.SystemStore      // System bucket accessor
+	fileShareMgr        *s3.FileShareManager // File share manager
+	builtinBindingsOnce sync.Once            // Ensures builtin group bindings are initialized only once
 	// NFS server
 	nfsServer *nfs.Server // NFS server for file shares
 	// Packet filter
 	filter            *routing.PacketFilter // Global packet filter
 	filterSavePending atomic.Bool           // Debounce flag for async filter saves
 	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
+	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -322,6 +325,44 @@ func (s *Server) SaveStatsHistory() error {
 	return nil
 }
 
+// refreshPeerNameCache reloads the peer ID -> name mapping from storage.
+// This is called during server startup and when peers are added/updated.
+func (s *Server) refreshPeerNameCache() error {
+	if s.s3SystemStore == nil {
+		// No S3 storage, cache stays empty
+		s.peerNameCache.Store(&map[string]string{})
+		return nil
+	}
+
+	peers, err := s.s3SystemStore.LoadPeers()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load peers for name cache")
+		return fmt.Errorf("load peers: %w", err)
+	}
+
+	nameMap := make(map[string]string, len(peers))
+	for _, peer := range peers {
+		nameMap[peer.ID] = peer.Name
+	}
+	s.peerNameCache.Store(&nameMap)
+
+	log.Debug().Int("count", len(nameMap)).Msg("refreshed peer name cache")
+	return nil
+}
+
+// getPeerName returns the name for a peer ID, falling back to the ID if not found.
+// This uses the cached peer name map to avoid repeated LoadPeers() calls.
+func (s *Server) getPeerName(peerID string) string {
+	cache := s.peerNameCache.Load()
+	if cache == nil || peerID == "" {
+		return peerID
+	}
+	if name := (*cache)[peerID]; name != "" {
+		return name
+	}
+	return peerID // Fallback to ID if peer not found (may have been deleted)
+}
+
 // saveDNSData persists DNS cache and aliases to S3.
 // This is called asynchronously after peer registration changes.
 func (s *Server) saveDNSData() {
@@ -490,6 +531,12 @@ func (s *Server) Shutdown() error {
 	if err := s.SaveStatsHistory(); err != nil {
 		log.Error().Err(err).Msg("failed to save stats history")
 		errs = append(errs, fmt.Errorf("save stats history: %w", err))
+	}
+
+	// Wait for any pending async filter saves to complete (debounce is 100ms)
+	if s.filterSavePending.Load() {
+		log.Debug().Msg("waiting for pending filter save to complete")
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Save filter rules
@@ -782,6 +829,11 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		}
 	}
 
+	// Initialize peer name cache for owner lookups
+	if err := s.refreshPeerNameCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to initialize peer name cache")
+	}
+
 	// Recover role bindings
 	if bindings, err := systemStore.LoadBindings(); err == nil && len(bindings) > 0 {
 		log.Info().Int("count", len(bindings)).Msg("recovering role bindings")
@@ -886,72 +938,76 @@ func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
-// - all_admin_users group gets admin role (unscoped)
+// - admins group gets admin role (unscoped)
 // - everyone group gets panel-viewer for default peer panels
-// - all_admin_users group gets panel-viewer for admin-only panels
+// - admins group gets panel-viewer for admin-only panels
+//
+// Uses sync.Once to prevent race conditions during concurrent coordinator startups.
 func (s *Server) ensureBuiltinGroupBindings() {
-	modified := false
+	s.builtinBindingsOnce.Do(func() {
+		modified := false
 
-	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
-	if len(adminBindings) == 0 {
-		s.s3Authorizer.GroupBindings.Add(auth.NewGroupBinding(
-			auth.GroupAllAdminUsers,
-			auth.RoleAdmin,
-			"", // Unscoped - admin has access to all buckets
-		))
-		modified = true
-	}
-
-	// Add default panel bindings for everyone group
-	everyoneBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupEveryone)
-	everyonePanels := make(map[string]bool)
-	for _, b := range everyoneBindings {
-		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
-			everyonePanels[b.PanelScope] = true
-		}
-	}
-	for _, panelID := range auth.DefaultPeerPanels() {
-		if !everyonePanels[panelID] {
-			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
-				auth.GroupEveryone,
-				panelID,
+		adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAdmins)
+		if len(adminBindings) == 0 {
+			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBinding(
+				auth.GroupAdmins,
+				auth.RoleAdmin,
+				"", // Unscoped - admin has access to all buckets
 			))
 			modified = true
-			log.Info().Str("group", auth.GroupEveryone).Str("panel", panelID).Msg("added default panel binding")
 		}
-	}
 
-	// Add admin-only panel bindings for all_admin_users group
-	adminPanels := make(map[string]bool)
-	for _, b := range adminBindings {
-		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
-			adminPanels[b.PanelScope] = true
+		// Add default panel bindings for everyone group
+		everyoneBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupEveryone)
+		everyonePanels := make(map[string]bool)
+		for _, b := range everyoneBindings {
+			if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+				everyonePanels[b.PanelScope] = true
+			}
 		}
-	}
-	// Re-fetch admin bindings since we may have added admin role binding above
-	adminBindings = s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
-	for _, b := range adminBindings {
-		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
-			adminPanels[b.PanelScope] = true
+		for _, panelID := range auth.DefaultPeerPanels() {
+			if !everyonePanels[panelID] {
+				s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
+					auth.GroupEveryone,
+					panelID,
+				))
+				modified = true
+				log.Info().Str("group", auth.GroupEveryone).Str("panel", panelID).Msg("added default panel binding")
+			}
 		}
-	}
-	for _, panelID := range auth.DefaultAdminPanels() {
-		if !adminPanels[panelID] {
-			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
-				auth.GroupAllAdminUsers,
-				panelID,
-			))
-			modified = true
-			log.Info().Str("group", auth.GroupAllAdminUsers).Str("panel", panelID).Msg("added default panel binding")
-		}
-	}
 
-	// Persist if we added any bindings
-	if modified && s.s3SystemStore != nil {
-		if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
-			log.Warn().Err(err).Msg("failed to persist builtin group bindings")
+		// Add admin-only panel bindings for admins group
+		adminPanels := make(map[string]bool)
+		for _, b := range adminBindings {
+			if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+				adminPanels[b.PanelScope] = true
+			}
 		}
-	}
+		// Re-fetch admin bindings since we may have added admin role binding above
+		adminBindings = s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAdmins)
+		for _, b := range adminBindings {
+			if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+				adminPanels[b.PanelScope] = true
+			}
+		}
+		for _, panelID := range auth.DefaultAdminPanels() {
+			if !adminPanels[panelID] {
+				s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
+					auth.GroupAdmins,
+					panelID,
+				))
+				modified = true
+				log.Info().Str("group", auth.GroupAdmins).Str("panel", panelID).Msg("added default panel binding")
+			}
+		}
+
+		// Persist if we added any bindings
+		if modified && s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist builtin group bindings")
+			}
+		}
+	})
 }
 
 // StartS3Server starts the S3 API server on the specified address.
@@ -1147,22 +1203,63 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	defer s.peersMu.Unlock()
 
 	// Check for hostname collision with different public key
-	// If another peer exists with same name but different key, auto-suffix the name
+	// Important: Check both active peers AND persisted peers to prevent admin spoofing
+	// An attacker could register with a privileged name when the legitimate peer is offline
 	originalName := req.Name
+	needsRename := false
+
+	// Check active peers first
 	if existing, exists := s.peers[req.Name]; exists {
 		if existing.peer.PublicKey != req.PublicKey {
-			// Different device trying to use same name - find unique suffix
-			baseName := req.Name
-			for i := 2; ; i++ {
-				candidateName := fmt.Sprintf("%s-%d", baseName, i)
-				if _, taken := s.peers[candidateName]; !taken {
-					req.Name = candidateName
-					log.Info().
-						Str("original", originalName).
-						Str("assigned", req.Name).
-						Msg("hostname conflict - assigned unique name")
+			needsRename = true
+		}
+	}
+
+	// Also check persisted peers in S3 (critical for security)
+	if !needsRename && s.s3SystemStore != nil {
+		if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
+			for _, peer := range peers {
+				if peer.Name == req.Name && peer.PublicKey != req.PublicKey {
+					needsRename = true
+					log.Warn().
+						Str("name", req.Name).
+						Str("existing_peer_id", peer.ID).
+						Str("new_public_key", req.PublicKey).
+						Msg("peer name already registered with different key in S3")
 					break
 				}
+			}
+		}
+	}
+
+	if needsRename {
+		// Different device trying to use same name - find unique suffix
+		baseName := req.Name
+		for i := 2; ; i++ {
+			candidateName := fmt.Sprintf("%s-%d", baseName, i)
+			// Check both active and persisted peers for uniqueness
+			activeTaken := false
+			if _, exists := s.peers[candidateName]; exists {
+				activeTaken = true
+			}
+			persistedTaken := false
+			if !activeTaken && s.s3SystemStore != nil {
+				if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
+					for _, peer := range peers {
+						if peer.Name == candidateName {
+							persistedTaken = true
+							break
+						}
+					}
+				}
+			}
+			if !activeTaken && !persistedTaken {
+				req.Name = candidateName
+				log.Info().
+					Str("original", originalName).
+					Str("assigned", req.Name).
+					Msg("hostname conflict - assigned unique name")
+				break
 			}
 		}
 	}
@@ -1294,20 +1391,22 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if peerID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
 		isNewPeer := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, peerID)
 		if isNewPeer {
-			// Check if this is the first peer (no one in admin group yet)
-			adminGroup := s.s3Authorizer.Groups.Get(auth.GroupAllAdminUsers)
-			if adminGroup != nil && len(adminGroup.Members) == 0 {
-				isFirstPeer = true
-				// First peer becomes admin
-				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, peerID); err != nil {
-					log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to add first peer to admin group")
+			groupsModified := false
+
+			// Check if this peer should be added to admins group (via admin_peers config)
+			isAdminPeer := false
+			for _, adminPeerName := range s.cfg.AdminPeers {
+				if adminPeerName == req.Name {
+					isAdminPeer = true
+					break
+				}
+			}
+			if isAdminPeer {
+				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAdmins, peerID); err != nil {
+					log.Warn().Err(err).Str("peer_id", peerID).Str("peer", req.Name).Msg("failed to add peer to admins group")
 				} else {
-					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("first peer - granted admin role")
-					if s.s3SystemStore != nil {
-						if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
-							log.Warn().Err(err).Msg("failed to persist groups after admin assignment")
-						}
-					}
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("peer added to admins group via admin_peers config")
+					groupsModified = true
 				}
 			}
 
@@ -1316,10 +1415,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				log.Warn().Err(err).Str("peer", req.Name).Str("peer_id", peerID).Msg("failed to add peer to everyone group")
 			} else {
 				log.Debug().Str("peer", req.Name).Str("peer_id", peerID).Msg("added peer to everyone group")
-				if s.s3SystemStore != nil {
-					if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
-						log.Warn().Err(err).Msg("failed to persist groups after adding to everyone")
-					}
+				groupsModified = true
+			}
+
+			// Save groups once after all modifications (prevents redundant S3 writes)
+			if groupsModified && s.s3SystemStore != nil {
+				if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+					log.Error().Err(err).Msg("failed to persist groups after peer registration")
+				} else {
+					log.Debug().Str("peer", req.Name).Msg("persisted group changes to S3")
 				}
 			}
 		}
@@ -1517,6 +1621,11 @@ func (s *Server) updatePeerRecord(peerID, peerName, publicKey string, isNewPeer 
 
 	if err := s.s3SystemStore.SavePeers(peers); err != nil {
 		log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to save peers")
+	} else {
+		// Refresh peer name cache after adding new peer
+		if err := s.refreshPeerNameCache(); err != nil {
+			log.Warn().Err(err).Msg("failed to refresh peer name cache")
+		}
 	}
 }
 

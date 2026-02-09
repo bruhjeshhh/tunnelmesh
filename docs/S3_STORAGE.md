@@ -1,12 +1,14 @@
 # S3-Compatible Storage
 
-TunnelMesh includes an S3-compatible object storage service that runs on the coordinator. This provides mesh-only accessible storage for shared files, configurations, and internal coordinator state.
+TunnelMesh includes an S3-compatible object storage service that runs on the coordinator. This provides mesh-only
+accessible storage for shared files, configurations, and internal coordinator state.
 
 File shares can also be mounted as network drives via NFS - see the [NFS documentation](NFS.md).
 
 ## Overview
 
 The S3 storage service:
+
 - Is only accessible from within the mesh network
 - Uses the same authentication as other mesh services
 - Supports standard S3 API operations
@@ -22,12 +24,13 @@ s3:
   max_size: "100Gi"                  # Storage quota (required)
   data_dir: /var/lib/tunnelmesh/s3   # Storage directory
   port: 9000                         # S3 API port
+
 ```
 
 ### Configuration Options
 
 | Option | Default | Description |
-|--------|---------|-------------|
+| -------- | --------- | ------------- |
 | `enabled` | `false` | Enable S3 storage service |
 | `max_size` | - | Storage quota (required, e.g., `10Gi`, `500Mi`, `1Ti`) |
 | `data_dir` | `{data_dir}/s3` | Directory for object storage |
@@ -39,6 +42,7 @@ s3:
 ### Size Format
 
 The `max_size` option accepts Kubernetes-style size notation:
+
 - `Ki`, `Mi`, `Gi`, `Ti` - binary units (1Ki = 1024 bytes)
 - `K`, `M`, `G`, `T` - also supported as aliases
 - Plain numbers are interpreted as bytes
@@ -50,7 +54,7 @@ The S3 API is available at `https://this.tm:9000` (or your configured port).
 ### Supported Operations
 
 | Operation | Method | Path | Description |
-|-----------|--------|------|-------------|
+| ----------- | -------- | ------ | ------------- |
 | ListBuckets | GET | `/` | List all buckets |
 | CreateBucket | PUT | `/{bucket}` | Create a bucket |
 | DeleteBucket | DELETE | `/{bucket}` | Delete an empty bucket |
@@ -67,17 +71,20 @@ The S3 API is available at `https://this.tm:9000` (or your configured port).
 The S3 service supports multiple authentication methods:
 
 1. **AWS Signature V4** - Standard S3 authentication
-   ```
+
+   ```text
    Authorization: AWS4-HMAC-SHA256 Credential=ACCESS_KEY/...
    ```
 
-2. **Basic Auth** - Simple username/password
-   ```
+1. **Basic Auth** - Simple username/password
+
+   ```text
    Authorization: Basic base64(access_key:secret_key)
    ```
 
-3. **Bearer Token** - Access key only
-   ```
+1. **Bearer Token** - Access key only
+
+   ```text
    Authorization: Bearer access_key
    ```
 
@@ -97,6 +104,7 @@ tunnelmesh bucket delete my-bucket
 
 # Get bucket info
 tunnelmesh bucket info my-bucket
+
 ```
 
 ### Object Operations
@@ -114,6 +122,7 @@ tunnelmesh object list my-bucket --prefix docs/
 
 # Delete an object
 tunnelmesh object delete my-bucket/path/to/file.txt
+
 ```
 
 ## System Bucket
@@ -130,13 +139,15 @@ _tunnelmesh/
     history.json    # Stats history
   wireguard/
     clients.json    # WireGuard clients
+
 ```
 
 This bucket is only accessible to service users with the `system` role.
 
 ## File Shares
 
-File shares are user-accessible storage areas backed by S3 buckets. They provide an easy way to share files across the mesh with automatic permission management.
+File shares are user-accessible storage areas backed by S3 buckets. They provide an easy way to share files across the
+mesh with automatic permission management.
 
 ### Creating File Shares
 
@@ -145,14 +156,16 @@ File shares can be created via the admin panel's Data tab or the API:
 ```bash
 # Via API
 curl -X POST https://this.tm/api/shares \
+
   -H "Content-Type: application/json" \
   -d '{"name": "team-files", "description": "Shared team files", "quota_bytes": 10737418240}'
+
 ```
 
 ### Share Properties
 
 | Property | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | Name | DNS-safe identifier (alphanumeric + hyphens, max 63 chars) |
 | Description | Optional description |
 | Quota | Per-share storage limit (0 = unlimited, max 1TB) |
@@ -163,6 +176,7 @@ curl -X POST https://this.tm/api/shares \
 ### Default Permissions
 
 When a file share is created:
+
 - The creator becomes the owner with `bucket-admin` role
 - If "Guest Read" is enabled (default): all mesh users (`everyone` group) get `bucket-read` access
 - If "Guest Read" is disabled: access is controlled entirely via RBAC bindings
@@ -173,13 +187,17 @@ When a file share is created:
 File shares are backed by S3 buckets with a `fs+` prefix. Access them via:
 
 **S3 API:**
+
 ```bash
 aws s3 ls s3://fs+team-files/ --endpoint-url https://this.tm:9000
+
 ```
 
 **NFS Mount:**
+
 ```bash
 sudo mount -t nfs this.tm:/team-files /mnt/team-files
+
 ```
 
 **S3 Explorer:** Browse in the admin panel's Data tab.
@@ -189,6 +207,7 @@ See the [NFS documentation](NFS.md) for detailed mount instructions.
 ### Soft Delete (Tombstoning)
 
 Deleted file shares are tombstoned rather than immediately removed:
+
 - Share data is retained for `tombstone_retention_days` (default: 90)
 - Recreating a share with the same name restores the previous content
 - After the retention period, data is permanently purged
@@ -210,6 +229,7 @@ aws s3 ls --profile tunnelmesh --endpoint-url $AWS_ENDPOINT_URL
 
 # Upload a file
 aws s3 cp file.txt s3://my-bucket/file.txt --profile tunnelmesh --endpoint-url $AWS_ENDPOINT_URL
+
 ```
 
 ## Using with SDKs
@@ -233,6 +253,7 @@ client := s3.NewFromConfig(cfg, func(o *s3.Options) {
     o.BaseEndpoint = aws.String("https://this.tm:9000")
     o.UsePathStyle = true
 })
+
 ```
 
 ### Python (boto3)
@@ -248,6 +269,7 @@ s3 = boto3.client('s3',
 
 # List buckets
 response = s3.list_buckets()
+
 ```
 
 ## Storage Quotas
@@ -267,6 +289,7 @@ tunnelmesh storage status
 # Buckets:
 #   my-bucket:     30.1 GB
 #   backups:       15.1 GB
+
 ```
 
 ## Data Persistence
@@ -282,6 +305,7 @@ All S3 data is stored in the configured `data_dir`:
         {key}              # Object data
       meta/
         {key}.json         # Object metadata
+
 ```
 
 ### Backup
@@ -290,6 +314,7 @@ To backup S3 data, copy the entire `data_dir`:
 
 ```bash
 tar -czf s3-backup.tar.gz /var/lib/tunnelmesh/s3
+
 ```
 
 ### Restore
@@ -297,4 +322,5 @@ tar -czf s3-backup.tar.gz /var/lib/tunnelmesh/s3
 ```bash
 tar -xzf s3-backup.tar.gz -C /
 systemctl restart tunnelmesh-server
+
 ```

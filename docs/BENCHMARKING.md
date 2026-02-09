@@ -1,17 +1,19 @@
 # Benchmarking and Stress Testing
 
-TunnelMesh includes built-in benchmarking tools to measure throughput, latency, and test mesh performance under adverse network conditions.
+TunnelMesh includes built-in benchmarking tools to measure throughput, latency, and test mesh performance under adverse
+network conditions.
 
 ## Overview
 
 The benchmark system consists of two components:
 
 | Component | Purpose | Chaos Support |
-|-----------|---------|---------------|
+| ----------- | --------- | --------------- |
 | `tunnelmesh benchmark` | CLI command for on-demand tests | Full control |
 | `tunnelmesh-benchmarker` | Docker service for automated periodic tests | Configurable via env vars |
 
-Benchmark traffic flows through the **actual mesh tunnel** (TUN device → encrypted tunnel → peer), giving you realistic performance metrics for file transfers and real-time applications.
+Benchmark traffic flows through the **actual mesh tunnel** (TUN device → encrypted tunnel → peer), giving you realistic
+performance metrics for file transfers and real-time applications.
 
 ## Quick Start
 
@@ -83,7 +85,7 @@ Chaos testing simulates adverse network conditions to stress test your mesh and 
 ### Use Cases
 
 | Scenario | Flags | Simulates |
-|----------|-------|-----------|
+| ---------- | ------- | ----------- |
 | Lossy WiFi | `--packet-loss 2` | Occasional packet drops |
 | Mobile network | `--latency 100ms --jitter 30ms` | High, variable latency |
 | Congested link | `--bandwidth 5mbps` | Bandwidth-constrained path |
@@ -115,7 +117,8 @@ tunnelmesh benchmark peer-1 --size 50MB --packet-loss 5 --output with-loss.json
 
 ## Docker Benchmarker
 
-The Docker benchmarker runs **aggressive continuous benchmarks** with multiple concurrent transfers and randomized chaos settings. The mesh is always under load.
+The Docker benchmarker runs **aggressive continuous benchmarks** with multiple concurrent transfers and randomized chaos
+settings. The mesh is always under load.
 
 ### Default Behavior
 
@@ -132,7 +135,7 @@ With overlapping batches, you'll typically have 3-6 active transfers at any time
 Each transfer randomly picks from these network condition presets:
 
 | Preset | Packet Loss | Latency | Jitter | Bandwidth |
-|--------|-------------|---------|--------|-----------|
+| -------- | ------------- | --------- | -------- | ----------- |
 | `clean` | 0% | 0ms | 0ms | unlimited |
 | `subtle` | 0.1% | 2ms | ±1ms | unlimited |
 | `lossy-wifi` | 2% | 5ms | ±3ms | unlimited |
@@ -187,7 +190,7 @@ docker compose run -e BENCHMARK_INTERVAL=15s benchmarker
 docker compose exec server ls -la /results/
 
 # View latest result
-docker compose exec server cat /results/benchmark_*.json | jq .
+ docker compose exec server cat /results/benchmark_*.json | jq . 
 
 # Copy results to host
 docker cp tunnelmesh-server:/results ./benchmark-results/
@@ -224,7 +227,7 @@ docker cp tunnelmesh-server:/results ./benchmark-results/
 ### Key Metrics
 
 | Metric | Description | Good Values |
-|--------|-------------|-------------|
+| -------- | ------------- | ------------- |
 | `throughput_mbps` | Megabits per second | Depends on link speed |
 | `latency_avg_ms` | Average round-trip time | <5ms LAN, <50ms WAN |
 | `latency_max_ms` | Worst-case latency | Should be close to avg |
@@ -234,8 +237,8 @@ docker cp tunnelmesh-server:/results ./benchmark-results/
 
 ```bash
 # Compare baseline vs chaos results
-jq -s '.[0].throughput_mbps as $base |
-       .[1].throughput_mbps as $chaos |
+ jq -s '.[0].throughput_mbps as $base|
+ .[1].throughput_mbps as $chaos|
        {baseline: $base, with_chaos: $chaos,
         degradation_pct: (($base - $chaos) / $base * 100)}' \
   baseline.json with-loss.json

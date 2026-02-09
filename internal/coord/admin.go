@@ -1063,6 +1063,12 @@ func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// FileShareResponse extends FileShare with additional computed fields.
+type FileShareResponse struct {
+	*s3.FileShare
+	OwnerName string `json:"owner_name,omitempty"` // Human-readable owner name (looked up from peer ID)
+}
+
 // handleSharesList returns all file shares.
 func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 	if s.fileShareMgr == nil {
@@ -1072,8 +1078,17 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 
 	shares := s.fileShareMgr.List()
 
+	// Convert shares to response format with owner names from cache
+	response := make([]FileShareResponse, len(shares))
+	for i, share := range shares {
+		response[i] = FileShareResponse{
+			FileShare: share,
+			OwnerName: s.getPeerName(share.Owner),
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(shares)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // ShareCreateRequest is the request body for creating a file share.
@@ -1383,6 +1398,7 @@ type BindingInfo struct {
 	RoleName     string    `json:"role_name"`
 	BucketScope  string    `json:"bucket_scope,omitempty"`
 	ObjectPrefix string    `json:"object_prefix,omitempty"`
+	PanelScope   string    `json:"panel_scope,omitempty"`
 	Protected    bool      `json:"protected"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -1407,6 +1423,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 				RoleName:     b.RoleName,
 				BucketScope:  b.BucketScope,
 				ObjectPrefix: b.ObjectPrefix,
+				PanelScope:   b.PanelScope,
 				Protected:    protected,
 				CreatedAt:    b.CreatedAt,
 			})
@@ -1421,6 +1438,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 				RoleName:     gb.RoleName,
 				BucketScope:  gb.BucketScope,
 				ObjectPrefix: gb.ObjectPrefix,
+				PanelScope:   gb.PanelScope,
 				Protected:    protected,
 				CreatedAt:    gb.CreatedAt,
 			})
@@ -1569,6 +1587,7 @@ type S3ObjectInfo struct {
 	Key          string `json:"key"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified"`
+	Owner        string `json:"owner,omitempty"`         // Owner peer name (derived from bucket owner)
 	Expires      string `json:"expires,omitempty"`       // Optional expiration date
 	TombstonedAt string `json:"tombstoned_at,omitempty"` // When the object was deleted (tombstoned)
 	ContentType  string `json:"content_type,omitempty"`
@@ -1792,6 +1811,14 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		return
 	}
 
+	// Get bucket metadata to find owner
+	bucketMeta, err := s.s3Store.HeadBucket(bucket)
+	var ownerName string
+	if err == nil && bucketMeta.Owner != "" {
+		// Look up peer name from cached map (falls back to ID if not found)
+		ownerName = s.getPeerName(bucketMeta.Owner)
+	}
+
 	result := make([]S3ObjectInfo, 0)
 	prefixSet := make(map[string]bool)
 
@@ -1817,6 +1844,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 			Key:          obj.Key,
 			Size:         obj.Size,
 			LastModified: obj.LastModified.Format(time.RFC3339),
+			Owner:        ownerName,
 			ContentType:  obj.ContentType,
 		}
 		if obj.Expires != nil {
