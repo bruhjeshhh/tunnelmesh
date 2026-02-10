@@ -12,10 +12,16 @@
     'use strict';
 
     // =========================================================================
-    // State
+    // Constants
     // =========================================================================
 
     const PAGE_SIZE = 7;
+    const DATASHEET_PAGE_SIZE = 50; // Minimum rows per page in datasheet view (actual size adapts to viewport)
+    const DEFAULT_COLUMN_WIDTH = 150; // Default column width in pixels
+
+    // =========================================================================
+    // State
+    // =========================================================================
 
     const state = {
         buckets: [],
@@ -40,7 +46,15 @@
         // View mode (defaults to 'icon' - user can toggle to 'list' view manually)
         viewMode: 'icon', // 'list' or 'icon'
         // Editor mode
-        editorMode: 'source', // 'source' or 'wysiwyg' (wysiwyg is read-only preview)
+        editorMode: 'source', // 'source' or 'wysiwyg' or 'datasheet' or 'treeview'
+        // Datasheet-specific state
+        datasheetData: null, // Parsed JSON array for datasheet view
+        datasheetSchema: null, // { columns: [{ key, type, width }] }
+        datasheetPage: 1, // Current page number
+        datasheetPageSize: DATASHEET_PAGE_SIZE, // Rows per page
+        // Tree view state
+        treeviewData: null, // Parsed JSON object/array for tree view
+        treeviewCollapsed: new Set(), // Set of collapsed paths (e.g., 'data.items[0]')
     };
 
     // Text file extensions
@@ -167,6 +181,39 @@
         return parts[parts.length - 1].toLowerCase();
     }
 
+    /**
+     * Determines if a markdown file should open in WYSIWYG (preview) mode
+     * @param {string} ext - File extension
+     * @param {string} content - File content
+     * @returns {boolean} - True if should use WYSIWYG mode
+     */
+    function shouldUseWysiwygMode(ext, content) {
+        // Only markdown files can use wysiwyg mode
+        if (ext !== 'md') return false;
+        // Empty files should open in source mode (editable)
+        if (!content || content.trim().length === 0) return false;
+        // Non-empty markdown files open in preview mode
+        return true;
+    }
+
+    /**
+     * Detect JSON type (object vs array)
+     * @param {string} content - JSON string content
+     * @returns {{isObject: boolean, isArray: boolean, parsed: any}} - Detection result
+     */
+    function detectJsonType(content) {
+        try {
+            const parsed = JSON.parse(content);
+            return {
+                isObject: typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed),
+                isArray: Array.isArray(parsed),
+                parsed,
+            };
+        } catch (_e) {
+            return { isObject: false, isArray: false, parsed: null };
+        }
+    }
+
     function _isTextFile(filename) {
         const ext = getExtension(filename);
         const name = filename.toLowerCase();
@@ -253,6 +300,500 @@
             return `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
         }
         return `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+    }
+
+    // =========================================================================
+    // Datasheet Helper Functions
+    // =========================================================================
+
+    /**
+     * Detect if JSON content should be displayed as a datasheet
+     * @param {string} content - JSON string content
+     * @returns {{isDatasheet: boolean, data: Array|null}}
+     */
+    function detectDatasheetMode(content) {
+        try {
+            const parsed = JSON.parse(content);
+            if (!Array.isArray(parsed)) {
+                return {
+                    isDatasheet: false,
+                    data: null,
+                    reason: 'Not a JSON array (found object or primitive)',
+                };
+            }
+            if (parsed.length === 0) {
+                return {
+                    isDatasheet: false,
+                    data: null,
+                    reason: 'Empty array',
+                };
+            }
+            // Check if all elements are objects (not arrays or primitives)
+            const allObjects = parsed.every(
+                (item) => typeof item === 'object' && item !== null && !Array.isArray(item),
+            );
+            if (!allObjects) {
+                return {
+                    isDatasheet: false,
+                    data: null,
+                    reason: 'Array contains non-object elements (primitives or nested arrays)',
+                };
+            }
+            return { isDatasheet: true, data: parsed, reason: null };
+        } catch (e) {
+            return {
+                isDatasheet: false,
+                data: null,
+                reason: `Invalid JSON: ${e.message}`,
+            };
+        }
+    }
+
+    /**
+     * Infer schema from JSON array data
+     * @param {Array} data - Array of objects
+     * @returns {{columns: Array<{key: string, type: string, width: number}>}}
+     */
+    function inferSchema(data) {
+        if (!data || data.length === 0) {
+            return { columns: [] };
+        }
+
+        // Collect all unique keys across all objects
+        const allKeys = new Set();
+        data.forEach((obj) => {
+            Object.keys(obj).forEach((k) => {
+                allKeys.add(k);
+            });
+        });
+
+        // Infer type for each column
+        const columns = Array.from(allKeys).map((key) => {
+            const values = data.map((obj) => obj[key]).filter((v) => v != null);
+            let type = 'string'; // default
+
+            if (values.length > 0) {
+                if (values.every((v) => typeof v === 'number')) {
+                    type = 'number';
+                } else if (values.every((v) => typeof v === 'boolean')) {
+                    type = 'boolean';
+                } else if (values.every((v) => Array.isArray(v))) {
+                    type = 'nested-array';
+                } else if (values.every((v) => typeof v === 'object' && !Array.isArray(v))) {
+                    type = 'nested-object';
+                } else if (values.every((v) => typeof v === 'string' && /^https?:\/\//.test(v))) {
+                    type = 'url';
+                } else if (values.every((v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v))) {
+                    type = 'date';
+                }
+            }
+
+            return { key, type, width: DEFAULT_COLUMN_WIDTH };
+        });
+
+        return { columns };
+    }
+
+    /**
+     * Render cell content based on type
+     * @param {any} value - Cell value
+     * @param {string} type - Column type
+     * @param {number} rowIdx - Row index
+     * @param {string} colKey - Column key
+     * @returns {string} HTML string
+     */
+    function renderCell(value, type, rowIdx, colKey) {
+        if (value === null || value === undefined) {
+            return '<span class="s3-ds-null">null</span>';
+        }
+
+        switch (type) {
+            case 'number':
+                return `<span class="s3-ds-number">${TM.format ? TM.format.formatNumber(value) : value.toLocaleString()}</span>`;
+            case 'boolean':
+                return value
+                    ? '<span class="s3-ds-badge s3-ds-badge-true">true</span>'
+                    : '<span class="s3-ds-badge s3-ds-badge-false">false</span>';
+            case 'date':
+                return TM.format?.formatDateTime ? TM.format.formatDateTime(value) : new Date(value).toLocaleString();
+            case 'url':
+                return `<a href="${encodeURI(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
+            case 'nested-array':
+                return `<span class="s3-ds-nested" data-row-idx="${rowIdx}" data-col-key="${escapeHtml(colKey)}" title="Click to view nested array">
+                    <span class="s3-ds-nested-text">${Array.isArray(value) ? value.length : 0} items</span>
+                    <svg class="s3-ds-nested-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+                        <circle cx="7" cy="7" r="2" fill="currentColor" opacity="0.5"/>
+                    </svg>
+                </span>`;
+            case 'nested-object':
+                return `<span class="s3-ds-nested" data-row-idx="${rowIdx}" data-col-key="${escapeHtml(colKey)}" title="Click to view nested object">
+                    <span class="s3-ds-nested-text">{...}</span>
+                    <svg class="s3-ds-nested-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+                        <circle cx="7" cy="7" r="2" fill="currentColor" opacity="0.5"/>
+                    </svg>
+                </span>`;
+            default:
+                return escapeHtml(String(value));
+        }
+    }
+
+    /**
+     * Calculate dynamic page size based on available viewport height
+     * @returns {number} Number of rows that fit in the viewport
+     */
+    function calculateDatasheetPageSize() {
+        const container = document.getElementById('s3-datasheet-container');
+        if (!container) return DATASHEET_PAGE_SIZE;
+
+        // Get available height for the table
+        const containerHeight = container.clientHeight;
+
+        // Estimate row height (padding + line height + border)
+        // Using 36px as a reasonable estimate based on CSS (0.5rem padding = 8px * 2 + ~20px line height)
+        const estimatedRowHeight = 36;
+
+        // Reserve space for header (estimate ~40px)
+        const headerHeight = 40;
+
+        // Calculate how many rows fit
+        const availableHeight = containerHeight - headerHeight;
+        const rowsFit = Math.floor(availableHeight / estimatedRowHeight);
+
+        // Return at least minimum page size, at most the calculated rows
+        return Math.max(DATASHEET_PAGE_SIZE, rowsFit);
+    }
+
+    /**
+     * Render datasheet view
+     */
+    function renderDatasheet() {
+        const container = document.getElementById('s3-datasheet');
+        if (!container || !state.datasheetData || !state.datasheetSchema) return;
+
+        // Calculate dynamic page size based on viewport
+        state.datasheetPageSize = calculateDatasheetPageSize();
+
+        const data = state.datasheetData;
+        const schema = state.datasheetSchema;
+        const page = state.datasheetPage;
+        const pageSize = state.datasheetPageSize;
+
+        // Calculate pagination
+        const totalRows = data.length;
+        const totalPages = Math.ceil(totalRows / pageSize);
+        const startRow = (page - 1) * pageSize;
+        const endRow = Math.min(startRow + pageSize, totalRows);
+        const visibleRows = data.slice(startRow, endRow);
+
+        // Update toolbar info
+        const rowCountEl = document.getElementById('s3-ds-row-count');
+        const colCountEl = document.getElementById('s3-ds-col-count');
+        const pageCurrentEl = document.getElementById('s3-ds-page-current');
+        const pageTotalEl = document.getElementById('s3-ds-page-total');
+
+        if (rowCountEl) rowCountEl.textContent = totalRows;
+        if (colCountEl) colCountEl.textContent = schema.columns.length;
+        if (pageCurrentEl) pageCurrentEl.textContent = page;
+        if (pageTotalEl) pageTotalEl.textContent = totalPages;
+
+        // Render table
+        const table = document.getElementById('s3-datasheet-table');
+        if (!table) return;
+
+        // Render header
+        const thead = document.getElementById('s3-ds-thead');
+        if (thead) {
+            const headerRow = document.createElement('tr');
+            schema.columns.forEach((col) => {
+                const th = document.createElement('th');
+                th.textContent = col.key;
+                th.title = `Type: ${col.type}`;
+                headerRow.appendChild(th);
+            });
+            thead.innerHTML = '';
+            thead.appendChild(headerRow);
+        }
+
+        // Render body
+        const tbody = document.getElementById('s3-ds-tbody');
+        if (tbody) {
+            tbody.innerHTML = '';
+            visibleRows.forEach((row, idx) => {
+                const tr = document.createElement('tr');
+                const actualRowIdx = startRow + idx;
+
+                schema.columns.forEach((col) => {
+                    const td = document.createElement('td');
+                    const value = row[col.key];
+                    td.innerHTML = renderCell(value, col.type, actualRowIdx, col.key);
+                    td.className = `s3-ds-cell s3-ds-type-${col.type}`;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Render aggregations footer
+        renderAggregations();
+
+        // Update pagination buttons
+        const prevBtn = document.getElementById('s3-ds-prev');
+        const nextBtn = document.getElementById('s3-ds-next');
+        if (prevBtn) prevBtn.disabled = page === 1;
+        if (nextBtn) nextBtn.disabled = page === totalPages;
+    }
+
+    /**
+     * Render aggregation footer
+     */
+    function renderAggregations() {
+        const tfoot = document.getElementById('s3-ds-tfoot');
+        if (!tfoot || !state.datasheetData || !state.datasheetSchema) return;
+
+        const { data, schema } = { data: state.datasheetData, schema: state.datasheetSchema };
+
+        const tr = document.createElement('tr');
+        tr.className = 's3-ds-agg-row';
+
+        schema.columns.forEach((col) => {
+            const td = document.createElement('td');
+            td.className = 's3-ds-agg-cell';
+
+            if (col.type === 'number') {
+                const values = data.map((row) => row[col.key]).filter((v) => typeof v === 'number');
+
+                if (values.length > 0) {
+                    const sum = values.reduce((a, b) => a + b, 0);
+                    const avg = sum / values.length;
+                    const formatter = TM.format?.formatNumber || ((n) => n.toLocaleString());
+
+                    td.innerHTML = `
+                        <div class="s3-ds-agg">
+                            <span title="Sum">Σ ${formatter(sum)}</span>
+                            <span title="Average">μ ${formatter(parseFloat(avg.toFixed(2)))}</span>
+                            <span title="Count">n=${values.length}</span>
+                        </div>
+                    `;
+                }
+            }
+
+            tr.appendChild(td);
+        });
+
+        tfoot.innerHTML = '';
+        tfoot.appendChild(tr);
+    }
+
+    /**
+     * Navigate to next page
+     */
+    function nextPage() {
+        if (!state.datasheetData) return;
+        const totalPages = Math.ceil(state.datasheetData.length / state.datasheetPageSize);
+        if (state.datasheetPage < totalPages) {
+            state.datasheetPage++;
+            renderDatasheet();
+        }
+    }
+
+    /**
+     * Navigate to previous page
+     */
+    function prevPage() {
+        if (state.datasheetPage > 1) {
+            state.datasheetPage--;
+            renderDatasheet();
+        }
+    }
+
+    /**
+     * Render tree view for JSON objects
+     */
+    function renderTreeView() {
+        const container = document.getElementById('s3-treeview');
+        if (!container || !state.treeviewData) return;
+
+        container.innerHTML = renderTreeNode(state.treeviewData, '', 'root');
+    }
+
+    /**
+     * Render a single tree node recursively
+     * @param {any} value - The value to render
+     * @param {string} path - The path to this node (e.g., 'data.items[0].name')
+     * @param {string} key - The key/index for this node
+     * @returns {string} - HTML string
+     */
+    function renderTreeNode(value, path, key) {
+        const fullPath = path ? `${path}.${key}` : key;
+        const isCollapsed = state.treeviewCollapsed.has(fullPath);
+
+        if (value === null) {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-null">null</span></div>`;
+        }
+
+        if (value === undefined) {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-undefined">undefined</span></div>`;
+        }
+
+        const type = typeof value;
+
+        if (type === 'boolean') {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-boolean">${value}</span></div>`;
+        }
+
+        if (type === 'number') {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-number">${value}</span></div>`;
+        }
+
+        if (type === 'string') {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-string">"${escapeHtml(value)}"</span></div>`;
+        }
+
+        if (Array.isArray(value)) {
+            const toggleIcon = isCollapsed ? '▶' : '▼';
+            const arrayLength = value.length;
+
+            // Check if array can be displayed as datasheet (all elements are objects)
+            const canShowDatasheet =
+                arrayLength > 0 &&
+                value.every((item) => typeof item === 'object' && item !== null && !Array.isArray(item));
+
+            let html = `<div class="tree-item tree-expandable">
+                <span class="tree-toggle" data-tree-path="${escapeHtml(fullPath)}">${toggleIcon}</span>
+                <span class="tree-key">${escapeHtml(key)}:</span>
+                <span class="tree-bracket">[</span><span class="tree-count">${arrayLength} items</span><span class="tree-bracket">]</span>`;
+
+            // Add datasheet link if applicable
+            if (canShowDatasheet) {
+                html += ` <a href="#" class="tree-datasheet-link" data-tree-path="${escapeHtml(fullPath)}" data-tree-array="true">(datasheet)</a>`;
+            }
+
+            html += '</div>';
+
+            if (!isCollapsed) {
+                html += '<div class="tree-children">';
+                value.forEach((item, index) => {
+                    html += renderTreeNode(item, fullPath, `[${index}]`);
+                });
+                html += '</div>';
+            }
+
+            return html;
+        }
+
+        if (type === 'object') {
+            const toggleIcon = isCollapsed ? '▶' : '▼';
+            const keys = Object.keys(value);
+            const keyCount = keys.length;
+
+            let html = `<div class="tree-item tree-expandable">
+                <span class="tree-toggle" data-tree-path="${escapeHtml(fullPath)}">${toggleIcon}</span>
+                <span class="tree-key">${escapeHtml(key)}:</span>
+                <span class="tree-bracket">{</span><span class="tree-count">${keyCount} keys</span><span class="tree-bracket">}</span>
+            </div>`;
+
+            if (!isCollapsed) {
+                html += '<div class="tree-children">';
+                keys.forEach((k) => {
+                    html += renderTreeNode(value[k], fullPath, k);
+                });
+                html += '</div>';
+            }
+
+            return html;
+        }
+
+        return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-unknown">${escapeHtml(String(value))}</span></div>`;
+    }
+
+    /**
+     * Toggle expand/collapse state of a tree node
+     * @param {string} path - The path to toggle
+     */
+    function toggleTreeNode(path) {
+        if (state.treeviewCollapsed.has(path)) {
+            state.treeviewCollapsed.delete(path);
+        } else {
+            state.treeviewCollapsed.add(path);
+        }
+        renderTreeView();
+    }
+
+    /**
+     * Open modal to view nested data
+     * @param {number} rowIdx - Row index
+     * @param {string} colKey - Column key
+     */
+    function openNestedModal(rowIdx, colKey) {
+        if (!state.datasheetData) return;
+
+        // Validate row index bounds
+        if (rowIdx < 0 || rowIdx >= state.datasheetData.length) {
+            console.error(`Invalid row index: ${rowIdx}, data length: ${state.datasheetData.length}`);
+            return;
+        }
+
+        // Validate row and column key exist
+        const row = state.datasheetData[rowIdx];
+        if (!row || !(colKey in row)) {
+            console.error(`Invalid column key: ${colKey} for row ${rowIdx}`);
+            return;
+        }
+
+        const value = row[colKey];
+        const modal = document.getElementById('s3-nested-modal');
+        const body = document.getElementById('s3-nested-body');
+        const title = document.getElementById('s3-nested-title');
+
+        if (!modal || !body) return;
+
+        // Set title
+        if (title) {
+            title.textContent = `Nested Data: ${colKey} [Row ${rowIdx + 1}]`;
+        }
+
+        // If nested array of objects → Render sub-datasheet
+        if (Array.isArray(value) && value.length > 0) {
+            const detect = detectDatasheetMode(JSON.stringify(value));
+            if (detect.isDatasheet) {
+                // Render as mini datasheet table
+                const schema = inferSchema(value);
+                let html = '<table class="s3-datasheet-table s3-nested-table"><thead><tr>';
+                schema.columns.forEach((col) => {
+                    html += `<th>${escapeHtml(col.key)}</th>`;
+                });
+                html += '</tr></thead><tbody>';
+                value.forEach((row, idx) => {
+                    html += '<tr>';
+                    schema.columns.forEach((col) => {
+                        html += `<td>${renderCell(row[col.key], col.type, idx, col.key)}</td>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+                body.innerHTML = html;
+            } else {
+                // Show as formatted JSON
+                body.innerHTML = `<pre class="s3-nested-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+            }
+        } else {
+            // Show as formatted JSON
+            body.innerHTML = `<pre class="s3-nested-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    /**
+     * Close nested modal
+     */
+    function closeNestedModal() {
+        const modal = document.getElementById('s3-nested-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
     }
 
     // =========================================================================
@@ -693,7 +1234,7 @@
         return nonPrintable / sample.length > 0.1; // >10% non-printable = binary
     }
 
-    async function openFile(bucket, key) {
+    async function openFile(bucket, key, options = {}) {
         const browser = document.getElementById('s3-browser');
         const viewer = document.getElementById('s3-viewer');
         const preview = document.getElementById('s3-preview');
@@ -766,8 +1307,41 @@
 
             state.originalContent = displayContent;
 
-            // Auto-switch to WYSIWYG mode for markdown files (unless empty)
-            if (ext === 'md' && displayContent.trim().length > 0) {
+            // Detect JSON type and choose appropriate viewer mode
+            if (ext === 'json') {
+                const jsonType = detectJsonType(displayContent);
+                if (jsonType.isArray) {
+                    // JSON arrays → datasheet mode (table view)
+                    const datasheetDetect = detectDatasheetMode(displayContent);
+                    if (datasheetDetect.isDatasheet) {
+                        state.datasheetData = datasheetDetect.data;
+                        state.datasheetSchema = inferSchema(datasheetDetect.data);
+                        state.datasheetPage = 1;
+                        state.editorMode = 'datasheet';
+                        state.treeviewData = null;
+                    } else {
+                        state.editorMode = 'source';
+                        state.datasheetData = null;
+                        state.datasheetSchema = null;
+                        state.treeviewData = null;
+                    }
+                } else if (jsonType.isObject) {
+                    // JSON objects → tree view mode
+                    state.treeviewData = jsonType.parsed;
+                    state.treeviewCollapsed = new Set();
+                    state.editorMode = 'treeview';
+                    state.datasheetData = null;
+                    state.datasheetSchema = null;
+                } else {
+                    // Invalid JSON → source mode
+                    state.editorMode = 'source';
+                    state.datasheetData = null;
+                    state.datasheetSchema = null;
+                    state.treeviewData = null;
+                }
+            }
+            // Auto-switch to WYSIWYG mode for non-empty markdown files
+            else if (shouldUseWysiwygMode(ext, displayContent)) {
                 state.editorMode = 'wysiwyg';
                 // Enable autosave for markdown files (unless read-only)
                 if (!isReadOnly) {
@@ -775,10 +1349,6 @@
                 }
             } else {
                 state.editorMode = 'source';
-                // Enable autosave for non-empty markdown files in source mode too
-                if (ext === 'md' && !isReadOnly) {
-                    state.autosave = true;
-                }
             }
 
             if (viewer) viewer.style.display = 'block';
@@ -835,7 +1405,15 @@
             }
 
             // Render in appropriate mode
-            if (state.editorMode === 'wysiwyg') {
+            if (state.editorMode === 'datasheet') {
+                // Render datasheet view
+                renderDatasheet();
+                updateEditorUI('datasheet');
+            } else if (state.editorMode === 'treeview') {
+                // Render tree view
+                renderTreeView();
+                updateEditorUI('treeview');
+            } else if (state.editorMode === 'wysiwyg') {
                 const wysiwyg = document.getElementById('s3-wysiwyg');
                 if (wysiwyg) {
                     if (TM.markdown) {
@@ -867,6 +1445,19 @@
             }
 
             updateModeToggleButton();
+            updateCloseButton();
+            updateViewToggleButton();
+
+            // Focus editor at position 0 when in source mode
+            if (state.editorMode === 'source' && editor && !isReadOnly) {
+                editor.focus();
+                editor.setSelectionRange(0, 0);
+            }
+
+            // Update browser history (unless restoring from history)
+            if (!options.skipHistory) {
+                updateBrowserHistory();
+            }
         } catch (err) {
             showToast(`Failed to load file: ${err.message}`, 'error');
             closeFile();
@@ -883,7 +1474,22 @@
 
         state.currentFile = null;
         state.isDirty = false;
+        updateCloseButton();
+        updateViewToggleButton();
         renderFileListing();
+
+        // Update browser history to reflect closed file
+        updateBrowserHistory();
+    }
+
+    /**
+     * Update close button disabled state based on whether a file is open
+     */
+    function updateCloseButton() {
+        const closeBtn = document.getElementById('s3-close-btn');
+        if (closeBtn) {
+            closeBtn.disabled = !state.currentFile;
+        }
     }
 
     /* istanbul ignore next */
@@ -953,6 +1559,13 @@
         const btn = document.getElementById('s3-view-toggle-btn');
         if (!btn) return;
 
+        // Hide view toggle when viewing a file, show when browsing
+        if (state.currentFile) {
+            btn.style.display = 'none';
+            return;
+        }
+        btn.style.display = 'inline-flex';
+
         const listIcon =
             '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z"/></svg>';
         const gridIcon =
@@ -971,13 +1584,66 @@
 
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
+        const ext = getExtension(state.currentFile.key);
 
-        // Toggle mode
-        state.editorMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
+        // For JSON files, allow toggling between source/datasheet/treeview modes
+        if (ext === 'json') {
+            if (state.editorMode === 'datasheet' || state.editorMode === 'treeview') {
+                // Switch from datasheet/treeview to source
+                state.editorMode = 'source';
+                if (editor) {
+                    editor.value = state.originalContent;
+                    // Update line numbers when switching back to source
+                    updateLineNumbers();
+                }
+            } else {
+                // Switch from source to appropriate view mode based on JSON type
+                const jsonType = detectJsonType(editor.value);
+                if (jsonType.isArray) {
+                    // JSON arrays → datasheet mode
+                    const detect = detectDatasheetMode(editor.value);
+                    if (detect.isDatasheet) {
+                        state.editorMode = 'datasheet';
+                        state.datasheetData = detect.data;
 
-        // Render preview from current editor content
-        if (state.editorMode === 'wysiwyg' && wysiwyg && editor && TM.markdown) {
-            wysiwyg.innerHTML = TM.markdown.renderMarkdown(editor.value);
+                        // Cache schema inference: only recompute if content changed
+                        // or if we don't have a cached schema
+                        const contentUnchanged = editor.value === state.originalContent;
+                        if (!state.datasheetSchema || !contentUnchanged) {
+                            state.datasheetSchema = inferSchema(detect.data);
+                        }
+
+                        state.datasheetPage = 1;
+                        state.treeviewData = null;
+                        renderDatasheet();
+                    } else {
+                        const reason = detect.reason || 'must be a JSON array of objects';
+                        showToast(`Cannot render as datasheet: ${reason}`, 'error');
+                        return;
+                    }
+                } else if (jsonType.isObject) {
+                    // JSON objects → tree view mode
+                    state.editorMode = 'treeview';
+                    state.treeviewData = jsonType.parsed;
+                    state.treeviewCollapsed = new Set();
+                    state.datasheetData = null;
+                    state.datasheetSchema = null;
+                    renderTreeView();
+                } else {
+                    showToast('Invalid JSON - cannot visualize', 'error');
+                    return;
+                }
+            }
+        }
+        // For markdown files with WYSIWYG mode
+        else if (ext === 'md') {
+            // Toggle between source and wysiwyg
+            state.editorMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
+
+            // Render preview from current editor content
+            if (state.editorMode === 'wysiwyg' && wysiwyg && editor && TM.markdown) {
+                wysiwyg.innerHTML = TM.markdown.renderMarkdown(editor.value);
+            }
         }
 
         // Update UI
@@ -989,23 +1655,53 @@
     function updateEditorUI(mode) {
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
+        const datasheet = document.getElementById('s3-datasheet');
+        const treeview = document.getElementById('s3-treeview');
         const editorWrap = document.querySelector('.s3-editor-wrap');
         const saveBtn = document.getElementById('s3-save-btn');
         const autosaveLabel = document.querySelector('.s3-autosave-label');
 
         if (!editor || !wysiwyg) return;
 
-        if (mode === 'wysiwyg') {
+        if (mode === 'datasheet') {
+            editor.style.display = 'none';
+            wysiwyg.style.display = 'none';
+            if (treeview) treeview.style.display = 'none';
+            if (datasheet) datasheet.style.display = 'flex';
+            if (editorWrap) editorWrap.classList.add('datasheet-mode');
+            if (editorWrap) editorWrap.classList.remove('treeview-mode');
+            // Hide save and autosave in datasheet mode (view-only)
+            if (saveBtn) saveBtn.style.display = 'none';
+            if (autosaveLabel) autosaveLabel.style.display = 'none';
+        } else if (mode === 'treeview') {
+            editor.style.display = 'none';
+            wysiwyg.style.display = 'none';
+            if (datasheet) datasheet.style.display = 'none';
+            if (treeview) treeview.style.display = 'block';
+            if (editorWrap) editorWrap.classList.add('treeview-mode');
+            if (editorWrap) editorWrap.classList.remove('datasheet-mode');
+            // Hide save and autosave in tree view mode (view-only)
+            if (saveBtn) saveBtn.style.display = 'none';
+            if (autosaveLabel) autosaveLabel.style.display = 'none';
+        } else if (mode === 'wysiwyg') {
             editor.style.display = 'none';
             wysiwyg.style.display = 'block';
+            if (datasheet) datasheet.style.display = 'none';
+            if (treeview) treeview.style.display = 'none';
             if (editorWrap) editorWrap.classList.add('wysiwyg-mode');
+            if (editorWrap) editorWrap.classList.remove('datasheet-mode');
+            if (editorWrap) editorWrap.classList.remove('treeview-mode');
             // Hide save and autosave in preview mode (read-only)
             if (saveBtn) saveBtn.style.display = 'none';
             if (autosaveLabel) autosaveLabel.style.display = 'none';
         } else {
             editor.style.display = 'block';
             wysiwyg.style.display = 'none';
+            if (datasheet) datasheet.style.display = 'none';
+            if (treeview) treeview.style.display = 'none';
             if (editorWrap) editorWrap.classList.remove('wysiwyg-mode');
+            if (editorWrap) editorWrap.classList.remove('datasheet-mode');
+            if (editorWrap) editorWrap.classList.remove('treeview-mode');
             // Show save and autosave in source mode (unless read-only)
             if (saveBtn && !state.writable) {
                 saveBtn.style.display = 'none';
@@ -1025,17 +1721,58 @@
         const btn = document.getElementById('s3-mode-toggle-btn');
         if (!btn) return;
 
-        // Update icon and label based on current mode
-        if (state.editorMode === 'wysiwyg') {
-            // Currently in preview mode, show "Source" button with edit icon
-            btn.title = 'Switch to source mode';
-            btn.innerHTML =
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
-        } else {
-            // Currently in source mode, show "Preview" button with magnifying glass icon
-            btn.title = 'Switch to preview mode';
-            btn.innerHTML =
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span id="s3-mode-label">Preview</span>';
+        const ext = state.currentFile ? getExtension(state.currentFile.key) : '';
+
+        // For JSON files, show appropriate toggle based on JSON type
+        if (ext === 'json') {
+            btn.style.display = 'inline-flex'; // Make sure button is visible
+            if (state.editorMode === 'datasheet' || state.editorMode === 'treeview') {
+                // Currently in visual mode, show "Source" button
+                btn.title = 'Switch to source mode';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
+            } else {
+                // Currently in source mode, determine button based on JSON type
+                const editor = document.getElementById('s3-editor');
+                if (editor?.value) {
+                    const jsonType = detectJsonType(editor.value);
+                    if (jsonType.isArray) {
+                        // JSON array → show "Datasheet" button
+                        btn.title = 'Switch to datasheet view';
+                        btn.innerHTML =
+                            '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3v18h18V3H3zm16 16H5V5h14v14zm-2-12H7v2h10V7zm0 4H7v2h10v-2zm0 4H7v2h10v-2z"/></svg><span id="s3-mode-label">Datasheet</span>';
+                    } else if (jsonType.isObject) {
+                        // JSON object → show "Tree View" button
+                        btn.title = 'Switch to tree view';
+                        btn.innerHTML =
+                            '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l-5.5 9h11L12 2zm0 3.84L13.93 9h-3.87L12 5.84zM17.5 13c-2.49 0-4.5 2.01-4.5 4.5s2.01 4.5 4.5 4.5 4.5-2.01 4.5-4.5-2.01-4.5-4.5-4.5zm0 7c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM3 21.5h8v-8H3v8zm2-6h4v4H5v-4z"/></svg><span id="s3-mode-label">Tree View</span>';
+                    } else {
+                        // Invalid JSON, hide button
+                        btn.style.display = 'none';
+                    }
+                } else {
+                    btn.style.display = 'none';
+                }
+            }
+        }
+        // For markdown files with WYSIWYG mode
+        else if (ext === 'md') {
+            btn.style.display = 'inline-flex'; // Make sure button is visible
+            if (state.editorMode === 'wysiwyg') {
+                // Currently in preview mode, show "Source" button with edit icon
+                btn.title = 'Switch to source mode';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
+            } else {
+                // Currently in source mode, show "Preview" button with magnifying glass icon
+                btn.title = 'Switch to preview mode';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span id="s3-mode-label">Preview</span>';
+            }
+        }
+        // For other files, hide the toggle button
+        else {
+            btn.style.display = 'none';
         }
     }
 
@@ -1060,10 +1797,122 @@
     }
 
     // =========================================================================
+    // Browser History Management
+    // =========================================================================
+
+    /**
+     * Parse URL hash parameters
+     * Example: #tab=data&s3_bucket=mybucket&s3_path=folder/
+     */
+    function parseHashParams() {
+        const hash = window.location.hash.slice(1); // Remove '#'
+        const params = {};
+        if (!hash) return params;
+
+        hash.split('&').forEach((param) => {
+            const [key, value] = param.split('=');
+            if (key && value !== undefined) {
+                params[key] = decodeURIComponent(value);
+            }
+        });
+        return params;
+    }
+
+    /**
+     * Build URL hash from current state
+     */
+    function buildHashFromState(tabName) {
+        const params = new URLSearchParams();
+
+        // Always include tab
+        if (tabName) {
+            params.set('tab', tabName);
+        }
+
+        // Include S3 state if navigating in S3
+        if (state.currentFile) {
+            // Viewing a file
+            params.set('s3_bucket', state.currentFile.bucket);
+            params.set('s3_file', state.currentFile.key);
+        } else if (state.currentBucket) {
+            // Browsing a bucket/folder
+            params.set('s3_bucket', state.currentBucket);
+            if (state.currentPath) {
+                params.set('s3_path', state.currentPath);
+            }
+        }
+
+        return params.toString();
+    }
+
+    /**
+     * Update browser history with current S3 state
+     * @param {boolean} replace - Use replaceState instead of pushState
+     */
+    function updateBrowserHistory(replace = false) {
+        // Get current tab from DOM
+        const activeTab = document.querySelector('#main-tabs .tab.active');
+        const tabName = activeTab ? activeTab.dataset.tab : 'app';
+
+        const hash = buildHashFromState(tabName);
+        const url = hash ? `#${hash}` : '#';
+
+        if (replace) {
+            window.history.replaceState(null, '', url);
+        } else {
+            window.history.pushState(null, '', url);
+        }
+    }
+
+    /**
+     * Restore S3 state from URL hash parameters
+     */
+    async function restoreFromHistory() {
+        const params = parseHashParams();
+
+        // Restore tab first (if present)
+        if (params.tab && typeof window.switchTab === 'function') {
+            window.switchTab(params.tab, { skipHistory: true });
+        }
+
+        // Restore S3 state
+        if (params.s3_bucket) {
+            if (params.s3_file) {
+                // Restore file view - but only if not already viewing this file
+                if (state.currentFile?.bucket !== params.s3_bucket || state.currentFile?.key !== params.s3_file) {
+                    await openFile(params.s3_bucket, params.s3_file, { skipHistory: true });
+                }
+            } else {
+                // Restore bucket/folder view - but only if not already in this location
+                const path = params.s3_path || '';
+                if (state.currentBucket !== params.s3_bucket || state.currentPath !== path || state.currentFile) {
+                    await navigateTo(params.s3_bucket, path, { skipHistory: true });
+                }
+            }
+        } else {
+            // No S3 context in URL - return to bucket list if needed
+            if (state.currentFile || state.currentBucket) {
+                state.currentFile = null;
+                state.currentBucket = null;
+                state.currentPath = '';
+                state.isDirty = false;
+                await renderFileListing();
+            }
+        }
+    }
+
+    /**
+     * Handle browser back/forward button
+     */
+    async function handlePopState() {
+        await restoreFromHistory();
+    }
+
+    // =========================================================================
     // Navigation
     // =========================================================================
 
-    async function navigateTo(bucket, path) {
+    async function navigateTo(bucket, path, options = {}) {
         if (state.isDirty) {
             const fileName = state.currentFile.key.split('/').pop();
             if (!confirm(`Save changes to "${fileName}" before navigating away?`)) {
@@ -1084,7 +1933,13 @@
         const bucketInfo = state.buckets.find((b) => b.name === bucket);
         state.writable = bucketInfo ? bucketInfo.writable : true;
 
+        updateCloseButton();
         await renderFileListing();
+
+        // Update browser history (unless restoring from history)
+        if (!options.skipHistory) {
+            updateBrowserHistory();
+        }
     }
 
     // =========================================================================
@@ -1599,17 +2454,44 @@
         if (!confirm(confirmMsg)) return;
 
         try {
+            let deletedCount = 0;
             for (const itemId of state.selectedItems) {
                 const item = state.currentItems.find((i) => (i.key || i.name) === itemId);
                 if (!item || item.isBucket) continue;
 
-                const key = item.key || item.name;
-                await deleteObject(state.currentBucket, key);
+                // Handle folder deletion
+                if (item.isFolder) {
+                    const folderPrefix = item.key; // Already ends with '/'
+
+                    // Check if folder is empty (only contains .folder marker or nothing)
+                    const objects = await fetchObjects(state.currentBucket, folderPrefix);
+                    const nonMarkerObjects = objects.filter((obj) => !obj.key.endsWith('/.folder'));
+
+                    if (nonMarkerObjects.length > 0) {
+                        showToast(
+                            `Cannot delete "${item.name}" - folder contains ${nonMarkerObjects.length} item${nonMarkerObjects.length > 1 ? 's' : ''}`,
+                            'error',
+                        );
+                        continue;
+                    }
+
+                    // Delete the .folder marker if it exists
+                    const markerKey = `${folderPrefix}.folder`;
+                    await deleteObject(state.currentBucket, markerKey);
+                    deletedCount++;
+                } else {
+                    // Regular file deletion
+                    const key = item.key || item.name;
+                    await deleteObject(state.currentBucket, key);
+                    deletedCount++;
+                }
             }
 
             state.selectedItems.clear();
             updateSelectionUI();
-            showToast(`Deleted ${count} item${count > 1 ? 's' : ''}`, 'success');
+            if (deletedCount > 0) {
+                showToast(`Deleted ${deletedCount} item${deletedCount > 1 ? 's' : ''}`, 'success');
+            }
             await renderFileListing();
         } catch (err) {
             console.error('Delete failed:', err);
@@ -1660,6 +2542,116 @@
         });
     }
 
+    /**
+     * Initialize datasheet event delegation
+     * Handles clicks on nested data cells without inline onclick handlers (XSS prevention)
+     */
+    function initDatasheetEvents() {
+        const datasheetTable = document.getElementById('s3-datasheet-table');
+        if (!datasheetTable) return;
+
+        // Use event delegation for nested data clicks (prevents XSS via onclick)
+        datasheetTable.addEventListener('click', (e) => {
+            // Find the nested data element (in case user clicked on child element)
+            const nestedElement = e.target.closest('.s3-ds-nested');
+            if (!nestedElement) return;
+
+            // Get row and column data from data attributes
+            const rowIdx = Number.parseInt(nestedElement.dataset.rowIdx, 10);
+            const colKey = nestedElement.dataset.colKey;
+
+            // Validate inputs before calling openNestedModal
+            if (Number.isNaN(rowIdx) || !colKey) return;
+
+            openNestedModal(rowIdx, colKey);
+        });
+    }
+
+    /**
+     * Initialize treeview event delegation
+     * Handles clicks on tree toggles and datasheet links without inline onclick handlers
+     */
+    function initTreeviewEvents() {
+        const treeview = document.getElementById('s3-treeview');
+        if (!treeview) return;
+
+        // Use event delegation for tree toggle and datasheet link clicks
+        treeview.addEventListener('click', (e) => {
+            // Handle tree toggle clicks
+            const toggleElement = e.target.closest('.tree-toggle');
+            if (toggleElement) {
+                const path = toggleElement.dataset.treePath;
+                if (path) {
+                    toggleTreeNode(path);
+                }
+                return;
+            }
+
+            // Handle datasheet link clicks
+            const datasheetLink = e.target.closest('.tree-datasheet-link');
+            if (datasheetLink) {
+                e.preventDefault();
+                const path = datasheetLink.dataset.treePath;
+                if (path && datasheetLink.dataset.treeArray === 'true') {
+                    openArrayAsDatasheet(path);
+                }
+                return;
+            }
+        });
+    }
+
+    /**
+     * Open a tree array as datasheet view
+     * @param {string} path - The path to the array in the tree
+     */
+    function openArrayAsDatasheet(path) {
+        if (!state.treeviewData) return;
+
+        // Navigate to the array value using the path
+        const pathParts = path.split('.').filter((p) => p && p !== 'root');
+        let value = state.treeviewData;
+
+        for (const part of pathParts) {
+            if (part.startsWith('[') && part.endsWith(']')) {
+                // Array index
+                const index = Number.parseInt(part.slice(1, -1), 10);
+                value = value[index];
+            } else {
+                // Object key
+                value = value[part];
+            }
+
+            if (value === undefined) {
+                showToast('Array not found', 'error');
+                return;
+            }
+        }
+
+        // Verify it's an array
+        if (!Array.isArray(value)) {
+            showToast('Selected item is not an array', 'error');
+            return;
+        }
+
+        // Check if it can be displayed as datasheet
+        const detect = detectDatasheetMode(JSON.stringify(value));
+        if (!detect.isDatasheet) {
+            const reason = detect.reason || 'must be a JSON array of objects';
+            showToast(`Cannot render as datasheet: ${reason}`, 'error');
+            return;
+        }
+
+        // Switch to datasheet mode
+        state.editorMode = 'datasheet';
+        state.datasheetData = detect.data;
+        state.datasheetSchema = inferSchema(detect.data);
+        state.datasheetPage = 1;
+        state.treeviewData = null;
+        renderDatasheet();
+        updateEditorUI('datasheet');
+        updateModeToggleButton();
+    }
+
     /* istanbul ignore next */
     async function init() {
         const editor = document.getElementById('s3-editor');
@@ -1671,7 +2663,13 @@
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
+        initDatasheetEvents();
+        initTreeviewEvents();
         updateViewToggleButton();
+        updateCloseButton();
+
+        // Listen for browser back/forward navigation
+        window.addEventListener('popstate', handlePopState);
 
         // Listen for panel data changes to refresh S3 explorer
         // (user might be browsing state metadata like filter rules, groups, etc.)
@@ -1684,7 +2682,25 @@
             });
         }
 
-        await renderFileListing();
+        // Listen for window resize to recalculate datasheet page size
+        if (typeof TM !== 'undefined' && TM.utils && TM.utils.debounce) {
+            const handleResize = TM.utils.debounce(() => {
+                // Only re-render if currently in datasheet mode
+                if (state.editorMode === 'datasheet' && state.datasheetData) {
+                    renderDatasheet();
+                }
+            }, 200); // Debounce by 200ms
+
+            window.addEventListener('resize', handleResize);
+        }
+
+        // Restore state from URL hash on initial load
+        const params = parseHashParams();
+        if (params.s3_bucket || params.s3_file) {
+            await restoreFromHistory();
+        } else {
+            await renderFileListing();
+        }
     }
 
     // =========================================================================
@@ -1717,6 +2733,13 @@
         toggleView,
         updateViewToggleButton,
         toggleEditorMode,
+        // Datasheet
+        nextPage,
+        prevPage,
+        openNestedModal,
+        closeNestedModal,
+        // Tree view
+        toggleTreeNode,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,
@@ -1728,6 +2751,10 @@
             getIconSVG,
             buildItemMetadata,
             buildOnclickHandler,
+            shouldUseWysiwygMode,
+            detectJsonType,
+            detectDatasheetMode,
+            inferSchema,
         },
     };
 });

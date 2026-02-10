@@ -41,6 +41,9 @@
     --viz-edge-online: rgb(88 166 255 / 0.4);
     --viz-edge-offline: rgb(248 81 73 / 0.3);
     --viz-label-text: #e6edf3;
+
+    /* Font stacks */
+    --font-mono: ui-monospace, sfmono-regular, 'SF Mono', menlo, consolas, 'Courier New', monospace;
 }
 
 * {
@@ -770,7 +773,7 @@ code {
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
     font-size: 0.8rem;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
 }
 
 table {
@@ -1280,7 +1283,7 @@ a.logs-container {
     display: block;
     height: 300px;
     overflow: auto;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.75rem;
     line-height: 1.4;
     text-decoration: none;
@@ -1653,6 +1656,12 @@ a.logs-container {
 
 .s3-btn:active {
     background: var(--color-border-secondary);
+}
+
+.s3-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 /* Primary button (green) */
@@ -2070,7 +2079,7 @@ a.logs-container {
     border-bottom: 1px solid var(--color-accent-orange);
     color: var(--color-accent-orange);
     padding: 0.25rem 0.75rem;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.15em;
@@ -2095,7 +2104,7 @@ a.logs-container {
     padding: 0.75rem 0;
     background: var(--color-bg-secondary);
     border-right: 1px solid var(--color-border-primary);
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.5;
     color: var(--color-text-secondary);
@@ -2117,7 +2126,7 @@ a.logs-container {
     outline: none;
     background: var(--color-bg-primary);
     color: var(--color-text-primary);
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.5;
     padding: 0.75rem;
@@ -2242,7 +2251,7 @@ a.logs-container {
     color: var(--color-accent-orange);
     padding: 0.15rem 0.4rem;
     border-radius: 2px;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.85em;
     letter-spacing: 0.01em;
     border: 1px solid var(--color-border-secondary);
@@ -2652,4 +2661,327 @@ a.logs-container {
 #peers th:nth-child(7),
 #peers td:nth-child(7) {
     text-align: right;
+}
+
+/* =========================================================================
+   S3 Datasheet Viewer Styles
+   ========================================================================= */
+
+/* Datasheet container */
+.s3-datasheet {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--color-bg-primary);
+    overflow: hidden;
+}
+
+/* Toolbar */
+.s3-datasheet-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+}
+
+.s3-datasheet-info {
+    display: inline-flex;
+    gap: 0.5rem;
+}
+
+/* Table container */
+.s3-datasheet-container {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+/* Table */
+.s3-datasheet-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+    table-layout: auto;
+}
+
+.s3-datasheet-table thead {
+    position: sticky;
+    top: 0;
+    background: var(--color-bg-secondary);
+    z-index: 10;
+}
+
+.s3-datasheet-table th {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border-primary);
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-align: left;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.s3-datasheet-table td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border-primary);
+    color: var(--color-text-primary);
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.s3-datasheet-table tbody tr:hover {
+    background: var(--color-bg-tertiary);
+}
+
+/* Cell type styling */
+.s3-ds-type-number {
+    text-align: right;
+}
+
+.s3-ds-type-boolean {
+    text-align: center;
+}
+
+/* Special value formatting */
+.s3-ds-null {
+    color: var(--color-text-tertiary);
+    font-style: italic;
+}
+
+.s3-ds-number {
+    font-family: var(--font-mono);
+}
+
+.s3-ds-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--panel-border-radius);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.s3-ds-badge-true {
+    background: rgb(46 160 67 / 0.1);
+    color: var(--color-accent-green);
+}
+
+.s3-ds-badge-false {
+    background: rgb(229 62 62 / 0.1);
+    color: var(--color-accent-red);
+}
+
+/* Nested data */
+.s3-ds-nested {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    color: var(--color-accent-blue);
+}
+
+.s3-ds-nested:hover {
+    text-decoration: underline;
+}
+
+.s3-ds-nested-text {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
+.s3-ds-nested-icon {
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 0.25rem;
+    color: var(--color-text-secondary);
+}
+
+/* Aggregation footer */
+.s3-ds-agg-row {
+    background: var(--color-bg-tertiary);
+    border-top: 2px solid var(--color-border-primary);
+}
+
+.s3-ds-agg-cell {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+.s3-ds-agg {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.s3-ds-agg span {
+    font-family: var(--font-mono);
+}
+
+/* Pagination */
+.s3-datasheet-pagination {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg-secondary);
+    border-top: 1px solid var(--color-border-primary);
+}
+
+.s3-datasheet-pagination .s3-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Nested modal content */
+.s3-nested-table {
+    font-size: 0.8125rem;
+}
+
+.s3-nested-json {
+    background: var(--color-bg-tertiary);
+    padding: 1rem;
+    border-radius: 2px;
+    border: 1px solid var(--color-border-primary);
+    overflow-x: auto;
+    max-height: 400px;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--color-text-primary);
+    margin: 0;
+}
+
+/* Modal size variants */
+.modal-large .modal-content {
+    max-width: 900px;
+    width: 90%;
+}
+
+/* Datasheet mode adjustments */
+.s3-editor-wrap.datasheet-mode {
+    display: flex;
+    flex-direction: column;
+}
+
+.s3-editor-wrap.datasheet-mode .s3-line-numbers {
+    display: none;
+}
+
+.s3-editor-wrap.datasheet-mode .s3-datasheet {
+    display: flex;
+}
+
+/* Tree view mode adjustments */
+.s3-editor-wrap.treeview-mode {
+    display: flex;
+    flex-direction: column;
+}
+
+.s3-editor-wrap.treeview-mode .s3-line-numbers {
+    display: none;
+}
+
+.s3-editor-wrap.treeview-mode .s3-treeview {
+    display: block;
+}
+
+/* Tree view styling - similar to browser DevTools */
+.s3-treeview {
+    flex: 1;
+    overflow: auto;
+    padding: 1rem;
+    background: var(--color-bg-primary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1.6;
+}
+
+.tree-item {
+    margin-left: 0;
+    padding: 0.125rem 0;
+}
+
+.tree-expandable {
+    cursor: pointer;
+}
+
+.tree-toggle {
+    display: inline-block;
+    width: 1rem;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.tree-toggle:hover {
+    color: var(--color-text-primary);
+}
+
+.tree-key {
+    color: var(--color-text-primary);
+    margin-right: 0.25rem;
+}
+
+.tree-bracket {
+    color: var(--color-text-secondary);
+    margin: 0 0.25rem;
+}
+
+.tree-count {
+    color: var(--color-text-secondary);
+    font-style: italic;
+    font-size: 0.55rem;
+}
+
+.tree-children {
+    margin-left: 1.5rem;
+    border-left: 1px solid rgb(139 148 158 / 0.2);
+    padding-left: 0.5rem;
+}
+
+/* Value types - subdued colors matching UI theme */
+.tree-string {
+    color: var(--color-accent-green);
+}
+
+.tree-number {
+    color: var(--color-accent-blue);
+}
+
+.tree-boolean {
+    color: var(--color-accent-orange);
+}
+
+.tree-null {
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.tree-undefined {
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.tree-unknown {
+    color: var(--color-accent-red);
+}
+
+/* Datasheet link in tree view */
+.tree-datasheet-link {
+    color: var(--color-accent-blue);
+    text-decoration: none;
+    cursor: pointer;
+    margin-left: 0.5rem;
+    font-size: 0.875rem;
+    font-variant: small-caps;
+    letter-spacing: 0.05em;
+}
+
+.tree-datasheet-link:hover {
+    text-decoration: underline;
 }

@@ -25,6 +25,7 @@ type BucketMeta struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	Owner        string     `json:"owner"`                   // User ID who created the bucket
 	TombstonedAt *time.Time `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
+	SizeBytes    int64      `json:"size_bytes"`              // Total size of non-tombstoned objects (updated incrementally)
 }
 
 // IsTombstoned returns true if the bucket has been soft-deleted.
@@ -438,6 +439,78 @@ func (s *Store) ListBuckets() ([]BucketMeta, error) {
 	return buckets, nil
 }
 
+// CalculateBucketSize calculates the total size of all objects in a bucket (including tombstoned).
+// Tombstoned objects still consume disk space until purged, so they count toward size.
+// Returns the total size in bytes, or 0 if the bucket doesn't exist or is empty.
+func (s *Store) CalculateBucketSize(bucketName string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Verify bucket exists
+	bucketMeta, err := s.getBucketMeta(bucketName)
+	if err != nil {
+		if errors.Is(err, ErrBucketNotFound) {
+			return 0, nil // Bucket doesn't exist, size is 0
+		}
+		return 0, err
+	}
+
+	// Return cached size if available (updated incrementally)
+	return bucketMeta.SizeBytes, nil
+}
+
+// CalculatePrefixSize calculates the total size of all objects under a prefix (including tombstoned).
+// This is used for displaying folder sizes in the S3 explorer.
+// Returns the total size in bytes.
+func (s *Store) CalculatePrefixSize(bucketName, prefix string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Verify bucket exists
+	if _, err := s.getBucketMeta(bucketName); err != nil {
+		return 0, err
+	}
+
+	var totalSize int64
+
+	// Iterate through all objects with the given prefix
+	marker := ""
+	for {
+		objects, isTruncated, nextMarker, err := s.ListObjects(bucketName, prefix, marker, 1000)
+		if err != nil {
+			return 0, fmt.Errorf("list objects: %w", err)
+		}
+
+		// Sum sizes of ALL objects (including tombstoned - they still consume disk space)
+		for _, obj := range objects {
+			totalSize += obj.Size
+		}
+
+		if !isTruncated {
+			break
+		}
+		marker = nextMarker
+	}
+
+	return totalSize, nil
+}
+
+// updateBucketSize updates the cached bucket size by delta.
+// Must be called with write lock held.
+func (s *Store) updateBucketSize(bucketName string, delta int64) error {
+	bucketMeta, err := s.getBucketMeta(bucketName)
+	if err != nil {
+		return err
+	}
+
+	bucketMeta.SizeBytes += delta
+	if bucketMeta.SizeBytes < 0 {
+		bucketMeta.SizeBytes = 0 // Safety: prevent negative sizes
+	}
+
+	return s.writeBucketMeta(bucketName, bucketMeta)
+}
+
 // PutObject writes an object to a bucket using CDC chunks stored in CAS.
 // Archives the current version before overwriting (for version history).
 func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (*ObjectMeta, error) {
@@ -572,6 +645,16 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 
 	// Prune expired versions (lazy cleanup)
 	s.pruneExpiredVersions(bucket, key)
+
+	// Update bucket size (new object adds to size, replacement adjusts delta)
+	sizeDelta := written - oldSize
+	if sizeDelta != 0 {
+		if err := s.updateBucketSize(bucket, sizeDelta); err != nil {
+			// Log error but don't fail the put operation
+			// Size will be recalculated on next server restart
+			_ = err
+		}
+	}
 
 	return &objMeta, nil
 }
@@ -797,6 +880,14 @@ func (s *Store) PurgeObject(bucket, key string) error {
 	// Release quota
 	if s.quota != nil && meta.Size > 0 {
 		s.quota.Release(bucket, meta.Size)
+	}
+
+	// Decrement bucket size (object is actually being removed now)
+	if meta.Size > 0 {
+		if err := s.updateBucketSize(bucket, -meta.Size); err != nil {
+			// Log error but don't fail the purge operation
+			_ = err
+		}
 	}
 
 	return nil

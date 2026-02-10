@@ -1081,6 +1081,7 @@ func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
 type FileShareResponse struct {
 	*s3.FileShare
 	OwnerName string `json:"owner_name,omitempty"` // Human-readable owner name (looked up from peer ID)
+	SizeBytes int64  `json:"size_bytes"`           // Actual size of all objects in the share bucket
 }
 
 // handleSharesList returns all file shares.
@@ -1092,12 +1093,17 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 
 	shares := s.fileShareMgr.List()
 
-	// Convert shares to response format with owner names from cache
+	// Convert shares to response format with owner names and calculated sizes
 	response := make([]FileShareResponse, len(shares))
 	for i, share := range shares {
+		// Calculate bucket size (returns 0 on error, which is fine for display)
+		bucketName := s.fileShareMgr.BucketName(share.Name)
+		sizeBytes, _ := s.s3Store.CalculateBucketSize(bucketName)
+
 		response[i] = FileShareResponse{
 			FileShare: share,
 			OwnerName: s.getPeerName(share.Owner),
+			SizeBytes: sizeBytes,
 		}
 	}
 
@@ -1840,6 +1846,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	result := make([]S3ObjectInfo, 0)
 	prefixSet := make(map[string]bool)
+	prefixSizes := make(map[string]int64) // Track folder sizes for batch calculation
 
 	for _, obj := range objects {
 		// Handle delimiter (folder grouping)
@@ -1850,10 +1857,8 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 				commonPrefix := prefix + keyAfterPrefix[:idx+1]
 				if !prefixSet[commonPrefix] {
 					prefixSet[commonPrefix] = true
-					result = append(result, S3ObjectInfo{
-						Key:      commonPrefix,
-						IsPrefix: true,
-					})
+					// Size will be calculated below
+					prefixSizes[commonPrefix] = 0
 				}
 				continue
 			}
@@ -1873,6 +1878,22 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 			info.TombstonedAt = obj.TombstonedAt.Format(time.RFC3339)
 		}
 		result = append(result, info)
+	}
+
+	// Calculate sizes for all folders (prefixes) found
+	for commonPrefix := range prefixSizes {
+		size, err := s.s3Store.CalculatePrefixSize(bucket, commonPrefix)
+		if err != nil {
+			size = 0 // Gracefully handle errors - show 0 size rather than failing
+		}
+		prefixSizes[commonPrefix] = size
+
+		// Add folder to result with calculated size
+		result = append(result, S3ObjectInfo{
+			Key:      commonPrefix,
+			Size:     size,
+			IsPrefix: true,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
