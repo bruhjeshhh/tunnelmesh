@@ -607,7 +607,7 @@ async function fetchDnsRecords() {
 
         // Sort records by hostname
         state.currentDnsRecords = (data.records || []).sort((a, b) =>
-            a.hostname.localeCompare(b.hostname)
+            a.hostname.localeCompare(b.hostname),
         );
 
         renderDnsTable();
