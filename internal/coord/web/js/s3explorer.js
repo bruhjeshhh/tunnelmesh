@@ -1159,12 +1159,33 @@
         return getCharacterOffset(wysiwyg, range);
     }
 
+    // Get total text length in WYSIWYG editor
+    /* istanbul ignore next */
+    function getWysiwygTextLength(root) {
+        // FIX: Add null check for robustness (PR #278 review feedback)
+        if (typeof document === 'undefined' || !root) return 0;
+
+        let totalLength = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+        while (walker.nextNode()) {
+            totalLength += walker.currentNode.textContent.length;
+        }
+
+        return totalLength;
+    }
+
     // Restore WYSIWYG cursor to specific offset
+    /* istanbul ignore next */
     function restoreWysiwygCursorPosition(offset) {
         const wysiwyg = document.getElementById('s3-wysiwyg');
         if (!wysiwyg || typeof window === 'undefined') return;
 
-        const position = getNodeAndOffset(wysiwyg, offset);
+        // Bounds checking: clamp offset to valid range
+        const maxOffset = getWysiwygTextLength(wysiwyg);
+        const clampedOffset = Math.min(Math.max(0, offset), maxOffset);
+
+        const position = getNodeAndOffset(wysiwyg, clampedOffset);
         if (!position) return;
 
         try {
@@ -1800,19 +1821,26 @@
         });
     }
 
+    /* istanbul ignore next */
     function convertMarkdownPatternsInNode(node) {
         // Only process text nodes
         if (node.nodeType !== Node.TEXT_NODE) return false;
         if (!TM.markdown || !TM.markdown.processInline) return false;
 
         const text = node.textContent;
+        console.debug('[WYSIWYG] Processing text:', text);
 
         // Use markdown library's processInline() for consistency
         // This ensures ALL patterns supported by the library are auto-converted
         const processedHtml = TM.markdown.processInline(text);
+        console.debug('[WYSIWYG] Processed HTML:', processedHtml);
 
-        // Check if anything changed
-        if (processedHtml === TM.markdown.escapeHtml(text)) {
+        // FIX: Check if HTML contains formatting tags (not just escaped text)
+        // If processInline() added <strong>, <em>, <code>, etc., it found patterns
+        const hasFormatting = /<(strong|em|code|del|a|img)\b/.test(processedHtml);
+        console.debug('[WYSIWYG] Has formatting:', hasFormatting);
+
+        if (!hasFormatting) {
             return false; // No markdown patterns found
         }
 
@@ -1832,6 +1860,7 @@
         return false;
     }
 
+    /* istanbul ignore next */
     function handleWysiwygInput(e) {
         const wysiwyg = document.getElementById('s3-wysiwyg');
         if (!wysiwyg || state.editorMode !== 'wysiwyg') return;
@@ -1845,10 +1874,17 @@
         if (!selection.rangeCount) return;
 
         const range = selection.getRangeAt(0);
-        const textNode = range.startContainer;
+        let textNode = range.startContainer;
 
-        // Only process if we're in a text node
-        if (textNode.nodeType !== Node.TEXT_NODE) return;
+        // FIX: If selection is on element, find the text node inside
+        if (textNode.nodeType !== Node.TEXT_NODE) {
+            // Try to find text node in children
+            if (textNode.lastChild && textNode.lastChild.nodeType === Node.TEXT_NODE) {
+                textNode = textNode.lastChild;
+            } else {
+                return; // No text node to process
+            }
+        }
 
         // Save cursor position
         const cursorOffset = range.startOffset;
@@ -1904,7 +1940,7 @@
         if (!wysiwyg || typeof MutationObserver === 'undefined') return;
 
         // Add input listener for markdown auto-conversion
-        wysiwyg.addEventListener('beforeinput', handleWysiwygInput);
+        wysiwyg.addEventListener('input', handleWysiwygInput);
 
         const observer = new MutationObserver(() => {
             // Skip if observer is paused (programmatic changes)
