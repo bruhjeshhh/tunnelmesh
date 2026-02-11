@@ -17,9 +17,6 @@ func TestLoadPeerConfig(t *testing.T) {
 
 	content := `
 name: "mynode"
-servers:
-  - "https://coord.example.com"
-auth_token: "peer-token"
 ssh_port: 2222
 private_key: "/path/to/key"
 tun:
@@ -36,8 +33,6 @@ dns:
 	require.NoError(t, err)
 
 	assert.Equal(t, "mynode", cfg.Name)
-	assert.Equal(t, "https://coord.example.com", cfg.PrimaryServer())
-	assert.Equal(t, "peer-token", cfg.AuthToken)
 	assert.Equal(t, 2222, cfg.SSHPort)
 	assert.Equal(t, "/path/to/key", cfg.PrivateKey)
 	assert.Equal(t, "tun-mesh0", cfg.TUN.Name)
@@ -53,8 +48,6 @@ func TestLoadPeerConfig_Defaults(t *testing.T) {
 
 	content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
 
@@ -76,8 +69,6 @@ func TestLoadPeerConfig_ExpandHomePath(t *testing.T) {
 
 	content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 private_key: "~/.tunnelmesh/id_ed25519"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -95,8 +86,6 @@ func TestPeerConfig_Validate(t *testing.T) {
 	validConfig := func() PeerConfig {
 		return PeerConfig{
 			Name:       "testnode",
-			Servers:    []string{"http://localhost:8080"},
-			AuthToken:  "token",
 			SSHPort:    2222,
 			PrivateKey: "/path/to/key",
 			TUN: TUNConfig{
@@ -123,11 +112,6 @@ func TestPeerConfig_Validate(t *testing.T) {
 		{
 			name:    "missing name",
 			modify:  func(c *PeerConfig) { c.Name = "" },
-			wantErr: true,
-		},
-		{
-			name:    "missing server",
-			modify:  func(c *PeerConfig) { c.Servers = nil },
 			wantErr: true,
 		},
 		{
@@ -162,8 +146,6 @@ func TestLoadPeerConfig_WithGeolocation(t *testing.T) {
 
 	content := `
 name: "geonode"
-server: "http://localhost:8080"
-auth_token: "token"
 geolocation:
   latitude: 51.5074
   longitude: -0.1278
@@ -307,8 +289,6 @@ func TestPeerConfig_ValidateGeolocation(t *testing.T) {
 	validConfig := func() PeerConfig {
 		return PeerConfig{
 			Name:       "testnode",
-			Servers:    []string{"http://localhost:8080"},
-			AuthToken:  "token",
 			SSHPort:    2222,
 			PrivateKey: "/path/to/key",
 			TUN: TUNConfig{
@@ -382,8 +362,6 @@ func TestLoadPeerConfig_WithExitPeer(t *testing.T) {
 
 	content := `
 name: "client-node"
-server: "http://localhost:8080"
-auth_token: "token"
 exit_peer: "exit-server"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -401,8 +379,6 @@ func TestLoadPeerConfig_WithAllowExitTraffic(t *testing.T) {
 
 	content := `
 name: "exit-server"
-server: "http://localhost:8080"
-auth_token: "token"
 allow_exit_traffic: true
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -421,8 +397,6 @@ func TestLoadPeerConfig_ExitPeerDefaults(t *testing.T) {
 	// Config without exit fields - they should default to empty/false
 	content := `
 name: "regular-node"
-server: "http://localhost:8080"
-auth_token: "token"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
 
@@ -594,8 +568,6 @@ func TestPeerConfig_ValidateAliases(t *testing.T) {
 	validConfig := func() PeerConfig {
 		return PeerConfig{
 			Name:       "testnode",
-			Servers:    []string{"http://localhost:8080"},
-			AuthToken:  "token",
 			SSHPort:    2222,
 			PrivateKey: "/path/to/key",
 			TUN: TUNConfig{
@@ -658,8 +630,6 @@ func TestLoadPeerConfig_WithAliases(t *testing.T) {
 
 	content := `
 name: "mynode"
-server: "http://localhost:8080"
-auth_token: "token"
 dns:
   enabled: true
   aliases:
@@ -684,8 +654,6 @@ func TestLoadPeerConfig_MetricsEnabled_DefaultTrue(t *testing.T) {
 	// Config without metrics_enabled - should default to true
 	content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
 
@@ -703,8 +671,6 @@ func TestLoadPeerConfig_MetricsEnabled_ExplicitFalse(t *testing.T) {
 	// Config with metrics_enabled explicitly set to false
 	content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 metrics_enabled: false
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -722,8 +688,6 @@ func TestLoadPeerConfig_MetricsEnabled_ExplicitTrue(t *testing.T) {
 	// Config with metrics_enabled explicitly set to true
 	content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 metrics_enabled: true
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -742,8 +706,6 @@ func TestLoadPeerConfig_WithLogLevel(t *testing.T) {
 
 	content := `
 name: "mynode"
-server: "http://localhost:8080"
-auth_token: "token"
 log_level: "warn"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -762,8 +724,6 @@ func TestLoadPeerConfig_LogLevelDefaults(t *testing.T) {
 	// Config without log_level - should default to empty string
 	content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
 
@@ -783,8 +743,6 @@ func TestLoadPeerConfig_AllLogLevels(t *testing.T) {
 
 			content := `
 name: "testnode"
-server: "http://localhost:8080"
-auth_token: "token"
 log_level: "` + level + `"
 `
 			configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -1011,8 +969,6 @@ func TestLoadPeerConfig_WithFilter(t *testing.T) {
 
 	content := `
 name: "mynode"
-server: "https://coord.example.com"
-auth_token: "peer-token"
 filter:
   default_deny: true
   rules:
@@ -1058,4 +1014,70 @@ func TestFilterRule_ProtocolNumber(t *testing.T) {
 			assert.Equal(t, tt.want, rule.ProtocolNumber())
 		})
 	}
+}
+
+// CLI-only Parameter Tests
+
+func TestAuthTokenNotLoadedFromYAML(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config file with auth_token field - should be ignored due to yaml:"-" tag
+	content := `
+name: "testnode"
+auth_token: "should-be-ignored-0123456789abcdef0123456789abcdef0123456789abcdef"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// AuthToken should be empty because of yaml:"-" tag
+	assert.Empty(t, cfg.AuthToken, "AuthToken should not be loaded from YAML (CLI-only parameter)")
+}
+
+func TestServersNotLoadedFromYAML(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config file with servers field - should be ignored due to yaml:"-" tag
+	content := `
+name: "testnode"
+servers:
+  - "https://coord1.example.com:8443"
+  - "https://coord2.example.com:8443"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// Servers should be empty because of yaml:"-" tag
+	assert.Empty(t, cfg.Servers, "Servers should not be loaded from YAML (CLI-only parameter)")
+}
+
+func TestCLIOnlyFieldsRemainEmpty(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config with both CLI-only fields - both should be ignored
+	content := `
+name: "testnode"
+servers:
+  - "https://coord.example.com:8443"
+auth_token: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+ssh_port: 2222
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// CLI-only fields should be empty
+	assert.Empty(t, cfg.Servers, "Servers should not be loaded from YAML")
+	assert.Empty(t, cfg.AuthToken, "AuthToken should not be loaded from YAML")
+
+	// Regular fields should load normally
+	assert.Equal(t, "testnode", cfg.Name)
+	assert.Equal(t, 2222, cfg.SSHPort)
 }

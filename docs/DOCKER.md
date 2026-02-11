@@ -114,27 +114,29 @@ services:
 
 ## Configuration
 
-> **Note:** Context management (`tunnelmesh context`) is designed for host-based installations where you run multiple meshes from one machine. In Docker deployments, each container is typically dedicated to a single mesh and receives its config directly via volume mount or environment variables.
+> **Note:** Context management (`tunnelmesh context`) is designed for host-based installations
+> where you run multiple meshes from one machine. In Docker deployments, each container is
+> typically dedicated to a single mesh and receives its config directly via volume mount or
+> environment variables.
 
 ### Coordinator Configuration
 
-Create `docker/config/coordinator.yaml`:
+**Start coordinator (automatically bootstraps when no server URL):**
+
+```bash
+docker run tunnelmesh join --token your-secure-token
+```
+
+Optional `coordinator.yaml` for custom settings:
 
 ```yaml
 name: "coordinator"
-servers:
-  - "http://coordinator:8080"
-auth_token: "your-secure-token"
 
+# Coordinator services (auto-enabled when no server URL provided)
+# Admin panel, relay, and S3 are always enabled (ports: 443, 9000)
 coordinator:
-  enabled: true
-  listen: ":8080"
-  admin:
-    enabled: true
-    port: 443
-
-dns:
-  enabled: true
+  listen: ":8080"  # Coordination API (default: ":8443")
+  data_dir: "/var/lib/tunnelmesh"
 ```
 
 ### Peer Configuration
@@ -143,12 +145,16 @@ Create `docker/config/peer.yaml`:
 
 ```yaml
 name: "peer-1"
-servers:
-  - "http://coordinator:8080"
-auth_token: "your-secure-token"
 
+# DNS is always enabled
 dns:
-  enabled: true
+  listen: "127.0.0.53:5353"
+```
+
+Start peer:
+
+```bash
+docker run tunnelmesh join coordinator:8080 --token your-secure-token --config /etc/tunnelmesh/peer.yaml
 ```
 
 ## Network Modes
@@ -258,7 +264,7 @@ docker compose logs benchmarker
 
 ### TUN Device Issues
 
-```
+```text
 Error: cannot create TUN device
 ```
 
@@ -273,7 +279,7 @@ Ensure the container has proper privileges:
 
 ### DNS Resolution
 
-```
+```text
 Error: cannot resolve peer
 ```
 

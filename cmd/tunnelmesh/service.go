@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -23,6 +24,13 @@ var (
 	logsFollow        bool
 	logsLines         int
 )
+
+// isValidAuthToken checks if the token is 64 hex characters (32 bytes).
+func isValidAuthToken(token string) bool {
+	// Must be exactly 64 hex characters
+	matched, _ := regexp.MatchString("^[0-9a-fA-F]{64}$", token)
+	return matched
+}
 
 func newServiceCmd() *cobra.Command {
 	serviceCmd := &cobra.Command{
@@ -187,15 +195,26 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		return nil, fmt.Errorf("context %q not found", ctxName)
 	}
 
+	// Auth token must be provided via TUNNELMESH_TOKEN environment variable (not stored in context)
+	authToken := os.Getenv("TUNNELMESH_TOKEN")
+	if authToken == "" {
+		return nil, fmt.Errorf("TUNNELMESH_TOKEN environment variable not set; auth token required for service installation")
+	}
+
+	// Validate token format (must be 64 hex characters = 32 bytes)
+	if !isValidAuthToken(authToken) {
+		return nil, fmt.Errorf("invalid TUNNELMESH_TOKEN: must be 64 hex characters (generate with: openssl rand -hex 32)")
+	}
+
 	// If explicit config path provided, use it
 	configPath := serviceConfigPath
 	if configPath == "" {
 		configPath = ctx.ConfigPath
 	}
 	if configPath == "" {
-		// No config path - generate one from context values if we have server/token
-		if ctx.Server == "" || ctx.AuthToken == "" {
-			return nil, fmt.Errorf("context %q has no config path and no server/token; use --config to specify one", ctxName)
+		// No config path - generate one from context values if we have server
+		if ctx.Server == "" {
+			return nil, fmt.Errorf("context %q has no config path and no server URL; use --config to specify one", ctxName)
 		}
 		// Generate config file from context
 		generatedPath, err := generateConfigFromContext(ctx)
@@ -213,6 +232,8 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		Mode:        mode,
 		ConfigPath:  configPath,
 		UserName:    serviceUser,
+		Server:      ctx.Server,
+		AuthToken:   authToken,
 	}, nil
 }
 
@@ -442,7 +463,7 @@ func runServiceLogs(cmd *cobra.Command, args []string) error {
 
 // generateConfigFromContext creates a config file from context values.
 // This is used when installing a service from a context that was created
-// with --server/--token flags instead of a config file.
+// with positional URL and --token flag instead of a config file.
 func generateConfigFromContext(ctx *context.Context) (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -464,15 +485,15 @@ func generateConfigFromContext(ctx *context.Context) (string, error) {
 		dnsListen = "127.0.0.53:5353"
 	}
 
+	// Note: server URL and auth_token are passed via environment variables, not config file
 	configContent := fmt.Sprintf(`# Auto-generated from context %q
-server: %q
-auth_token: %q
+# Server URL (TUNNELMESH_SERVER) and auth token (TUNNELMESH_TOKEN) are passed via environment variables
 private_key: %q
 
 dns:
   enabled: true
   listen: %q
-`, ctx.Name, ctx.Server, ctx.AuthToken, filepath.Join(configDir, "id_ed25519"), dnsListen)
+`, ctx.Name, filepath.Join(configDir, "id_ed25519"), dnsListen)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("write config file: %w", err)

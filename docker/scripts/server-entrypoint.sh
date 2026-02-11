@@ -10,7 +10,10 @@ if [ ! -f "$KEY_PATH" ]; then
     tunnelmesh init
 fi
 
-# Build command with optional flags
+# Set auth token via environment variable (required for security - not CLI arg)
+export TUNNELMESH_TOKEN="${TUNNELMESH_TOKEN:-docker-test-token-123}"
+
+# Build command
 CMD="tunnelmesh join --config /etc/tunnelmesh/server.yaml"
 
 # Set log level from environment (default: info)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -82,10 +83,8 @@ func setupGCTuning() {
 }
 
 var (
-	cfgFile   string
-	logLevel  string
-	serverURL string
-	authToken string
+	cfgFile  string
+	logLevel string
 
 	// WireGuard concentrator flag
 	wireguardEnabled bool
@@ -123,25 +122,28 @@ func main() {
 		Short: "TunnelMesh - P2P SSH tunnel mesh network",
 		Long: `TunnelMesh creates encrypted P2P tunnels between peers using SSH.
 
-QUICK START - Run a coordinator (with local peer):
+QUICK START - Bootstrap coordinator (first node):
 
-  # 1. Generate config (server + peer combined):
-  tunnelmesh init --server --peer
+  # Generate a secure token (save this securely - you'll need it for peers):
+  export TUNNELMESH_TOKEN=$(openssl rand -hex 32)
 
-  # 2. Start the coordinator:
-  tunnelmesh serve --config server.yaml
+  # Start coordinator (no server URL = auto-coordinator mode):
+  tunnelmesh join
 
-  # First peer to join becomes admin automatically
+  # Save token to secure file for later use:
+  echo "$TUNNELMESH_TOKEN" > ~/.tunnelmesh/mesh-token.txt
+  chmod 600 ~/.tunnelmesh/mesh-token.txt
 
 QUICK START - Join an existing mesh:
 
-  # 1. Join using invite token from admin:
-  tunnelmesh join --server coord.example.com --token <token> --context work
+  # Set token and join using coordinator URL:
+  export TUNNELMESH_TOKEN="your-token"
+  tunnelmesh join coord.example.com:8443 --context work
 
   # Identity is automatic - derived from your SSH key
   # First user to join becomes admin
 
-  # 2. Install as system service (optional):
+  # Install as system service (optional):
   tunnelmesh service install
 
 MANAGING BUCKETS:
@@ -164,13 +166,26 @@ For more help on any command, use: tunnelmesh <command> --help`,
 
 	// Join command
 	joinCmd := &cobra.Command{
-		Use:   "join",
+		Use:   "join [server-url]",
 		Short: "Join the mesh network",
-		Long:  "Register with the coordination server and start the mesh daemon",
-		RunE:  runJoin,
+		Long: `Join the mesh network by connecting to a coordinator.
+
+Examples:
+  # Bootstrap a new mesh (first coordinator - no server URL)
+  export TUNNELMESH_TOKEN=$(openssl rand -hex 32)
+  tunnelmesh join
+  # Save token securely: echo "$TUNNELMESH_TOKEN" > ~/.tunnelmesh/mesh-token.txt && chmod 600 $_
+
+  # Join an existing mesh (regular peer)
+  export TUNNELMESH_TOKEN="your-token"
+  tunnelmesh join coord.example.com:8443
+
+When no server URL is provided, automatically bootstraps as coordinator.
+Server URLs automatically use HTTPS. Omit scheme in the URL.
+Auth token must be set via TUNNELMESH_TOKEN environment variable.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runJoin,
 	}
-	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL")
-	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
@@ -282,6 +297,19 @@ Examples:
 	}
 }
 
+// ensureCoordinatorConfig enables coordinator mode when no server URL is provided (bootstrap).
+// This allows the first node in a mesh to automatically become a coordinator.
+func ensureCoordinatorConfig(cfg *config.PeerConfig) {
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
+		cfg.Coordinator.Enabled = true
+		// Set default coordinator listen if not configured
+		if cfg.Coordinator.Listen == "" {
+			cfg.Coordinator.Listen = ":8443"
+		}
+	}
+}
+
 // runAsService runs the application as a system service.
 // This is called when the service manager starts the application with --service-run flag.
 func runAsService() {
@@ -335,6 +363,32 @@ func runAsService() {
 	}
 }
 
+// normalizeServerURL adds https:// scheme and :8443 port if missing.
+func normalizeServerURL(serverURL string) (string, error) {
+	if serverURL == "" {
+		return "", nil
+	}
+
+	// Add scheme if missing
+	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		serverURL = "https://" + serverURL
+	}
+
+	// Parse URL to check for port
+	parsedURL, err := url.Parse(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid server URL %q: %w", serverURL, err)
+	}
+
+	// Add default port :8443 if no port specified
+	if parsedURL.Port() == "" {
+		parsedURL.Host += ":8443"
+		serverURL = parsedURL.String()
+	}
+
+	return serverURL, nil
+}
+
 // runServeFromService runs the server mode from within a service.
 // runJoinFromService runs the peer mode from within a service.
 func runJoinFromService(ctx context.Context, configPath string) error {
@@ -357,18 +411,31 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
 	}
 
+	// When running as service, read server URL and token from environment
+	if envServer := os.Getenv("TUNNELMESH_SERVER"); envServer != "" {
+		// Normalize server URL: add https:// and :8443 if missing
+		normalized, err := normalizeServerURL(envServer)
+		if err != nil {
+			return fmt.Errorf("normalize TUNNELMESH_SERVER env var: %w", err)
+		}
+		cfg.Servers = []string{normalized}
+		log.Info().Str("server", normalized).Msg("loaded server from TUNNELMESH_SERVER env var")
+	}
+	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
+		cfg.AuthToken = envToken
+		log.Info().Msg("loaded auth token from TUNNELMESH_TOKEN env var")
+	}
+
 	log.Info().
 		Str("servers", strings.Join(cfg.Servers, ", ")).
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	// Validate configuration
-	// Standalone coordinators (first in network) can have empty servers list
-	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers")
-	}
+	// Enable coordinator mode for bootstrap if no server URL
+	ensureCoordinatorConfig(cfg)
+
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth_token is required in config")
+		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable")
 	}
 
 	// Log network interface information for debugging
@@ -498,12 +565,14 @@ func writePeerConfig(path, authToken string) error {
 
 	config := fmt.Sprintf(`# TunnelMesh Peer - see peer.yaml.example for all options
 name: "%s"
-server: "https://coord.example.com:8443"
-auth_token: "%s"
+
+# Server URL passed as positional arg, auth token via environment variable:
+# export TUNNELMESH_TOKEN="your-token"
+# tunnelmesh join coord.example.com:8443 --config peer.yaml
 
 dns:
   enabled: true
-`, hostname, authToken)
+`, hostname)
 
 	return os.WriteFile(path, []byte(config), 0600)
 }
@@ -527,13 +596,27 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Override with flags
-	if serverURL != "" {
-		cfg.Servers = []string{serverURL}
+	// Get server URL from positional argument
+	var joinServerURL string
+	if len(args) > 0 {
+		joinServerURL = args[0]
 	}
-	if authToken != "" {
-		cfg.AuthToken = authToken
+
+	// Normalize server URL: add https:// if no scheme provided, add :8443 if no port
+	// Server URL is CLI-only, not a config option
+	if joinServerURL != "" {
+		normalized, err := normalizeServerURL(joinServerURL)
+		if err != nil {
+			return err
+		}
+		cfg.Servers = []string{normalized}
 	}
+
+	// Read auth token from environment variable (never from CLI for security)
+	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
+		cfg.AuthToken = envToken
+	}
+
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
@@ -551,12 +634,11 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	// Validate configuration (allow empty servers for standalone coordinators)
-	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers\nHint: run with --server flag to update context credentials")
-	}
+	// Enable coordinator mode for bootstrap if no server URL
+	ensureCoordinatorConfig(cfg)
+
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth_token is required\nHint: run with --token flag to update context credentials")
+		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable\nExample: export TUNNELMESH_TOKEN=\"your-token\" && tunnelmesh join coord.example.com:8443")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -655,13 +737,11 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
 
-	// Validate configuration
-	// Standalone coordinators (first in network) can have empty servers list
-	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers")
-	}
+	// Enable coordinator mode for bootstrap if no server URL
+	ensureCoordinatorConfig(cfg)
+
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth_token is required")
+		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable")
 	}
 
 	// Apply configured log level from config file
@@ -813,7 +893,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				Name:       joinContext,
 				ConfigPath: cfgFile,
 				Server:     cfg.PrimaryServer(),
-				AuthToken:  cfg.AuthToken,
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
 				DNSListen:  cfg.DNS.Listen,
@@ -1921,11 +2000,11 @@ func loadConfig() (*config.PeerConfig, error) {
 				}
 			}
 			// If context has server info but no config file, use context values
-			// This happens when joining with --server/--token flags instead of --config
+			// This happens when joining with positional URL instead of --config
+			// Auth token is read from TUNNELMESH_TOKEN environment variable
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
 					Servers:    []string{activeCtx.Server},
-					AuthToken:  activeCtx.AuthToken,
 					SSHPort:    2222,
 					PrivateKey: filepath.Join(homeDir, ".tunnelmesh", "id_ed25519"),
 					TUN: config.TUNConfig{

@@ -149,44 +149,57 @@ Generate configs with `tunnelmesh init --peer` or see the full [peer.yaml.exampl
 
 ### Coordinator Configuration
 
-Coordinators are peers that enable coordinator services. The first admin peer to join becomes a coordinator automatically.
+**Generate a secure token for your mesh:**
+```bash
+TOKEN=$(openssl rand -hex 32)
+# Save token securely for peers:
+echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt
+chmod 600 ~/.tunnelmesh/mesh-token.txt
+```
+
+**Bootstrap coordinator (first node):**
+
+When you run `tunnelmesh join` without a server URL, it automatically bootstraps as a coordinator:
+
+```bash
+export TUNNELMESH_TOKEN=$(openssl rand -hex 32)
+tunnelmesh join
+```
+
+This creates a new mesh with default coordinator settings (admin panel on :443, S3 on :9000, relay auto-enabled).
+
+For custom configuration:
 
 ```yaml
 name: "coordinator"
-servers:
-  - "https://coord1.example.com:8443"  # Bootstrap from existing coordinator (optional)
-auth_token: "your-secure-token"
 
-# Enable coordinator services
+# Coordinator services (auto-enabled when no server URL provided)
 coordinator:
-  enabled: true
-  listen: ":8443"
+  listen: ":8443"  # Coordination API listen address (default: ":8443")
+  data_dir: "/var/lib/tunnelmesh"  # Data directory for persistence
 
-  admin:
-    enabled: true
-    port: 443
-
-  relay:
-    enabled: true
-
-  s3:
-    enabled: true
-    port: 9000
-
-dns:
-  enabled: true
+  monitoring:
+    prometheus_url: "http://localhost:9090"
+    grafana_url: "http://localhost:3000"
 ```
 
 ### Regular Peer Configuration
 
+**Join existing mesh (use same token as coordinator):**
+```bash
+export TUNNELMESH_TOKEN="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+tunnelmesh join coord.example.com:8443 --config peer.yaml
+```
+
 ```yaml
 name: "mynode"
-servers:
-  - "https://coord.example.com:8443"
-auth_token: "your-secure-token"
 
+# DNS is always enabled. Optional configuration:
 dns:
-  enabled: true
+  listen: "127.0.0.53:5353"  # DNS listen address (default)
+  aliases:  # Custom DNS aliases for this peer
+    - "nas"
+    - "homeserver"
 ```
 
 ### Transport Layer
@@ -294,6 +307,115 @@ The tool searches for config files in the following order:
 
 `~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
 
+## Security Best Practices
+
+### Token Storage and Management
+
+TunnelMesh authentication tokens are passed via the `TUNNELMESH_TOKEN` environment variable, never via CLI flags
+or config files (for security). Follow these best practices for production deployments:
+
+#### Environment Variables
+
+Store tokens in environment variables instead of passing them directly:
+
+```bash
+# Set in shell session
+export TUNNELMESH_TOKEN="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+
+# Join using environment variable
+tunnelmesh join coord.example.com:8443
+```
+
+#### systemd Environment Files
+
+For services managed by systemd, use environment files with restricted permissions:
+
+```bash
+# Create environment file
+sudo mkdir -p /etc/tunnelmesh
+sudo tee /etc/tunnelmesh/env.conf > /dev/null <<EOF
+TUNNELMESH_TOKEN=a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6
+EOF
+sudo chmod 600 /etc/tunnelmesh/env.conf
+sudo chown root:root /etc/tunnelmesh/env.conf
+
+# Use in systemd service (automatically configured when using `tunnelmesh service install`)
+# The service will read the token from the environment file
+```
+
+The `tunnelmesh service install` command automatically configures the service to use environment files on systemd-based
+systems.
+
+#### Secret Management Systems
+
+For larger deployments, integrate with centralized secret management:
+
+**HashiCorp Vault:**
+
+```bash
+# Store token in Vault
+vault kv put secret/tunnelmesh token="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+
+# Retrieve and use
+export TUNNELMESH_TOKEN=$(vault kv get -field=token secret/tunnelmesh)
+tunnelmesh join coord.example.com:8443
+```
+
+**AWS Secrets Manager:**
+
+```bash
+# Store token
+aws secretsmanager create-secret \
+  --name tunnelmesh/auth-token \
+  --secret-string "a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+
+# Retrieve and use
+export TUNNELMESH_TOKEN=$(aws secretsmanager get-secret-value \
+  --secret-id tunnelmesh/auth-token \
+  --query SecretString \
+  --output text)
+tunnelmesh join coord.example.com:8443
+```
+
+#### Token Rotation
+
+Rotate authentication tokens periodically to minimize exposure from compromised tokens.
+
+**Note:** Token rotation currently requires brief downtime to update all nodes simultaneously. Multi-token
+support for graceful rotation is planned (see issue tracker for roadmap).
+
+**Rotation process:**
+
+1. **Generate new token:**
+
+   ```bash
+   NEW_TOKEN=$(openssl rand -hex 32)
+   ```
+
+2. **Update all nodes** - During maintenance window, update coordinator and all peers with new token:
+
+   ```bash
+   export TUNNELMESH_TOKEN="$NEW_TOKEN"
+   # Restart coordinator and all peer services
+   ```
+
+#### File Permissions
+
+Always protect config files and token files with restrictive permissions:
+
+```bash
+chmod 600 ~/.tunnelmesh/config.yaml
+chmod 600 ~/.tunnelmesh/mesh-token.txt
+```
+
+On multi-user systems, consider using system-level config directories with root ownership:
+
+```bash
+sudo mkdir -p /etc/tunnelmesh
+sudo chmod 755 /etc/tunnelmesh
+sudo chown root:root /etc/tunnelmesh
+```
+
 ## CLI Quick Reference
 
 ```bash
@@ -303,7 +425,8 @@ tunnelmesh join                     # Start as coordinator + peer
 # First admin peer to join gets full admin permissions automatically
 
 # Peer setup (joining existing mesh)
-tunnelmesh join --server coord.example.com --token <token> --context work
+export TUNNELMESH_TOKEN="your-token"
+tunnelmesh join coord.example.com:8443 --context work
 # User identity derived from SSH key - no separate registration needed
 
 # Manage contexts

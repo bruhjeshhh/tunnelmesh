@@ -82,6 +82,8 @@ type ServiceConfig struct {
 	Mode        string // "serve" or "join"
 	ConfigPath  string // Path to configuration file
 	UserName    string // User to run service as (Linux/macOS only)
+	Server      string // Coordinator server URL (join mode only, passed as positional arg)
+	AuthToken   string // Authentication token (passed via --token flag)
 }
 
 // DefaultServiceName returns the default service name based on mode.
@@ -127,15 +129,30 @@ func DefaultConfigPath(mode string) string {
 
 // NewServiceConfig creates service.Config from our ServiceConfig.
 func NewServiceConfig(cfg *ServiceConfig, execPath string) *service.Config {
+	// Build arguments: start with base flags
+	args := []string{
+		"--service-run",
+		"--service-mode", cfg.Mode,
+		"join", // Always join subcommand
+		"--config", cfg.ConfigPath,
+	}
+
+	// Build environment variables for server URL and token
+	// These are NOT visible in process listings like CLI args are
+	env := make(map[string]string)
+	if cfg.Server != "" {
+		env["TUNNELMESH_SERVER"] = cfg.Server
+	}
+	if cfg.AuthToken != "" {
+		env["TUNNELMESH_TOKEN"] = cfg.AuthToken
+	}
+
 	svcCfg := &service.Config{
 		Name:        cfg.Name,
 		DisplayName: cfg.DisplayName,
 		Description: cfg.Description,
-		Arguments: []string{
-			"--service-run",
-			"--service-mode", cfg.Mode,
-			"--config", cfg.ConfigPath,
-		},
+		Arguments:   args,
+		EnvVars:     env,
 	}
 
 	// Platform-specific options
