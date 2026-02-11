@@ -67,6 +67,7 @@ type serverStats struct {
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
 	cancel          context.CancelFunc // Cancel function for server lifecycle (stops background operations)
+	wg              sync.WaitGroup     // Tracks background goroutines for clean shutdown
 	cfg             *config.PeerConfig
 	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
 	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
@@ -712,6 +713,31 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 
+	// Wait for all background goroutines to finish (with timeout)
+	log.Info().Msg("waiting for background goroutines to complete")
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Info().Msg("all background goroutines completed")
+	case <-time.After(10 * time.Second):
+		log.Warn().Msg("timeout waiting for background goroutines to complete")
+		errs = append(errs, fmt.Errorf("shutdown timeout: goroutines did not complete within 10s"))
+	}
+
+	// Flush S3 store to ensure all filesystem operations complete
+	if s.s3Store != nil {
+		log.Info().Msg("flushing S3 store")
+		if err := s.s3Store.Close(); err != nil {
+			log.Error().Err(err).Msg("failed to close S3 store")
+			errs = append(errs, fmt.Errorf("close S3 store: %w", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
@@ -722,7 +748,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // The goroutine stops when the context is cancelled.
 func (s *Server) StartPeriodicSave(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		defer ticker.Stop()
 		for {
 			select {
@@ -753,7 +781,9 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 	// Run cleanup every hour
 	ticker := time.NewTicker(1 * time.Hour)
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		defer ticker.Stop()
 
 		// Update metrics on startup
@@ -1227,14 +1257,18 @@ func (s *Server) StartS3Server(addr string, tlsCert *tls.Certificate) error {
 			MinVersion:   tls.VersionTLS12,
 		}
 		log.Info().Str("addr", addr).Msg("starting S3 server (HTTPS)")
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if err := server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				log.Error().Err(err).Msg("S3 server error")
 			}
 		}()
 	} else {
 		log.Info().Str("addr", addr).Msg("starting S3 server (HTTP)")
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error().Err(err).Msg("S3 server error")
 			}
@@ -2070,14 +2104,18 @@ func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
 			ClientAuth: tls.RequestClientCert,
 		}
 		log.Info().Str("addr", addr).Msg("starting admin server (HTTPS)")
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if err := s.adminServer.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				log.Error().Err(err).Msg("admin server error")
 			}
 		}()
 	} else {
 		log.Info().Str("addr", addr).Msg("starting admin server (HTTP)")
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if err := s.adminServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error().Err(err).Msg("admin server error")
 			}

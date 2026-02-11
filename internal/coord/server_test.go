@@ -41,17 +41,21 @@ func newTestConfig(t *testing.T) *config.PeerConfig {
 	}
 }
 
+// cleanupServer shuts down a server with a timeout to prevent hanging tests.
+// The server's WaitGroup ensures all background goroutines complete before returning.
+func cleanupServer(t *testing.T, srv *Server) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+}
+
 func newTestServer(t *testing.T) *Server {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	// Automatically shutdown server when test completes to prevent resource leaks
-	t.Cleanup(func() {
-		_ = srv.Shutdown(context.Background())
-	})
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	return srv
 }
@@ -94,7 +98,7 @@ func TestServer_Register_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, resp.MeshIP)
-	assert.Equal(t, "172.30.0.0/16", resp.MeshCIDR)
+	assert.Equal(t, "10.42.0.0/16", resp.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", resp.Domain)
 	assert.NotEmpty(t, resp.Token, "should return JWT token for relay auth")
 
@@ -282,7 +286,7 @@ func TestServer_IPAllocation(t *testing.T) {
 		ips[resp.MeshIP] = true
 
 		// Verify IP is in mesh range
-		assert.Contains(t, resp.MeshIP, "172.30.")
+		assert.Contains(t, resp.MeshIP, "10.42.")
 	}
 }
 
@@ -304,7 +308,7 @@ func TestServer_AdminOverview_NoPeers(t *testing.T) {
 
 	assert.Equal(t, 0, resp.TotalPeers)
 	assert.Equal(t, 0, resp.OnlinePeers)
-	assert.Equal(t, "172.30.0.0/16", resp.MeshCIDR)
+	assert.Equal(t, "10.42.0.0/16", resp.MeshCIDR)
 	assert.Empty(t, resp.Peers)
 }
 
@@ -569,11 +573,7 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	t.Cleanup(func() {
-		_ = srv.Shutdown(context.Background())
-	})
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	return srv
 }
@@ -1093,11 +1093,7 @@ func newTestServerWithS3(t *testing.T) *Server {
 	}
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	t.Cleanup(func() {
-		_ = srv.Shutdown(context.Background())
-	})
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	return srv
 }

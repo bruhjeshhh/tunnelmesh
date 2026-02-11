@@ -363,6 +363,31 @@ func runAsService() {
 	}
 }
 
+// isLocalhostURL returns true if the URL points to localhost/loopback addresses.
+// These are considered safe for HTTP since traffic never leaves the machine.
+func isLocalhostURL(u *url.URL) bool {
+	host := u.Hostname() // strips port if present
+
+	// Empty hostname is not localhost (reject malformed URLs like "http://:8443")
+	if host == "" {
+		return false
+	}
+
+	// Check common localhost names
+	if host == "localhost" {
+		return true
+	}
+
+	// Check IPv4/IPv6 loopback (127.0.0.0/8, ::1)
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return true
+		}
+	}
+
+	return false
+}
+
 // normalizeServerURL adds https:// scheme and :8443 port if missing.
 func normalizeServerURL(serverURL string) (string, error) {
 	if serverURL == "" {
@@ -380,9 +405,9 @@ func normalizeServerURL(serverURL string) (string, error) {
 		return "", fmt.Errorf("invalid server URL %q: %w", serverURL, err)
 	}
 
-	// Validate scheme (only HTTPS for security)
-	if parsedURL.Scheme == "http" {
-		return "", fmt.Errorf("server URL must use HTTPS, not HTTP: %q", serverURL)
+	// Validate scheme (require HTTPS except for localhost)
+	if parsedURL.Scheme == "http" && !isLocalhostURL(parsedURL) {
+		return "", fmt.Errorf("server URL must use HTTPS for remote servers (HTTP is only allowed for localhost): %q", serverURL)
 	}
 
 	// Validate that path is empty or just "/"
@@ -1540,7 +1565,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				// Start the WireGuard device if TUN is available
 				if tunDev != nil {
 					// Calculate concentrator's WG interface address
-					// Use .1 in the first WG client subnet (e.g., 172.30.100.1/16)
+					// Use .1 in the first WG client subnet (e.g., 10.42.100.1/16)
 					_, meshNet, _ := net.ParseCIDR(resp.MeshCIDR)
 					baseIP := meshNet.IP.To4()
 					wgAddr := fmt.Sprintf("%d.%d.100.1/16", baseIP[0], baseIP[1])
