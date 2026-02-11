@@ -222,7 +222,7 @@ function setupSSE() {
         sseRetryCount = 0; // Reset retry count on successful connection
     });
 
-    state.eventSource.addEventListener('heartbeat', () => {
+    state.eventSource.addEventListener('heartbeat', (e) => {
         // Refresh dashboard when a heartbeat is received
         fetchData(false);
     });
@@ -761,26 +761,28 @@ function initializeChartData(data) {
     const peerLastTs = {}; // Track when each peer was last seen
 
     data.peers.forEach((peer) => {
-        if (!peer.history || peer.history.length === 0) return;
-
-        // History comes newest first, reverse to get oldest first
-        const history = [...peer.history].reverse();
+        // Initialize peer history map even if no history yet
         peerHistories[peer.name] = {};
 
-        history.forEach((point) => {
-            const quantized = quantizeTimestamp(new Date(point.ts).getTime());
-            allTimestamps.add(quantized);
-            // Store by quantized timestamp (last value wins if multiple in same interval)
-            peerHistories[peer.name][quantized] = point;
+        if (peer.history && peer.history.length > 0) {
+            // History comes newest first, reverse to get oldest first
+            const history = [...peer.history].reverse();
 
-            // Track first/last timestamps for this peer
-            if (!peerFirstTs[peer.name] || quantized < peerFirstTs[peer.name]) {
-                peerFirstTs[peer.name] = quantized;
-            }
-            if (!peerLastTs[peer.name] || quantized > peerLastTs[peer.name]) {
-                peerLastTs[peer.name] = quantized;
-            }
-        });
+            history.forEach((point) => {
+                const quantized = quantizeTimestamp(new Date(point.ts).getTime());
+                allTimestamps.add(quantized);
+                // Store by quantized timestamp (last value wins if multiple in same interval)
+                peerHistories[peer.name][quantized] = point;
+
+                // Track first/last timestamps for this peer
+                if (!peerFirstTs[peer.name] || quantized < peerFirstTs[peer.name]) {
+                    peerFirstTs[peer.name] = quantized;
+                }
+                if (!peerLastTs[peer.name] || quantized > peerLastTs[peer.name]) {
+                    peerLastTs[peer.name] = quantized;
+                }
+            });
+        }
     });
 
     // Sort timestamps
@@ -793,6 +795,15 @@ function initializeChartData(data) {
         const packetsData = [];
         const firstTs = peerFirstTs[peerName];
         const lastTs = peerLastTs[peerName];
+
+        // If peer has no history, initialize with nulls matching existing timeline
+        // This keeps arrays aligned when new data points are added
+        if (!firstTs && !lastTs) {
+            state.charts.chartData.throughput[peerName] = new Array(sortedTimestamps.length).fill(null);
+            state.charts.chartData.packets[peerName] = new Array(sortedTimestamps.length).fill(null);
+            // Don't set lastSeenTimes - let updateChartsWithNewData handle first heartbeat
+            return;
+        }
 
         sortedTimestamps.forEach((ts) => {
             const point = historyMap[ts];
@@ -849,7 +860,9 @@ function fitChartsToData() {
 }
 
 function updateChartsWithNewData(peers) {
-    if (!state.charts.throughput || !state.charts.packets) return;
+    if (!state.charts.throughput || !state.charts.packets) {
+        return;
+    }
 
     // Track last seen times to detect new heartbeats
     if (!state.charts.lastSeenTimes) {
@@ -898,6 +911,18 @@ function updateChartsWithNewData(peers) {
     // Sort groups by timestamp and add each as a data point
     const sortedGroups = Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
 
+    // First pass: Ensure all online peers exist in chartData
+    // This must happen BEFORE we start adding new timestamps, otherwise peers
+    // whose first heartbeat arrives at an existing timestamp never get initialized
+    peers.forEach((peer) => {
+        if (!state.charts.chartData.throughput[peer.name]) {
+            // New peer - initialize with nulls for all existing timestamps
+            const currentLen = state.charts.chartData.labels.length;
+            state.charts.chartData.throughput[peer.name] = new Array(currentLen).fill(null);
+            state.charts.chartData.packets[peer.name] = new Array(currentLen).fill(null);
+        }
+    });
+
     // Get the last timestamp in the chart (if any)
     const lastChartTime =
         state.charts.chartData.labels.length > 0
@@ -936,7 +961,7 @@ function updateChartsWithNewData(peers) {
         const allPeers = new Set([...Object.keys(state.charts.chartData.throughput), ...Object.keys(group.peers)]);
 
         allPeers.forEach((peerName) => {
-            // Check if this is a new peer
+            // Check if this is a new peer (fallback - should be caught by first pass above)
             const isNewPeer = !state.charts.chartData.throughput[peerName];
 
             // Initialize arrays if needed (fill with nulls for timestamps before they existed)
@@ -984,6 +1009,9 @@ function updateChartsWithNewData(peers) {
     });
 
     rebuildChartDatasets();
+
+    // Update x-axis range to show all data including new points
+    fitChartsToData();
 }
 
 // Calculate color for each peer based on how much they deviate from average
@@ -1092,11 +1120,13 @@ function rebuildChartDatasets() {
     });
 
     if (state.charts.throughput) {
+        state.charts.throughput.data.labels = labels;
         state.charts.throughput.data.datasets = throughputDatasets;
         state.charts.throughput.update();
     }
 
     if (state.charts.packets) {
+        state.charts.packets.data.labels = labels;
         state.charts.packets.data.datasets = packetsDatasets;
         state.charts.packets.update();
     }
@@ -1160,7 +1190,6 @@ async function checkPrometheusAvailable() {
         const resp = await fetch('/prometheus/api/v1/alerts');
         if (resp.ok) {
             state.alertsEnabled = true;
-            document.getElementById('alerts-section').style.display = 'block';
             // Process the initial response
             const data = await resp.json();
             processAlertData(data);
@@ -1171,7 +1200,7 @@ async function checkPrometheusAvailable() {
         }
     } catch (err) {
         // Prometheus not available
-        console.debug('Prometheus not available:', err.message);
+        console.error('Prometheus not available:', err.message);
         state.alertsEnabled = false;
     }
 }
@@ -1343,7 +1372,9 @@ async function fetchAlerts() {
 
     try {
         const resp = await fetch('/prometheus/api/v1/alerts');
-        if (!resp.ok) return;
+        if (!resp.ok) {
+            return;
+        }
 
         const data = await resp.json();
         processAlertData(data);
@@ -1355,43 +1386,14 @@ async function fetchAlerts() {
 function processAlertData(data) {
     const alerts = data.data?.alerts || [];
 
-    // Get current active tab
-    const activeTab = document.querySelector('#main-tabs .tab.active');
-    const currentTab = activeTab ? activeTab.dataset.tab : 'mesh';
-
-    // Map tabs to their expected alert categories
-    const tabCategoryMap = {
-        mesh: 'mesh',
-        data: 'data',
-        app: 'app',
-    };
-
-    const expectedCategory = tabCategoryMap[currentTab];
-    if (!expectedCategory) {
-        console.warn(`Unknown tab '${currentTab}', defaulting to mesh category`);
-    }
-
     // Count alerts by severity
     const counts = { warning: 0, critical: 0, page: 0 };
     // Track alerts per peer
     const peerAlerts = {};
-    // Track unknown categories
-    const unknownCategories = new Set();
 
     for (const alert of alerts) {
         if (alert.state === 'firing') {
             const severity = alert.labels?.severity || 'warning';
-            const category = alert.labels?.category || 'mesh';
-
-            // Filter by category: show alerts matching current tab's category
-            const shouldShow = category === (expectedCategory || 'mesh');
-
-            // Track unknown categories for debugging
-            if (!Object.values(tabCategoryMap).includes(category)) {
-                unknownCategories.add(category);
-            }
-
-            if (!shouldShow) continue;
 
             // Count alert by severity
             if (Object.hasOwn(counts, severity)) {
@@ -1411,11 +1413,6 @@ function processAlertData(data) {
                 }
             }
         }
-    }
-
-    // Warn about unknown alert categories for debugging
-    if (unknownCategories.size > 0) {
-        console.warn(`Found alerts with unknown categories: ${Array.from(unknownCategories).join(', ')}`);
     }
 
     state.peerAlerts = peerAlerts;
@@ -2021,6 +2018,24 @@ function registerBuiltinPanels() {
             category: 'network',
             collapsible: true,
             sortOrder: 30,
+            onShow: () => {
+                // When panel becomes visible after permission load, resize charts once
+                if (state.charts.throughput) {
+                    state.charts.throughput.resize();
+                }
+                if (state.charts.packets) {
+                    state.charts.packets.resize();
+                }
+            },
+        },
+        {
+            id: 'alerts',
+            sectionId: 'alerts-section',
+            tab: 'mesh',
+            title: 'Active Alerts',
+            category: 'monitoring',
+            collapsible: false,
+            sortOrder: 35,
         },
         {
             id: 'peers',
@@ -2063,7 +2078,7 @@ function registerBuiltinPanels() {
         {
             id: 's3',
             sectionId: 's3-section',
-            tab: 'app data', // Show in both App and Data tabs
+            tab: 'app',
             title: 'Object Viewer',
             category: 'storage',
             resizable: true,
@@ -2786,11 +2801,6 @@ function switchTab(tabName, options = {}) {
     // Update browser history (unless restoring from history)
     if (!options.skipHistory) {
         updateTabHistory(tabName);
-    }
-
-    // Re-filter alerts based on new tab category
-    if (state.alertsEnabled) {
-        fetchAlerts();
     }
 }
 window.switchTab = switchTab;
