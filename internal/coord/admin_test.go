@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -95,19 +95,13 @@ func TestDownsampleHistory(t *testing.T) {
 }
 
 func TestAdminOverview_IncludesLocation(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Locations: true, // Enable location tracking for this test
-		Admin: config.AdminConfig{
-			Enabled: true,
-		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
-		},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Locations = true // Enable location tracking for this test
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
@@ -123,7 +117,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		City:      "London",
 		Country:   "United Kingdom",
 	}
-	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil)
+	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -148,30 +142,24 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 }
 
 func TestAdminOverview_ExitPeerInfo(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Admin: config.AdminConfig{
-			Enabled: true,
-		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
-		},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil)
+	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil, false)
 	require.NoError(t, err)
 
 	// Register a client that uses the exit node
-	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil)
+	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -211,18 +199,12 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 }
 
 func TestAdminOverview_ConnectionTypes(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Admin: config.AdminConfig{
-			Enabled: true,
-		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
-		},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
@@ -230,7 +212,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 	// Register a peer
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Directly set stats on the server (simulating heartbeat)
@@ -274,20 +256,14 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 }
 
 func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
-	// Create a server with JoinMesh configured to enable adminMux
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Admin: config.AdminConfig{
-			Enabled: true,
-		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
-		},
-	}
-	srv, err := NewServer(cfg)
+	// Create a server with coordinator enabled to have adminMux
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	// Start mock Prometheus and Grafana servers
 	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -365,39 +341,19 @@ func TestDownsampleHistory_Uniformity(t *testing.T) {
 
 func newTestServerWithS3AndBucket(t *testing.T) *Server {
 	t.Helper()
-	tempDir := t.TempDir()
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		DataDir:   tempDir,
-		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
-		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
-		},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.DataDir = t.TempDir()
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	// Create a test bucket
 	err = srv.s3Store.CreateBucket("test-bucket", "admin")
 	require.NoError(t, err)
 
 	return srv
-}
-
-func TestS3Proxy_NoS3Store(t *testing.T) {
-	srv := newTestServer(t)
-	// s3Store is nil
-
-	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets", nil)
-	rec := httptest.NewRecorder()
-	srv.adminMux.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
 
 func TestS3Proxy_ListBuckets(t *testing.T) {

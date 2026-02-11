@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,7 +155,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		TotalHeartbeats:  s.serverStats.totalHeartbeats,
 		MeshCIDR:         mesh.CIDR,
 		DomainSuffix:     mesh.DomainSuffix,
-		LocationsEnabled: s.cfg.Locations,
+		LocationsEnabled: s.cfg.Coordinator.Locations,
 		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
 	}
 
@@ -209,7 +210,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Only include location if the feature is enabled
-		if s.cfg.Locations {
+		if s.cfg.Coordinator.Locations {
 			peerInfo.Location = info.peer.Location
 		}
 
@@ -266,13 +267,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 // setupAdminRoutes registers the admin API routes and static file server.
 // Note: Admin routes have no authentication - access is controlled by network binding.
 // Admin is only accessible from inside the mesh via HTTPS on mesh IP (https://this.tunnelmesh/)
-// Requires join_mesh to be configured.
 func (s *Server) setupAdminRoutes() {
-	if s.cfg.JoinMesh == nil {
-		// Admin panel requires join_mesh - coordinator must be a mesh peer
-		return
-	}
-
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
 	fileServer := http.FileServer(http.FS(staticFS))
@@ -331,6 +326,19 @@ func (s *Server) setupAdminRoutes() {
 
 	// System health check
 	s.adminMux.HandleFunc("/api/system/health", s.handleSystemHealth)
+
+	// Coordinator replication endpoint (mesh-only, used by other coordinators)
+	// This MUST be on adminMux (not public mux) to ensure replication only happens within the mesh
+	if s.replicator != nil {
+		s.adminMux.HandleFunc("/api/replication/message", s.handleReplicationMessage)
+	}
+
+	// Relay endpoints on admin mux (mesh-only heartbeats and relay fallback)
+	// These endpoints are also on the public mux for backwards compatibility and initial connections.
+	// Peers that have joined the mesh should prefer using these mesh-only endpoints for better security.
+	s.adminMux.HandleFunc("/api/v1/relay/persistent", s.handlePersistentRelay)
+	s.adminMux.HandleFunc("/api/v1/relay/", s.handleRelay)
+	s.adminMux.HandleFunc("/api/v1/relay-status", s.handleRelayStatus)
 
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
@@ -695,19 +703,17 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push the rule to peer(s) via relay (if relay is enabled)
-	if s.relay != nil {
-		if req.PeerName == "__all__" {
-			// Broadcast to all connected peers (skip self-referencing rules)
-			for _, peerName := range s.relay.GetConnectedPeerNames() {
-				if req.SourcePeer != "" && req.SourcePeer == peerName {
-					continue // Skip: peer can't filter traffic from itself
-				}
-				s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+	// Push the rule to peer(s) via relay
+	if req.PeerName == "__all__" {
+		// Broadcast to all connected peers (skip self-referencing rules)
+		for _, peerName := range s.relay.GetConnectedPeerNames() {
+			if req.SourcePeer != "" && req.SourcePeer == peerName {
+				continue // Skip: peer can't filter traffic from itself
 			}
-		} else {
-			s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+			s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 		}
+	} else {
+		s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 	}
 
 	// Validate TTL bounds
@@ -770,18 +776,16 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Push the rule removal to peer(s) via relay (if relay is enabled)
-	if s.relay != nil {
-		if req.PeerName == "__all__" {
-			// Broadcast to all connected peers (skip self-referencing rules)
-			for _, peerName := range s.relay.GetConnectedPeerNames() {
-				if req.SourcePeer != "" && req.SourcePeer == peerName {
-					continue
-				}
-				s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
+	if req.PeerName == "__all__" {
+		// Broadcast to all connected peers (skip self-referencing rules)
+		for _, peerName := range s.relay.GetConnectedPeerNames() {
+			if req.SourcePeer != "" && req.SourcePeer == peerName {
+				continue
 			}
-		} else {
-			s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
+			s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
 		}
+	} else {
+		s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
 	}
 
 	// Update coordinator's filter and persist to S3
@@ -1914,7 +1918,7 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 	case http.MethodPut:
 		s.handleS3PutObject(w, r, bucket, key)
 	case http.MethodDelete:
-		s.handleS3DeleteObject(w, bucket, key)
+		s.handleS3DeleteObject(w, r, bucket, key)
 	case http.MethodHead:
 		s.handleS3HeadObject(w, bucket, key)
 	default:
@@ -2018,12 +2022,27 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
+	// Replicate to other coordinators asynchronously
+	if s.replicator != nil {
+		go func() {
+			// Use request context with timeout for proper cancellation propagation
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			if err := s.replicator.ReplicateOperation(ctx, bucket, key, body, contentType, nil); err != nil {
+				log.Error().Err(err).
+					Str("bucket", bucket).
+					Str("key", key).
+					Msg("Failed to replicate S3 PUT operation")
+			}
+		}()
+	}
+
 	w.Header().Set("ETag", meta.ETag)
 	w.WriteHeader(http.StatusOK)
 }
 
 // handleS3DeleteObject deletes an object.
-func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string) {
+func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// Check bucket write permission (could be extended to full RBAC)
 	if bucket == auth.SystemBucket {
 		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
@@ -2043,6 +2062,21 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 			s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
 		}
 		return
+	}
+
+	// Replicate delete to other coordinators asynchronously
+	if s.replicator != nil {
+		go func() {
+			// Use request context with timeout for proper cancellation propagation
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			if err := s.replicator.ReplicateDelete(ctx, bucket, key); err != nil {
+				log.Error().Err(err).
+					Str("bucket", bucket).
+					Str("key", key).
+					Msg("Failed to replicate S3 DELETE operation")
+			}
+		}()
 	}
 
 	w.WriteHeader(http.StatusNoContent)

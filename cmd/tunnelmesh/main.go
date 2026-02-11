@@ -5,12 +5,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -103,13 +103,8 @@ var (
 	joinContext string
 
 	// Server feature flags
-	locationsEnabled bool
-
 	// Tracing flag
 	enableTracing bool
-
-	// Pprof flag
-	pprofAddr string
 
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
@@ -166,21 +161,6 @@ For more help on any command, use: tunnelmesh <command> --help`,
 	rootCmd.PersistentFlags().StringVar(&serviceRunMode, "service-mode", "", "Service mode: serve or join (internal use)")
 	_ = rootCmd.PersistentFlags().MarkHidden("service-run")
 	_ = rootCmd.PersistentFlags().MarkHidden("service-mode")
-
-	// Serve command - run coordination server
-	serveCmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Run the coordination server",
-		Long: `Start the TunnelMesh coordination server.
-
-The server manages peer registration, discovery, and DNS records.
-It does not route traffic - peers connect directly to each other.`,
-		RunE: runServe,
-	}
-	serveCmd.Flags().BoolVar(&locationsEnabled, "locations", false, "enable node location tracking (uses external IP geolocation API)")
-	serveCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
-	serveCmd.Flags().StringVar(&pprofAddr, "pprof-addr", "", "enable pprof profiling on this address (e.g., localhost:6060)")
-	rootCmd.AddCommand(serveCmd)
 
 	// Join command
 	joinCmd := &cobra.Command{
@@ -346,7 +326,6 @@ func runAsService() {
 	prg := &svc.Program{
 		Mode:       mode,
 		ConfigPath: configPath,
-		RunServe:   runServeFromService,
 		RunJoin:    runJoinFromService,
 	}
 
@@ -357,140 +336,6 @@ func runAsService() {
 }
 
 // runServeFromService runs the server mode from within a service.
-func runServeFromService(ctx context.Context, configPath string) error {
-	var cfg *config.ServerConfig
-	var err error
-
-	if configPath != "" {
-		cfg, err = config.LoadServerConfig(configPath)
-		if err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
-	} else {
-		return fmt.Errorf("config file required")
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-
-	// Apply configured log level
-	if config.ApplyLogLevel(cfg.LogLevel) {
-		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
-	}
-
-	srv, err := coord.NewServer(cfg)
-	if err != nil {
-		return fmt.Errorf("create server: %w", err)
-	}
-	srv.SetVersion(Version)
-
-	log.Info().
-		Str("listen", cfg.Listen).
-		Str("mesh_cidr", mesh.CIDR).
-		Str("domain", mesh.DomainSuffix).
-		Str("data_dir", cfg.DataDir).
-		Msg("starting coordination server")
-
-	// Start periodic stats history saving
-	srv.StartPeriodicSave(ctx)
-
-	// Start periodic S3 cleanup (tombstoned objects, expired shares)
-	srv.StartPeriodicCleanup(ctx)
-
-	// Start HTTP server in goroutine
-	go func() {
-		if err := srv.ListenAndServe(); err != nil {
-			log.Error().Err(err).Msg("server error")
-		}
-	}()
-
-	// If JoinMesh is configured, join the mesh as a client
-	// nolint:dupl // Mesh join logic is duplicated for serve and standalone modes
-	if cfg.JoinMesh != nil {
-		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
-		cfg.JoinMesh.AuthToken = cfg.AuthToken
-
-		log.Info().
-			Str("name", cfg.JoinMesh.Name).
-			Msg("joining mesh as client")
-
-		// Callback to start admin HTTPS server after joining mesh
-		onJoined := func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter) {
-			// Initialize coordinator metrics on the peer metrics registry
-			// so they're exposed on the /metrics endpoint
-			srv.SetMetricsRegistry(metrics.Registry)
-
-			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
-			srv.SetCoordMeshIP(meshIP)
-
-			// Initialize Docker manager for coordinator (for API endpoints)
-			// Auto-detect Docker socket if not configured
-			log.Info().Msg("Checking for Docker socket for coordinator")
-			if cfg.JoinMesh.Docker.Socket == "" {
-				if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-					cfg.JoinMesh.Docker.Socket = "unix:///var/run/docker.sock"
-					log.Info().Msg("Auto-detected Docker socket at /var/run/docker.sock")
-				} else {
-					log.Info().Err(err).Msg("Docker socket not found at /var/run/docker.sock")
-				}
-			} else {
-				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
-			}
-			if cfg.JoinMesh.Docker.Socket != "" {
-				// Create Docker manager with systemStore for stats persistence
-				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
-				if err := dockerMgr.Start(ctx); err != nil {
-					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
-				} else {
-					// Set packet filter for automatic port forwarding
-					dockerMgr.SetFilter(filter)
-					srv.SetDockerManager(dockerMgr)
-					log.Info().Msg("Coordinator Docker manager started with packet filter")
-				}
-			}
-
-			if cfg.Admin.Enabled && tlsMgr != nil {
-				// Load TLS cert for admin HTTPS
-				tlsCert, err := tlsMgr.LoadCert()
-				if err != nil {
-					log.Error().Err(err).Msg("failed to load TLS cert for admin")
-					return
-				}
-				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
-				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
-					log.Error().Err(err).Msg("failed to start admin server")
-				}
-
-				// Start NFS server if S3 is enabled
-				if cfg.S3.Enabled {
-					nfsAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", coord.NFSPort))
-					if err := srv.StartNFSServer(nfsAddr, tlsCert); err != nil {
-						log.Error().Err(err).Msg("failed to start NFS server")
-					}
-				}
-			}
-		}
-
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			if err := runJoinWithConfigAndCallback(ctx, cfg.JoinMesh, onJoined); err != nil {
-				log.Error().Err(err).Msg("failed to join mesh as client")
-			}
-		}()
-	}
-
-	// Wait for context cancellation (service stop)
-	<-ctx.Done()
-
-	// Save stats history before exit
-	if err := srv.Shutdown(); err != nil {
-		log.Error().Err(err).Msg("error during shutdown")
-	}
-
-	return nil
-}
-
 // runJoinFromService runs the peer mode from within a service.
 func runJoinFromService(ctx context.Context, configPath string) error {
 	log.Info().Str("config_path", configPath).Msg("runJoinFromService starting")
@@ -513,12 +358,17 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 	}
 
 	log.Info().
-		Str("server", cfg.Server).
+		Str("servers", strings.Join(cfg.Servers, ", ")).
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	if cfg.Server == "" || cfg.AuthToken == "" {
-		return fmt.Errorf("server and token are required in config")
+	// Validate configuration
+	// Standalone coordinators (first in network) can have empty servers list
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers")
+	}
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("auth_token is required in config")
 	}
 
 	// Log network interface information for debugging
@@ -536,198 +386,6 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 	}
 
 	return runJoinWithConfig(ctx, cfg)
-}
-
-func runServe(cmd *cobra.Command, _ []string) error {
-	setupLogging()
-	logStartupBanner()
-
-	// Initialize tracing if enabled
-	if enableTracing {
-		if err := tracing.Init(true, tracing.DefaultBufferSize); err != nil {
-			log.Warn().Err(err).Msg("failed to initialize tracing")
-		} else {
-			log.Info().Msg("runtime tracing enabled")
-			defer tracing.Stop()
-		}
-	}
-
-	// Start pprof server if enabled
-	if pprofAddr != "" {
-		go func() {
-			log.Info().Str("addr", pprofAddr).Msg("starting pprof server")
-			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
-				log.Error().Err(err).Msg("pprof server error")
-			}
-		}()
-	}
-
-	var cfg *config.ServerConfig
-	var err error
-
-	if cfgFile != "" {
-		cfg, err = config.LoadServerConfig(cfgFile)
-		if err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
-	} else {
-		// Try default locations
-		defaults := []string{"server.yaml", "tunnelmesh-server.yaml"}
-		for _, path := range defaults {
-			if _, err := os.Stat(path); err == nil {
-				cfg, err = config.LoadServerConfig(path)
-				if err != nil {
-					return fmt.Errorf("load config: %w", err)
-				}
-				break
-			}
-		}
-		if cfg == nil {
-			return fmt.Errorf("config file required (use --config or create server.yaml)")
-		}
-	}
-
-	// Apply command-line flag overrides
-	if locationsEnabled {
-		cfg.Locations = true
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-
-	// Apply configured log level from config file
-	if config.ApplyLogLevel(cfg.LogLevel) {
-		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
-	}
-
-	srv, err := coord.NewServer(cfg)
-	if err != nil {
-		return fmt.Errorf("create server: %w", err)
-	}
-	srv.SetVersion(Version)
-
-	// Create context for shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Handle shutdown signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		log.Info().Msg("shutting down...")
-		cancel()
-	}()
-
-	log.Info().
-		Str("listen", cfg.Listen).
-		Str("mesh_cidr", mesh.CIDR).
-		Str("domain", mesh.DomainSuffix).
-		Str("data_dir", cfg.DataDir).
-		Msg("starting coordination server")
-
-	// Start periodic stats history saving
-	srv.StartPeriodicSave(ctx)
-
-	// Start periodic S3 cleanup (tombstoned objects, expired shares)
-	srv.StartPeriodicCleanup(ctx)
-
-	// Start HTTP server in goroutine
-	go func() {
-		if err := srv.ListenAndServe(); err != nil {
-			log.Fatal().Err(err).Msg("server error")
-		}
-	}()
-
-	// If JoinMesh is configured, join the mesh as a client
-	// nolint:dupl // Companion join logic for different mode
-	if cfg.JoinMesh != nil {
-		// Set server URL to localhost and copy auth token
-		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
-		cfg.JoinMesh.AuthToken = cfg.AuthToken
-
-		log.Info().
-			Str("name", cfg.JoinMesh.Name).
-			Msg("joining mesh as client")
-
-		// Callback to start admin HTTPS server after joining mesh
-		onJoined := func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter) {
-			// Initialize coordinator metrics on the peer metrics registry
-			// so they're exposed on the /metrics endpoint
-			srv.SetMetricsRegistry(metrics.Registry)
-
-			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
-			srv.SetCoordMeshIP(meshIP)
-
-			// Initialize Docker manager for coordinator (for API endpoints)
-			// Auto-detect Docker socket if not configured
-			log.Info().Msg("Checking for Docker socket for coordinator")
-			if cfg.JoinMesh.Docker.Socket == "" {
-				if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-					cfg.JoinMesh.Docker.Socket = "unix:///var/run/docker.sock"
-					log.Info().Msg("Auto-detected Docker socket at /var/run/docker.sock")
-				} else {
-					log.Info().Err(err).Msg("Docker socket not found at /var/run/docker.sock")
-				}
-			} else {
-				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
-			}
-			if cfg.JoinMesh.Docker.Socket != "" {
-				// Create Docker manager with systemStore for stats persistence
-				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
-				if err := dockerMgr.Start(ctx); err != nil {
-					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
-				} else {
-					// Set packet filter for automatic port forwarding
-					dockerMgr.SetFilter(filter)
-					srv.SetDockerManager(dockerMgr)
-					log.Info().Msg("Coordinator Docker manager started with packet filter")
-				}
-			}
-
-			if cfg.Admin.Enabled && tlsMgr != nil {
-				// Load TLS cert for admin HTTPS
-				tlsCert, err := tlsMgr.LoadCert()
-				if err != nil {
-					log.Error().Err(err).Msg("failed to load TLS cert for admin")
-					return
-				}
-				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
-				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
-					log.Error().Err(err).Msg("failed to start admin server")
-				}
-
-				// Start NFS server if S3 is enabled
-				if cfg.S3.Enabled {
-					nfsAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", coord.NFSPort))
-					if err := srv.StartNFSServer(nfsAddr, tlsCert); err != nil {
-						log.Error().Err(err).Msg("failed to start NFS server")
-					}
-				}
-			}
-		}
-
-		// Run join in a goroutine so we can handle shutdown
-		go func() {
-			// Small delay to ensure server is ready
-			time.Sleep(500 * time.Millisecond)
-			if err := runJoinWithConfigAndCallback(ctx, cfg.JoinMesh, onJoined); err != nil {
-				log.Error().Err(err).Msg("failed to join mesh as client")
-			}
-		}()
-	}
-
-	// Wait for shutdown
-	<-ctx.Done()
-
-	// Save stats history before exit
-	if err := srv.Shutdown(); err != nil {
-		log.Error().Err(err).Msg("error during shutdown")
-	}
-
-	return nil
 }
 
 // nolint:revive // args required by cobra.Command RunE signature
@@ -805,27 +463,29 @@ func writeServerConfig(path, authToken string, includePeer bool) error {
 		hostname = "coordinator"
 	}
 
-	config := fmt.Sprintf(`# TunnelMesh Server - see server.yaml.example for all options
+	// Generate unified peer config with coordinator section
+	config := fmt.Sprintf(`# TunnelMesh Peer Config - Coordinator Mode
+name: "%s"
+servers:
+  - "http://localhost:8080"
 auth_token: "%s"
 
-admin:
+dns:
   enabled: true
 
-relay:
+coordinator:
   enabled: true
+  listen: ":8080"
 
-s3:
-  enabled: true
-`, authToken)
-
-	if includePeer {
-		config += fmt.Sprintf(`
-join_mesh:
-  name: "%s"
-  dns:
+  admin:
     enabled: true
-`, hostname)
-	}
+
+  relay:
+    enabled: true
+
+  s3:
+    enabled: true
+`, hostname, authToken)
 
 	return os.WriteFile(path, []byte(config), 0600)
 }
@@ -869,7 +529,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	// Override with flags
 	if serverURL != "" {
-		cfg.Server = serverURL
+		cfg.Servers = []string{serverURL}
 	}
 	if authToken != "" {
 		cfg.AuthToken = authToken
@@ -891,8 +551,12 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	if cfg.Server == "" || cfg.AuthToken == "" {
-		return fmt.Errorf("server and token are required\nHint: run with --server and --token flags to update context credentials")
+	// Validate configuration (allow empty servers for standalone coordinators)
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers\nHint: run with --server flag to update context credentials")
+	}
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("auth_token is required\nHint: run with --token flag to update context credentials")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -920,12 +584,84 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 }
 
 // nolint:gocyclo // Main join logic is inherently complex due to protocol state machine
+// discoverAndRegisterWithCoordinator discovers coordinators and tries to register with them.
+// Discovery hierarchy: Static config → DNS SRV → Retry with exponential backoff
+// Returns the successful client and registration response.
+func discoverAndRegisterWithCoordinator(
+	ctx context.Context,
+	cfg *config.PeerConfig,
+	publicKey string,
+	publicIPs, privateIPs []string,
+	sshPort, udpPort int,
+	behindNAT bool,
+	version string,
+	location *proto.GeoLocation,
+) (*coord.Client, *proto.RegisterResponse, error) {
+	// Build list of coordinators to try
+	coordinators := make([]string, 0, len(cfg.Servers)+10)
+
+	// Use static config servers (coordinators discover each other via peer list)
+	coordinators = append(coordinators, cfg.Servers...)
+
+	if len(coordinators) == 0 {
+		return nil, nil, fmt.Errorf("no coordinators configured (check servers config)")
+	}
+
+	// Try each coordinator until one succeeds
+	var lastErr error
+	for _, coordURL := range coordinators {
+		log.Info().Str("coordinator", coordURL).Msg("attempting registration")
+
+		client := coord.NewClient(coordURL, cfg.AuthToken)
+		resp, err := client.RegisterWithRetry(
+			ctx,
+			cfg.Name,
+			publicKey,
+			publicIPs,
+			privateIPs,
+			sshPort,
+			udpPort,
+			behindNAT,
+			version,
+			location,
+			cfg.ExitPeer,
+			cfg.AllowExitTraffic,
+			cfg.DNS.Aliases,
+			cfg.Coordinator.Enabled,
+			coord.DefaultRetryConfig(),
+		)
+
+		if err == nil {
+			log.Info().
+				Str("coordinator", coordURL).
+				Str("mesh_ip", resp.MeshIP).
+				Msg("successfully registered with coordinator")
+
+			return client, resp, nil
+		}
+
+		lastErr = err
+		log.Warn().
+			Err(err).
+			Str("coordinator", coordURL).
+			Msg("failed to register with coordinator, trying next")
+	}
+
+	return nil, nil, fmt.Errorf("failed to register with any coordinator (tried %d): %w", len(coordinators), lastErr)
+}
+
+//nolint:gocyclo // Join function coordinates multiple complex subsystems (peer, coordinator, TUN, DNS, etc)
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
 
-	if cfg.Server == "" || cfg.AuthToken == "" {
-		return fmt.Errorf("server and token are required")
+	// Validate configuration
+	// Standalone coordinators (first in network) can have empty servers list
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers")
+	}
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("auth_token is required")
 	}
 
 	// Apply configured log level from config file
@@ -935,6 +671,71 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	// Tune GC for lower latency in packet forwarding
 	setupGCTuning()
+
+	// Start coordinator services if enabled (before registration)
+	// This allows this peer to register with itself if it's the bootstrap coordinator
+	var srv *coord.Server
+	if cfg.Coordinator.Enabled {
+		log.Info().Msg("coordinator mode enabled, starting coordination server")
+
+		// Create coordinator server
+		var err error
+		srv, err = coord.NewServer(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("create coordinator: %w", err)
+		}
+		srv.SetVersion(Version)
+
+		// Note: Cleanup handled by signal handler in production, t.Cleanup() in tests
+
+		// Start periodic background tasks
+		srv.StartPeriodicSave(ctx)
+		srv.StartPeriodicCleanup(ctx)
+
+		// Start replicator if clustering is enabled
+		if err := srv.StartReplicator(); err != nil {
+			log.Warn().Err(err).Msg("failed to start replicator (will run without replication)")
+		}
+
+		// Start coordinator HTTP server in background
+		go func() {
+			if err := srv.ListenAndServe(); err != nil {
+				log.Error().Err(err).Msg("coordinator server error - server stopped")
+				// Note: Process continues running but coordinator services unavailable
+			}
+		}()
+
+		// Wait for coordinator server to be ready (up to 5 seconds)
+		localServerURL := "http://127.0.0.1" + cfg.Coordinator.Listen
+		healthURL := localServerURL + "/health"
+		ready := false
+		for i := 0; i < 50; i++ {
+			resp, err := http.Get(healthURL)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					ready = true
+					break
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !ready {
+			return fmt.Errorf("coordinator server failed to become ready after 5 seconds")
+		}
+
+		// If no servers configured, use localhost coordinator
+		if len(cfg.Servers) == 0 {
+			cfg.Servers = []string{localServerURL}
+			log.Info().
+				Str("coordinator", localServerURL).
+				Msg("using local coordinator for bootstrap")
+		}
+
+		log.Info().
+			Str("listen", cfg.Coordinator.Listen).
+			Msg("coordinator server started, now joining mesh as peer")
+	}
 
 	// Ensure keys exist
 	signer, err := config.EnsureKeyPairExists(cfg.PrivateKey)
@@ -953,9 +754,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		Strs("private", privateIPs).
 		Bool("behind_nat", behindNAT).
 		Msg("detected local IPs")
-
-	// Connect to coordination server
-	client := coord.NewClient(cfg.Server, cfg.AuthToken)
 
 	// UDP port is SSH port + 1
 	udpPort := cfg.SSHPort + 1
@@ -976,8 +774,11 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			Msg("geolocation configured")
 	}
 
-	// Register with retry and exponential backoff
-	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, cfg.ExitPeer, cfg.AllowExitTraffic, cfg.DNS.Aliases, coord.DefaultRetryConfig())
+	// Discover and connect to coordination server
+	client, resp, err := discoverAndRegisterWithCoordinator(
+		ctx, cfg, pubKeyEncoded, publicIPs, privateIPs,
+		cfg.SSHPort, udpPort, behindNAT, Version, location,
+	)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -1011,7 +812,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			ctx := meshctx.Context{
 				Name:       joinContext,
 				ConfigPath: cfgFile,
-				Server:     cfg.Server,
+				Server:     cfg.PrimaryServer(),
 				AuthToken:  cfg.AuthToken,
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
@@ -1052,7 +853,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 
 		// Fetch and store CA certificate locally
-		caPEM, err := FetchCA(cfg.Server)
+		caPEM, err := FetchCA(cfg.PrimaryServer())
 		if err != nil {
 			return fmt.Errorf("fetch CA certificate: %w", err)
 		}
@@ -1135,6 +936,57 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		onJoined(resp.MeshIP, tlsMgr, filter)
 	}
 
+	// Start coordinator admin services if running as coordinator
+	if srv != nil && tlsMgr != nil {
+		srv.SetCoordMeshIP(resp.MeshIP)
+		srv.SetMetricsRegistry(metrics.Registry)
+
+		// Note: Existing coordinator discovery is handled by StartReplicator()
+		// which is called later in this function. It discovers peers from the
+		// server's peer list after the coordinator has fully joined the mesh.
+
+		// Load TLS certificate once for all services
+		// TLS is mandatory for coordinators (admin, S3, NFS all require HTTPS)
+		tlsCert, err := tls.LoadX509KeyPair(tlsMgr.CertPath(), tlsMgr.KeyPath())
+		if err != nil {
+			return fmt.Errorf("failed to load TLS certificate for coordinator services: %w", err)
+		}
+
+		{
+			// Start admin HTTPS server if enabled
+			// Admin always uses port 443 (standard HTTPS) on mesh IP for consistency
+			// This ensures coordinator replication works (port must be predictable)
+			// Admin is always enabled for coordinators
+			adminAddr := net.JoinHostPort(resp.MeshIP, "443")
+			if err := srv.StartAdminServer(adminAddr, &tlsCert); err != nil {
+				log.Error().Err(err).Msg("failed to start admin server")
+			}
+
+			// Always start S3 and NFS servers on coordinators
+			// S3 port hardcoded to 9000 (mesh-internal, critical for replication)
+			s3Addr := net.JoinHostPort(resp.MeshIP, "9000")
+			if err := srv.StartS3Server(s3Addr, &tlsCert); err != nil {
+				log.Error().Err(err).Msg("failed to start S3 server")
+			}
+
+			// Start NFS server (automatically enabled with S3)
+			nfsAddr := net.JoinHostPort(resp.MeshIP, fmt.Sprintf("%d", coord.NFSPort))
+			if err := srv.StartNFSServer(nfsAddr, &tlsCert); err != nil {
+				log.Error().Err(err).Msg("failed to start NFS server")
+			}
+		}
+
+		// Start Docker manager for coordinator
+		if cfg.Docker.Socket != "" {
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, srv.GetSystemStore())
+			if err := dockerMgr.Start(ctx); err != nil {
+				log.Warn().Err(err).Msg("failed to start Docker manager")
+			} else {
+				srv.SetDockerManager(dockerMgr)
+			}
+		}
+	}
+
 	// Start control socket for CLI commands
 	socketPath := cfg.ControlSocket
 	if socketPath == "" {
@@ -1147,21 +999,24 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		defer func() { _ = ctrlServer.Stop() }()
 	}
 
-	// Initialize Docker manager for automatic port forwarding
-	// Auto-detect Docker socket if not configured
-	if cfg.Docker.Socket == "" {
-		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-			cfg.Docker.Socket = "unix:///var/run/docker.sock"
-			log.Debug().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+	// Initialize Docker manager for automatic port forwarding (regular peers only)
+	// Coordinators already initialized Docker manager above with system store
+	if srv == nil {
+		// Auto-detect Docker socket if not configured
+		if cfg.Docker.Socket == "" {
+			if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+				cfg.Docker.Socket = "unix:///var/run/docker.sock"
+				log.Debug().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+			}
 		}
-	}
-	if cfg.Docker.Socket != "" {
-		dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
-		if err := dockerMgr.Start(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to start Docker manager")
-		} else {
-			defer func() { _ = dockerMgr.Stop() }()
-			log.Info().Msg("Docker manager started")
+		if cfg.Docker.Socket != "" {
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
+			if err := dockerMgr.Start(ctx); err != nil {
+				log.Warn().Err(err).Msg("failed to start Docker manager")
+			} else {
+				defer func() { _ = dockerMgr.Stop() }()
+				log.Info().Msg("Docker manager started")
+			}
 		}
 	}
 
@@ -1343,7 +1198,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				LocalPeerName:  cfg.Name,
 				StaticPrivate:  privKey,
 				StaticPublic:   pubKey,
-				CoordServerURL: cfg.Server,
+				CoordServerURL: cfg.PrimaryServer(),
 				AuthToken:      cfg.AuthToken,
 				PeerResolver:   peerResolver,
 			})
@@ -1514,7 +1369,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			log.Error().Err(err).Msg("failed to create WireGuard client store")
 		} else {
 			wgCfg := &peerwg.ConcentratorConfig{
-				ServerURL:    cfg.Server,
+				ServerURL:    cfg.PrimaryServer(),
 				AuthToken:    cfg.AuthToken,
 				ListenPort:   cfg.WireGuard.ListenPort,
 				DataDir:      dataDir,
@@ -1623,32 +1478,31 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	// Start DNS resolver if enabled
 	var dnsConfigured bool
-	if cfg.DNS.Enabled {
-		resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
-		// Set coordinator's mesh IP for "this.tunnelmesh" resolution
-		if resp.CoordMeshIP != "" {
-			resolver.SetCoordMeshIP(resp.CoordMeshIP)
-		}
-		node.Resolver = resolver
+	// DNS is always enabled for all peers
+	resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
+	// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+	if resp.CoordMeshIP != "" {
+		resolver.SetCoordMeshIP(resp.CoordMeshIP)
+	}
+	node.Resolver = resolver
 
-		// Initial DNS sync
-		if err := syncDNS(client, resolver); err != nil {
-			log.Warn().Err(err).Msg("failed to sync DNS")
-		}
+	// Initial DNS sync
+	if err := syncDNS(client, resolver); err != nil {
+		log.Warn().Err(err).Msg("failed to sync DNS")
+	}
 
-		go func() {
-			if err := resolver.ListenAndServe(cfg.DNS.Listen); err != nil {
-				log.Error().Err(err).Msg("DNS server error")
-			}
-		}()
-		log.Info().Str("listen", cfg.DNS.Listen).Msg("DNS server started")
-
-		// Configure system resolver
-		if err := configureSystemResolver(resp.Domain, cfg.DNS.Listen); err != nil {
-			log.Warn().Err(err).Msg("failed to configure system resolver")
-		} else {
-			dnsConfigured = true
+	go func() {
+		if err := resolver.ListenAndServe(cfg.DNS.Listen); err != nil {
+			log.Error().Err(err).Msg("DNS server error")
 		}
+	}()
+	log.Info().Str("listen", cfg.DNS.Listen).Msg("DNS server started")
+
+	// Configure system resolver
+	if err := configureSystemResolver(resp.Domain, cfg.DNS.Listen); err != nil {
+		log.Warn().Err(err).Msg("failed to configure system resolver")
+	} else {
+		dnsConfigured = true
 	}
 
 	// Start packet forwarder if TUN is available
@@ -1802,6 +1656,14 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
 
+	// Shutdown coordinator server if running
+	if srv != nil {
+		log.Info().Msg("shutting down coordinator server")
+		if err := srv.Shutdown(); err != nil {
+			log.Warn().Err(err).Msg("failed to shutdown coordinator server")
+		}
+	}
+
 	// Clean up system resolver
 	if dnsConfigured {
 		removeSystemResolver(resp.Domain)
@@ -1873,15 +1735,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Server connection
 	fmt.Println("Server:")
-	if cfg.Server == "" {
+	if len(cfg.Servers) == 0 {
 		fmt.Println("  URL:         (not configured)")
 		fmt.Println("  Status:      disconnected")
 		return nil
 	}
-	fmt.Printf("  URL:         %s\n", cfg.Server)
+	fmt.Printf("  URL:         %s\n", cfg.PrimaryServer())
 
 	// Try to connect and get peer list
-	client := coord.NewClient(cfg.Server, cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	peers, err := client.ListPeers()
 	if err != nil {
 		fmt.Println("  Status:      unreachable")
@@ -1933,13 +1795,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// DNS info
 	fmt.Println("DNS:")
-	if cfg.DNS.Enabled {
-		fmt.Println("  Enabled:     yes")
-		fmt.Printf("  Listen:      %s\n", cfg.DNS.Listen)
-		fmt.Printf("  Cache TTL:   %ds\n", cfg.DNS.CacheTTL)
-	} else {
-		fmt.Println("  Enabled:     no")
-	}
+	fmt.Println("  Enabled:     yes (always)")
+	fmt.Printf("  Listen:      %s\n", cfg.DNS.Listen)
+	fmt.Printf("  Cache TTL:   %ds\n", cfg.DNS.CacheTTL)
 
 	return nil
 }
@@ -1952,7 +1810,7 @@ func runPeers(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := coord.NewClient(cfg.Server, cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	peers, err := client.ListPeers()
 	if err != nil {
 		return fmt.Errorf("list peers: %w", err)
@@ -1988,7 +1846,7 @@ func runResolve(cmd *cobra.Command, args []string) error {
 
 	hostname := args[0]
 
-	client := coord.NewClient(cfg.Server, cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	records, err := client.GetDNSRecords()
 	if err != nil {
 		return fmt.Errorf("get DNS records: %w", err)
@@ -2012,7 +1870,7 @@ func runLeave(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := coord.NewClient(cfg.Server, cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	if err := client.Deregister(cfg.Name); err != nil {
 		return fmt.Errorf("deregister: %w", err)
 	}
@@ -2066,7 +1924,7 @@ func loadConfig() (*config.PeerConfig, error) {
 			// This happens when joining with --server/--token flags instead of --config
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
-					Server:     activeCtx.Server,
+					Servers:    []string{activeCtx.Server},
 					AuthToken:  activeCtx.AuthToken,
 					SSHPort:    2222,
 					PrivateKey: filepath.Join(homeDir, ".tunnelmesh", "id_ed25519"),
@@ -2075,7 +1933,6 @@ func loadConfig() (*config.PeerConfig, error) {
 						MTU:  1400,
 					},
 					DNS: config.DNSConfig{
-						Enabled:  true,
 						Listen:   activeCtx.DNSListen,
 						CacheTTL: 300,
 					},
@@ -2106,7 +1963,6 @@ func loadConfig() (*config.PeerConfig, error) {
 			MTU:  1400,
 		},
 		DNS: config.DNSConfig{
-			Enabled:  true,
 			Listen:   "127.0.0.53:5353",
 			CacheTTL: 300,
 		},

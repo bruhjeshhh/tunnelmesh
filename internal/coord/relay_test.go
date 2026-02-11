@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -13,7 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -32,17 +32,26 @@ func connectRelay(t *testing.T, serverURL, peerName, jwtToken string) *websocket
 	conn, _, err := dialer.Dial(wsURL, headers)
 	require.NoError(t, err, "failed to connect to relay")
 
+	// Drain the automatic service port notification message (sent because S3 is always enabled)
+	// This prevents tests from reading it when they expect other messages
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, data, err := conn.ReadMessage()
+	// Ignore read errors - the notification might not arrive immediately
+	_ = err
+	_ = data // May or may not receive service port notification (0x33)
+	// Reset deadline for test use
+	_ = conn.SetReadDeadline(time.Time{})
+
 	return conn
 }
 
 func TestRelayManager_HandleHeartbeat(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	// Start test server
 	ts := httptest.NewServer(srv)
@@ -99,13 +108,12 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 }
 
 func TestRelayManager_NotifyRelayRequest(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -141,13 +149,12 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 }
 
 func TestRelayManager_NotifyHolePunch(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -180,13 +187,12 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 }
 
 func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	// Notify a peer that's not connected - should not panic
 	srv.relay.NotifyRelayRequest("nonexistent-peer", []string{"peer2"})
@@ -195,13 +201,12 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 }
 
 func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -299,13 +304,12 @@ var _ = sync.WaitGroup{}
 // --- RTT and latency tests ---
 
 func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -351,13 +355,12 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 }
 
 func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -398,13 +401,12 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 }
 
 func TestRelayManager_QueryFilterRules(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -478,13 +480,12 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 }
 
 func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -504,13 +505,12 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 }
 
 func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	// Query filter rules for non-existent peer
 	_, err = srv.relay.QueryFilterRules("nonexistent-peer", 1*time.Second)
@@ -519,13 +519,12 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 }
 
 func TestRelayManager_StoresReportedLatency(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Relay:     config.RelayConfig{Enabled: true},
-	}
-	srv, err := NewServer(cfg)
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()

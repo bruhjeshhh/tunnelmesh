@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/replication"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/docker"
@@ -65,11 +67,12 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	cfg          *config.ServerConfig
-	mux          *http.ServeMux // Public coordination API (peer registration, heartbeats)
-	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring) - mesh-only
+	cfg          *config.PeerConfig
+	mux          *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
+	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
 	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
 	peers        map[string]*peerInfo
+	coordinators map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
 	dnsCache     map[string]string // hostname -> mesh IP
@@ -83,7 +86,7 @@ type Server struct {
 	version      string                // Server version for admin display
 	sseHub       *sseHub               // SSE hub for real-time dashboard updates
 	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
+	coordMeshIP  atomic.Value          // Coordinator's mesh IP (string) for "this.tunnelmesh" resolution
 	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
@@ -96,37 +99,53 @@ type Server struct {
 	// NFS server
 	nfsServer *nfs.Server // NFS server for file shares
 	// Packet filter
-	filter            *routing.PacketFilter // Global packet filter
-	filterSavePending atomic.Bool           // Debounce flag for async filter saves
-	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	filter       *routing.PacketFilter // Global packet filter
+	filterSaveMu sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	filterTimer  *time.Timer           // Timer for debouncing filter saves
 	// Docker orchestration (when coordinator joins mesh)
 	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
 	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
+	// Replication for multi-coordinator setup
+	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
+	meshTransport *replication.MeshTransport // Transport for replication messages
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
 // It uses deterministic allocation based on peer name hash for consistency.
+// State is persisted to S3 for recovery across coordinator restarts.
 type ipAllocator struct {
-	network  *net.IPNet
-	used     map[string]bool
-	peerToIP map[string]string // peer name -> allocated IP (for consistency)
-	next     uint32
-	mu       sync.Mutex
+	network     *net.IPNet
+	used        map[string]bool
+	peerToIP    map[string]string // peer name -> allocated IP (for consistency)
+	next        uint32
+	mu          sync.Mutex
+	systemStore *s3.SystemStore // For persisting allocations to S3
 }
 
-func newIPAllocator(cidr string) (*ipAllocator, error) {
+func newIPAllocator(cidr string, systemStore *s3.SystemStore) (*ipAllocator, error) {
 	_, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, fmt.Errorf("parse CIDR: %w", err)
 	}
 
-	return &ipAllocator{
-		network:  network,
-		used:     make(map[string]bool),
-		peerToIP: make(map[string]string),
-		next:     1, // Start from .1, skip .0 (network address)
-	}, nil
+	allocator := &ipAllocator{
+		network:     network,
+		used:        make(map[string]bool),
+		peerToIP:    make(map[string]string),
+		next:        1, // Start from .1, skip .0 (network address)
+		systemStore: systemStore,
+	}
+
+	// Load existing allocations from S3 if available
+	if systemStore != nil {
+		if err := allocator.loadFromS3(); err != nil {
+			log.Warn().Err(err).Msg("Failed to load IP allocations from S3, starting fresh")
+			// Continue with empty allocator - not a fatal error
+		}
+	}
+
+	return allocator, nil
 }
 
 // allocateForPeer allocates an IP for a specific peer, using deterministic
@@ -179,6 +198,14 @@ func (a *ipAllocator) allocateForPeer(peerName string) (string, error) {
 		if !a.used[ipStr] {
 			a.used[ipStr] = true
 			a.peerToIP[peerName] = ipStr
+
+			// Persist to S3 (async, non-blocking)
+			// Copy data while holding lock to avoid race condition
+			if a.systemStore != nil {
+				data := a.copyDataLocked()
+				go a.saveToS3Async(data)
+			}
+
 			return ipStr, nil
 		}
 	}
@@ -190,26 +217,84 @@ func (a *ipAllocator) release(ip string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.used, ip)
+
+	// Persist to S3 (async, non-blocking)
+	// Copy data while holding lock to avoid race condition
+	if a.systemStore != nil {
+		data := a.copyDataLocked()
+		go a.saveToS3Async(data)
+	}
+}
+
+// loadFromS3 loads IP allocations from S3 storage.
+// Called during initialization. Errors are logged but not fatal.
+func (a *ipAllocator) loadFromS3() error {
+	data, err := a.systemStore.LoadIPAllocations()
+	if err != nil {
+		return fmt.Errorf("load IP allocations: %w", err)
+	}
+
+	if data == nil {
+		// No existing data - fresh start
+		return nil
+	}
+
+	// Restore state
+	a.used = data.Used
+	a.peerToIP = data.PeerToIP
+	a.next = data.Next
+
+	log.Info().
+		Int("allocated_ips", len(a.used)).
+		Int("peer_mappings", len(a.peerToIP)).
+		Msg("Loaded IP allocations from S3")
+
+	return nil
+}
+
+// copyDataLocked creates a deep copy of IP allocation data.
+// Must be called while holding a.mu lock.
+func (a *ipAllocator) copyDataLocked() s3.IPAllocationsData {
+	// Deep copy maps to avoid data races
+	usedCopy := make(map[string]bool, len(a.used))
+	for k, v := range a.used {
+		usedCopy[k] = v
+	}
+
+	peerToIPCopy := make(map[string]string, len(a.peerToIP))
+	for k, v := range a.peerToIP {
+		peerToIPCopy[k] = v
+	}
+
+	return s3.IPAllocationsData{
+		Used:     usedCopy,
+		PeerToIP: peerToIPCopy,
+		Next:     a.next,
+	}
+}
+
+// saveToS3Async persists IP allocations to S3 storage asynchronously.
+// Called after each allocation/release. Errors are logged but don't fail the operation.
+// Takes a copy of the data to avoid holding locks during I/O.
+func (a *ipAllocator) saveToS3Async(data s3.IPAllocationsData) {
+	if err := a.systemStore.SaveIPAllocations(data); err != nil {
+		log.Error().Err(err).Msg("Failed to save IP allocations to S3")
+	}
 }
 
 // NewServer creates a new coordination server.
-func NewServer(cfg *config.ServerConfig) (*Server, error) {
-	ipAlloc, err := newIPAllocator(mesh.CIDR)
-	if err != nil {
-		return nil, fmt.Errorf("create IP allocator: %w", err)
-	}
-
+func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Determine coordinator name for stats organization
-	coordinatorName := "coordinator"
-	if cfg.JoinMesh != nil && cfg.JoinMesh.Name != "" {
-		coordinatorName = cfg.JoinMesh.Name
+	coordinatorName := cfg.Name
+	if coordinatorName == "" {
+		coordinatorName = "coordinator"
 	}
 
 	srv := &Server{
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
 		peers:        make(map[string]*peerInfo),
-		ipAlloc:      ipAlloc,
+		coordinators: make(map[string]*peerInfo),
 		dnsCache:     make(map[string]string),
 		aliasOwner:   make(map[string]string),
 		statsHistory: NewStatsHistory(coordinatorName),
@@ -221,31 +306,36 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Initialize IP geolocation cache if locations feature is enabled
-	if cfg.Locations {
+	if cfg.Coordinator.Locations {
 		srv.ipGeoCache = NewIPGeoCache("") // Use default ip-api.com URL
 		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
 	// Set peer expiration days from config
-	if cfg.UserExpirationDays > 0 {
-		auth.SetPeerExpirationDays(cfg.UserExpirationDays)
+	if cfg.Coordinator.UserExpirationDays > 0 {
+		auth.SetPeerExpirationDays(cfg.Coordinator.UserExpirationDays)
 	}
 
 	// Initialize WireGuard client store if enabled
-	if cfg.WireGuard.Enabled {
+	if cfg.Coordinator.WireGuardServer.Enabled {
 		srv.wgStore = wireguard.NewStore(mesh.CIDR)
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
-	// Initialize S3 storage if enabled
-	if cfg.S3.Enabled {
-		if err := srv.initS3Storage(cfg); err != nil {
-			return nil, fmt.Errorf("initialize S3 storage: %w", err)
-		}
+	// Initialize S3 storage (always enabled, must be before IP allocator)
+	if err := srv.initS3Storage(cfg); err != nil {
+		return nil, fmt.Errorf("initialize S3 storage: %w", err)
 	}
 
+	// Initialize IP allocator (after S3 so it can load persisted allocations)
+	ipAlloc, err := newIPAllocator(mesh.CIDR, srv.s3SystemStore)
+	if err != nil {
+		return nil, fmt.Errorf("create IP allocator: %w", err)
+	}
+	srv.ipAlloc = ipAlloc
+
 	// Initialize Certificate Authority for mesh TLS
-	ca, err := NewCertificateAuthority(cfg.DataDir, mesh.DomainSuffix)
+	ca, err := NewCertificateAuthority(cfg.Coordinator.DataDir, mesh.DomainSuffix)
 	if err != nil {
 		return nil, fmt.Errorf("initialize CA: %w", err)
 	}
@@ -257,11 +347,11 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Initialize packet filter
-	srv.filter = routing.NewPacketFilter(cfg.Filter.IsDefaultDeny())
+	srv.filter = routing.NewPacketFilter(cfg.Coordinator.Filter.IsDefaultDeny())
 
 	// Load coordinator config rules
-	coordRules := make([]routing.FilterRule, len(cfg.Filter.Rules))
-	for i, r := range cfg.Filter.Rules {
+	coordRules := make([]routing.FilterRule, len(cfg.Coordinator.Filter.Rules))
+	for i, r := range cfg.Coordinator.Filter.Rules {
 		coordRules[i] = routing.FilterRule{
 			Port:       r.Port,
 			Protocol:   r.ProtocolNumber(),
@@ -272,8 +362,8 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	srv.filter.SetCoordinatorRules(coordRules)
 
 	// Set service rules from config
-	serviceRules := make([]routing.FilterRule, len(cfg.ServicePorts))
-	for i, port := range cfg.ServicePorts {
+	serviceRules := make([]routing.FilterRule, len(cfg.Coordinator.ServicePorts))
+	for i, port := range cfg.Coordinator.ServicePorts {
 		serviceRules[i] = routing.FilterRule{
 			Port:     port,
 			Protocol: routing.ProtoTCP,
@@ -287,19 +377,51 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Warn().Err(err).Msg("failed to load filter rules, starting fresh")
 	}
 
+	// Initialize S3 replication for multi-coordinator deployments
+	// Coordinators discover each other through the peer list using is_coordinator flag
+	if srv.s3Store != nil {
+		// Create mesh transport for replication messages (HTTPS between coordinators)
+		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
+
+		// Create S3 store adapter for replication
+		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)
+
+		// Build node ID from coordinator name
+		nodeID := cfg.Name
+		if nodeID == "" {
+			nodeID = "coordinator"
+		}
+
+		// Initialize replicator
+		srv.replicator = replication.NewReplicator(replication.Config{
+			NodeID:               nodeID,
+			Transport:            srv.meshTransport,
+			S3Store:              s3Adapter,
+			Logger:               log.Logger,
+			Context:              ctx, // Pass server context for proper cancellation
+			AckTimeout:           10 * time.Second,
+			RetryInterval:        30 * time.Second,
+			MaxPendingOperations: 10000,
+		})
+
+		log.Info().
+			Str("node_id", nodeID).
+			Msg("replication engine initialized - coordinators will discover each other via peer list")
+	}
+
 	srv.setupRoutes()
 	return srv, nil
 }
 
 // statsHistoryPath returns the file path for stats history persistence.
 func (s *Server) statsHistoryPath() string {
-	return filepath.Join(s.cfg.DataDir, "stats_history.json")
+	return filepath.Join(s.cfg.Coordinator.DataDir, "stats_history.json")
 }
 
 // LoadStatsHistory loads stats history from S3 or disk.
 func (s *Server) LoadStatsHistory() error {
 	// Ensure data directory exists (needed for file fallback)
-	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
+	if err := os.MkdirAll(s.cfg.Coordinator.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
@@ -310,11 +432,7 @@ func (s *Server) LoadStatsHistory() error {
 
 	peerCount := s.statsHistory.PeerCount()
 	if peerCount > 0 {
-		source := "file"
-		if s.s3SystemStore != nil {
-			source = "S3"
-		}
-		log.Info().Int("peers", peerCount).Str("source", source).Msg("loaded stats history")
+		log.Info().Int("peers", peerCount).Str("source", "S3").Msg("loaded stats history")
 	}
 	return nil
 }
@@ -326,23 +444,13 @@ func (s *Server) SaveStatsHistory() error {
 		return fmt.Errorf("save stats history: %w", err)
 	}
 
-	destination := "file"
-	if s.s3SystemStore != nil {
-		destination = "S3"
-	}
-	log.Debug().Str("destination", destination).Msg("saved stats history")
+	log.Debug().Str("destination", "S3").Msg("saved stats history")
 	return nil
 }
 
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
 // This is called during server startup and when peers are added/updated.
 func (s *Server) refreshPeerNameCache() error {
-	if s.s3SystemStore == nil {
-		// No S3 storage, cache stays empty
-		s.peerNameCache.Store(&map[string]string{})
-		return nil
-	}
-
 	peers, err := s.s3SystemStore.LoadPeers()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to load peers for name cache")
@@ -375,10 +483,6 @@ func (s *Server) getPeerName(peerID string) string {
 // saveDNSData persists DNS cache and aliases to S3.
 // This is called asynchronously after peer registration changes.
 func (s *Server) saveDNSData() {
-	if s.s3SystemStore == nil {
-		return
-	}
-
 	// Copy data while holding lock to avoid blocking peer operations during S3 writes
 	s.peersMu.RLock()
 	dnsCache := make(map[string]string, len(s.dnsCache))
@@ -416,10 +520,6 @@ func (s *Server) saveDNSData() {
 
 // recoverFilterRules loads filter rules from S3.
 func (s *Server) recoverFilterRules() error {
-	if s.s3SystemStore == nil {
-		return nil // S3 not enabled, skip
-	}
-
 	data, err := s.s3SystemStore.LoadFilterRules()
 	if err != nil {
 		return err
@@ -457,10 +557,6 @@ func (s *Server) recoverFilterRules() error {
 // SaveFilterRules persists filter rules to S3 or does nothing if S3 is disabled.
 // Filters out expired rules before saving to prevent storage bloat.
 func (s *Server) SaveFilterRules() error {
-	if s.s3SystemStore == nil {
-		return nil // S3 not enabled, skip
-	}
-
 	// Mutex prevents concurrent saves from racing
 	s.filterSaveMu.Lock()
 	defer s.filterSaveMu.Unlock()
@@ -504,29 +600,22 @@ func (s *Server) SaveFilterRules() error {
 }
 
 // saveFilterRulesAsync saves filter rules asynchronously with debouncing.
-// Uses an atomic flag to prevent concurrent saves from racing.
+// Uses a timer that resets on each call to coalesce rapid changes.
 func (s *Server) saveFilterRulesAsync() {
-	if s.s3SystemStore == nil {
-		return
+	s.filterSaveMu.Lock()
+	defer s.filterSaveMu.Unlock()
+
+	// Stop existing timer if it exists
+	if s.filterTimer != nil {
+		s.filterTimer.Stop()
 	}
 
-	// Skip if a save is already pending (debounce)
-	if !s.filterSavePending.CompareAndSwap(false, true) {
-		return
-	}
-
-	go func() {
-		// Small delay to coalesce rapid changes
-		time.Sleep(100 * time.Millisecond)
-
-		// Save before resetting flag to prevent losing changes
+	// Create new timer that saves after 100ms of inactivity
+	s.filterTimer = time.AfterFunc(100*time.Millisecond, func() {
 		if err := s.SaveFilterRules(); err != nil {
 			log.Error().Err(err).Msg("failed to save filter rules")
 		}
-
-		// Reset flag after save completes
-		s.filterSavePending.Store(false)
-	}()
+	})
 }
 
 // Shutdown gracefully shuts down the server, persisting state.
@@ -542,13 +631,19 @@ func (s *Server) Shutdown() error {
 		errs = append(errs, fmt.Errorf("save stats history: %w", err))
 	}
 
-	// Wait for any pending async filter saves to complete (debounce is 100ms)
-	if s.filterSavePending.Load() {
-		log.Debug().Msg("waiting for pending filter save to complete")
-		time.Sleep(200 * time.Millisecond)
-	}
+	// Save DNS data (cache and aliases)
+	// This ensures final state is persisted even if async saves are in-flight
+	s.saveDNSData()
 
-	// Save filter rules
+	// Stop filter save timer and ensure final save happens
+	s.filterSaveMu.Lock()
+	if s.filterTimer != nil {
+		s.filterTimer.Stop()
+		s.filterTimer = nil
+	}
+	s.filterSaveMu.Unlock()
+
+	// Save filter rules (final save after stopping timer)
 	if err := s.SaveFilterRules(); err != nil {
 		log.Error().Err(err).Msg("failed to save filter rules")
 		errs = append(errs, fmt.Errorf("save filter rules: %w", err))
@@ -560,6 +655,15 @@ func (s *Server) Shutdown() error {
 		if err := s.dockerMgr.Stop(); err != nil {
 			log.Error().Err(err).Msg("failed to stop Docker manager")
 			errs = append(errs, fmt.Errorf("stop docker manager: %w", err))
+		}
+	}
+
+	// Stop replicator if running
+	if s.replicator != nil {
+		log.Info().Msg("stopping replicator")
+		if err := s.replicator.Stop(); err != nil {
+			log.Error().Err(err).Msg("failed to stop replicator")
+			errs = append(errs, fmt.Errorf("stop replicator: %w", err))
 		}
 	}
 
@@ -653,6 +757,37 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	}()
 }
 
+// StartReplicator starts the replication engine if enabled.
+func (s *Server) StartReplicator() error {
+	if s.replicator == nil {
+		return nil // Replication not enabled
+	}
+
+	if err := s.replicator.Start(); err != nil {
+		return fmt.Errorf("start replicator: %w", err)
+	}
+
+	// Discover existing coordinator peers and add them to replication targets
+	// Use coordinators map for O(1) lookups instead of iterating all peers
+	s.peersMu.RLock()
+	for name, info := range s.coordinators {
+		// Don't add self to replication targets
+		if name != s.cfg.Name {
+			s.replicator.AddPeer(info.peer.MeshIP)
+			log.Debug().
+				Str("peer", name).
+				Str("mesh_ip", info.peer.MeshIP).
+				Msg("discovered existing coordinator for replication")
+		}
+	}
+	s.peersMu.RUnlock()
+
+	log.Info().
+		Int("coordinator_count", len(s.replicator.GetPeers())).
+		Msg("replicator started with discovered coordinators")
+	return nil
+}
+
 // updateCASMetrics collects and updates CAS/chunking metrics.
 func (s *Server) updateCASMetrics() {
 	if s.s3Store == nil {
@@ -687,31 +822,30 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
 
 	// Setup relay routes (JWT auth handled internally)
-	// Always initialize relay manager if relay or WireGuard is enabled (WG uses relay for API proxying)
-	if s.cfg.Relay.Enabled || s.cfg.WireGuard.Enabled {
-		s.setupRelayRoutes()
-	}
+	// Always setup relay routes (relay always enabled for coordinators)
+	s.setupRelayRoutes()
 
-	// Setup admin routes if enabled
-	if s.cfg.Admin.Enabled {
-		s.setupAdminRoutes()
+	// Always setup admin routes (admin always enabled for coordinators)
+	s.setupAdminRoutes()
 
-		// Setup monitoring reverse proxies if configured
-		if s.cfg.Admin.Monitoring.PrometheusURL != "" || s.cfg.Admin.Monitoring.GrafanaURL != "" {
-			s.SetupMonitoringProxies(MonitoringProxyConfig{
-				PrometheusURL: s.cfg.Admin.Monitoring.PrometheusURL,
-				GrafanaURL:    s.cfg.Admin.Monitoring.GrafanaURL,
-			})
-		}
+	// Setup monitoring reverse proxies if configured
+	if s.cfg.Coordinator.Monitoring.PrometheusURL != "" || s.cfg.Coordinator.Monitoring.GrafanaURL != "" {
+		s.SetupMonitoringProxies(MonitoringProxyConfig{
+			PrometheusURL: s.cfg.Coordinator.Monitoring.PrometheusURL,
+			GrafanaURL:    s.cfg.Coordinator.Monitoring.GrafanaURL,
+		})
 	}
 
 	// Setup UDP hole-punch coordination routes
 	s.setupHolePunchRoutes()
 
 	// Setup WireGuard concentrator sync endpoint (JWT auth)
-	if s.cfg.WireGuard.Enabled {
+	if s.cfg.Coordinator.WireGuardServer.Enabled {
 		s.setupWireGuardRoutes()
 	}
+
+	// Note: Replication endpoint moved to adminMux (see admin.go) to ensure
+	// replication only happens within the mesh network, not from public internet
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -726,15 +860,9 @@ const NFSPort = 2049
 func (s *Server) getServicePorts() []uint16 {
 	var ports []uint16
 
-	// Admin dashboard port (if enabled)
-	if s.cfg.Admin.Enabled && s.cfg.Admin.Port > 0 {
-		ports = append(ports, uint16(s.cfg.Admin.Port))
-	}
-
-	// S3 port (if enabled)
-	if s.cfg.S3.Enabled && s.cfg.S3.Port > 0 {
-		ports = append(ports, uint16(s.cfg.S3.Port))
-	}
+	// Coordinator services always enabled with hardcoded ports
+	ports = append(ports, 443)  // Admin (HTTPS)
+	ports = append(ports, 9000) // S3 API
 
 	// NFS port (only when there are active file shares)
 	if s.fileShareMgr != nil && len(s.fileShareMgr.List()) > 0 {
@@ -742,7 +870,7 @@ func (s *Server) getServicePorts() []uint16 {
 	}
 
 	// Configured service ports (includes metrics port 9443 by default)
-	ports = append(ports, s.cfg.ServicePorts...)
+	ports = append(ports, s.cfg.Coordinator.ServicePorts...)
 
 	return ports
 }
@@ -780,37 +908,37 @@ func (s *Server) loadOrCreateCASKey(dataDir string) ([32]byte, error) {
 }
 
 // initS3Storage initializes the S3 storage subsystem.
-func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
+func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	// Require max_size to be configured for quota enforcement
-	if cfg.S3.MaxSize.Bytes() <= 0 {
+	if cfg.Coordinator.S3.MaxSize.Bytes() <= 0 {
 		return fmt.Errorf("s3.max_size must be configured (e.g., 10Gi) for quota enforcement")
 	}
-	quota := s3.NewQuotaManager(cfg.S3.MaxSize.Bytes())
+	quota := s3.NewQuotaManager(cfg.Coordinator.S3.MaxSize.Bytes())
 
 	// Load or create master key for CAS encryption
-	masterKey, err := s.loadOrCreateCASKey(cfg.S3.DataDir)
+	masterKey, err := s.loadOrCreateCASKey(cfg.Coordinator.S3.DataDir)
 	if err != nil {
 		return fmt.Errorf("initialize CAS key: %w", err)
 	}
 
 	// Create store with CAS for content-addressed storage
-	store, err := s3.NewStoreWithCAS(cfg.S3.DataDir, quota, masterKey)
+	store, err := s3.NewStoreWithCAS(cfg.Coordinator.S3.DataDir, quota, masterKey)
 	if err != nil {
 		return fmt.Errorf("create S3 store: %w", err)
 	}
 	s.s3Store = store
 
 	// Set expiry defaults from config
-	store.SetDefaultObjectExpiryDays(cfg.S3.ObjectExpiryDays)
-	store.SetDefaultShareExpiryDays(cfg.S3.ShareExpiryDays)
+	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
+	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
 	// Set version retention config
-	store.SetVersionRetentionDays(cfg.S3.VersionRetentionDays)
-	store.SetMaxVersionsPerObject(cfg.S3.MaxVersionsPerObject)
+	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)
+	store.SetMaxVersionsPerObject(cfg.Coordinator.S3.MaxVersionsPerObject)
 	store.SetVersionRetentionPolicy(s3.VersionRetentionPolicy{
-		RecentDays:    cfg.S3.VersionRetention.RecentDays,
-		WeeklyWeeks:   cfg.S3.VersionRetention.WeeklyWeeks,
-		MonthlyMonths: cfg.S3.VersionRetention.MonthlyMonths,
+		RecentDays:    cfg.Coordinator.S3.VersionRetention.RecentDays,
+		WeeklyWeeks:   cfg.Coordinator.S3.VersionRetention.WeeklyWeeks,
+		MonthlyMonths: cfg.Coordinator.S3.VersionRetention.MonthlyMonths,
 	})
 
 	// Create authorizer with group support
@@ -899,9 +1027,9 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 
 	log.Info().
-		Str("data_dir", cfg.S3.DataDir).
-		Int("port", cfg.S3.Port).
-		Str("max_size", cfg.S3.MaxSize.String()).
+		Str("data_dir", cfg.Coordinator.S3.DataDir).
+		Int("port", 9000).
+		Str("max_size", cfg.Coordinator.S3.MaxSize.String()).
 		Msg("S3 storage initialized")
 
 	return nil
@@ -909,9 +1037,9 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 
 // recoverCoordinatorState recovers ephemeral coordinator state from S3.
 // This includes stats history, WG concentrator assignment, and DNS cache/aliases.
-func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *s3.SystemStore) {
+func (s *Server) recoverCoordinatorState(cfg *config.PeerConfig, systemStore *s3.SystemStore) {
 	// Migrate stats history from file to S3 if needed
-	statsHistoryFile := filepath.Join(cfg.DataDir, "stats_history.json")
+	statsHistoryFile := filepath.Join(cfg.Coordinator.DataDir, "stats_history.json")
 	if migrated, err := systemStore.MigrateFromFile(statsHistoryFile, s3.StatsHistoryPath); err != nil {
 		log.Warn().Err(err).Msg("failed to migrate stats history to S3")
 	} else if migrated {
@@ -1020,7 +1148,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 		}
 
 		// Persist if we added any bindings
-		if modified && s.s3SystemStore != nil {
+		if modified {
 			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist builtin group bindings")
 			}
@@ -1220,6 +1348,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
 
+	// Load persisted peers once at the start to avoid race conditions and improve performance
+	// Previously: LoadPeers() was called 3 times (lines 1393, 1420, and during group checks)
+	// This cache prevents race conditions where two peers register simultaneously
+	persistedPeers, _ := s.s3SystemStore.LoadPeers()
+
 	// Check for hostname collision with different public key
 	// Important: Check both active peers AND persisted peers to prevent admin spoofing
 	// An attacker could register with a privileged name when the legitimate peer is offline
@@ -1234,18 +1367,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Also check persisted peers in S3 (critical for security)
-	if !needsRename && s.s3SystemStore != nil {
-		if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
-			for _, peer := range peers {
-				if peer.Name == req.Name && peer.PublicKey != req.PublicKey {
-					needsRename = true
-					log.Warn().
-						Str("name", req.Name).
-						Str("existing_peer_id", peer.ID).
-						Str("new_public_key", req.PublicKey).
-						Msg("peer name already registered with different key in S3")
-					break
-				}
+	if !needsRename && persistedPeers != nil {
+		for _, peer := range persistedPeers {
+			if peer.Name == req.Name && peer.PublicKey != req.PublicKey {
+				needsRename = true
+				log.Warn().
+					Str("name", req.Name).
+					Str("existing_peer_id", peer.ID).
+					Str("new_public_key", req.PublicKey).
+					Msg("peer name already registered with different key in S3")
+				break
 			}
 		}
 	}
@@ -1261,13 +1392,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				activeTaken = true
 			}
 			persistedTaken := false
-			if !activeTaken && s.s3SystemStore != nil {
-				if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
-					for _, peer := range peers {
-						if peer.Name == candidateName {
-							persistedTaken = true
-							break
-						}
+			if !activeTaken && persistedPeers != nil {
+				for _, peer := range persistedPeers {
+					if peer.Name == candidateName {
+						persistedTaken = true
+						break
 					}
 				}
 			}
@@ -1306,7 +1435,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	existing, isExisting := s.peers[req.Name]
 
-	if s.cfg.Locations {
+	if s.cfg.Coordinator.Locations {
 		switch {
 		case req.Location != nil:
 			// Manual location provided - use it
@@ -1357,6 +1486,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Location:          location,
 		AllowsExitTraffic: req.AllowsExitTraffic,
 		ExitPeer:          req.ExitPeer,
+		IsCoordinator:     req.IsCoordinator,
 	}
 
 	// Preserve registeredAt for existing peers
@@ -1390,32 +1520,59 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.peers[req.Name] = &peerInfo{
+	info := &peerInfo{
 		peer:         peer,
 		registeredAt: registeredAt,
 		aliases:      req.Aliases,
 		peerID:       peerID,
 	}
+	s.peers[req.Name] = info
 	s.dnsCache[req.Name] = meshIP
 
-	// Persist DNS data to S3 if enabled (async to avoid blocking registration)
-	if s.s3SystemStore != nil {
-		go s.saveDNSData()
+	// Add to coordinators index for O(1) lookups
+	if peer.IsCoordinator {
+		s.coordinators[req.Name] = info
+	}
+
+	// Persist DNS data to S3 (async to avoid blocking registration)
+	go s.saveDNSData()
+
+	// Update replicator peer list if this is a coordinator
+	if peer.IsCoordinator && s.replicator != nil {
+		// SECURITY FIX #4: Don't add self to replication targets
+		// Check peer name instead of mesh IP to avoid race condition with coordMeshIP.Store()
+		// which happens asynchronously after registration completes
+		if req.Name != s.cfg.Name {
+			s.replicator.AddPeer(meshIP)
+			log.Debug().Str("peer", req.Name).Str("mesh_ip", meshIP).Msg("added coordinator to replication targets")
+		} else {
+			log.Debug().Str("peer", req.Name).Msg("skipping self-replication (coordinator registering itself)")
+		}
 	}
 
 	// Auto-register peer: add to "everyone" group and create peer record on first registration
 	// Peer identity is derived from peer's SSH key - no separate registration needed
-	var isFirstPeer bool
+	isAdmin := false
 	if peerID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
 		isNewPeer := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, peerID)
 		if isNewPeer {
 			groupsModified := false
 
 			// Check if this peer should be added to admins group (via admin_peers config)
+			// Supports both peer names (for convenience) and peer IDs (for security)
+			// Peer IDs are preferred as they're immutable (derived from SSH public key)
 			isAdminPeer := false
-			for _, adminPeerName := range s.cfg.AdminPeers {
-				if adminPeerName == req.Name {
+			for _, adminEntry := range s.cfg.Coordinator.AdminPeers {
+				// Check if entry matches peer ID (SHA256 hash of SSH key) - most secure
+				if peerID != "" && adminEntry == peerID {
 					isAdminPeer = true
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by peer ID (secure)")
+					break
+				}
+				// Fallback to name matching for convenience (less secure due to mutability)
+				if adminEntry == req.Name {
+					isAdminPeer = true
+					log.Warn().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by name (consider using peer ID for better security)")
 					break
 				}
 			}
@@ -1425,6 +1582,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				} else {
 					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("peer added to admins group via admin_peers config")
 					groupsModified = true
+					isAdmin = true
 				}
 			}
 
@@ -1437,7 +1595,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Save groups once after all modifications (prevents redundant S3 writes)
-			if groupsModified && s.s3SystemStore != nil {
+			if groupsModified {
 				if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
 					log.Error().Err(err).Msg("failed to persist groups after peer registration")
 				} else {
@@ -1447,8 +1605,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create or update peer record in peer store
-		if s.s3SystemStore != nil {
-			s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
+		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
+
+		// Check if peer is admin (for both new and existing peers)
+		if s.s3Authorizer.Groups.IsMember(auth.GroupAdmins, peerID) {
+			isAdmin = true
 		}
 	}
 
@@ -1468,8 +1629,22 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	logEvent.Msg("peer registered")
 
 	// Trigger IP geolocation only for new peers or when IP has changed (if locations enabled)
-	if needsGeoLookup && s.cfg.Locations && s.ipGeoCache != nil {
+	if needsGeoLookup && s.cfg.Coordinator.Locations && s.ipGeoCache != nil {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
+	}
+
+	// Get coordinator mesh IP safely (uses atomic.Value)
+	coordIP, _ := s.coordMeshIP.Load().(string)
+
+	// If registering peer is a coordinator, include list of all known coordinators
+	// This enables immediate bidirectional replication without separate ListPeers() call
+	var coordinators []string
+	if peer.IsCoordinator {
+		for _, peerInfo := range s.peers {
+			if peerInfo.peer.IsCoordinator && peerInfo.peer.MeshIP != meshIP {
+				coordinators = append(coordinators, peerInfo.peer.MeshIP)
+			}
+		}
 	}
 
 	resp := proto.RegisterResponse{
@@ -1477,11 +1652,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		MeshCIDR:      mesh.CIDR,
 		Domain:        mesh.DomainSuffix,
 		Token:         token,
-		CoordMeshIP:   s.coordMeshIP, // For "this.tunnelmesh" resolution
+		CoordMeshIP:   coordIP, // For "this.tunnelmesh" resolution
 		ServerVersion: s.version,
 		PeerName:      req.Name, // May differ from original request if renamed
 		PeerID:        peerID,
-		IsFirstPeer:   isFirstPeer,
+		IsAdmin:       isAdmin,
+		Coordinators:  coordinators, // For immediate replication setup
 	}
 
 	// Generate TLS certificate for the peer
@@ -1552,6 +1728,17 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 			}
 			delete(s.peers, name)
 			delete(s.dnsCache, name)
+
+			// Remove from coordinators index
+			if info.peer.IsCoordinator {
+				delete(s.coordinators, name)
+			}
+
+			// Remove from replicator if this was a coordinator
+			if info.peer.IsCoordinator && s.replicator != nil {
+				s.replicator.RemovePeer(info.peer.MeshIP)
+				log.Debug().Str("peer", name).Str("mesh_ip", info.peer.MeshIP).Msg("removed coordinator from replication targets")
+			}
 		}
 		s.peersMu.Unlock()
 
@@ -1599,6 +1786,83 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	resp := proto.DNSUpdateNotification{Records: records}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleReplicationMessage handles incoming replication messages from other coordinators.
+func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// SECURITY: Verify this is a replication message
+	if r.Header.Get("X-Replication-Protocol") != "v1" {
+		s.jsonError(w, "invalid replication protocol version", http.StatusBadRequest)
+		return
+	}
+
+	// SECURITY FIX #1: Authenticate that the request is from a coordinator peer
+	peerName := s.getRequestOwner(r)
+	if peerName == "" {
+		log.Warn().Str("remote_addr", r.RemoteAddr).Msg("replication request from unauthenticated peer")
+		s.jsonError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Verify the peer is a coordinator
+	s.peersMu.RLock()
+	peerInfo, exists := s.peers[peerName]
+	s.peersMu.RUnlock()
+
+	if !exists {
+		log.Warn().Str("peer", peerName).Msg("replication request from unknown peer")
+		s.jsonError(w, "unknown peer", http.StatusForbidden)
+		return
+	}
+
+	if !peerInfo.peer.IsCoordinator {
+		log.Warn().Str("peer", peerName).Msg("replication request from non-coordinator peer")
+		s.jsonError(w, "coordinator access required", http.StatusForbidden)
+		return
+	}
+
+	// SECURITY FIX #2: Limit message size to prevent OOM attacks (100MB max)
+	const maxReplicationMessageSize = 100 * 1024 * 1024 // 100MB
+	if r.ContentLength < 0 {
+		s.jsonError(w, "content-length required", http.StatusBadRequest)
+		return
+	}
+	if r.ContentLength > maxReplicationMessageSize {
+		log.Warn().
+			Int64("size", r.ContentLength).
+			Int64("max", maxReplicationMessageSize).
+			Str("peer", peerName).
+			Msg("replication message exceeds size limit")
+		s.jsonError(w, "message too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Read message data with bounded allocation
+	data := make([]byte, r.ContentLength)
+	if _, err := io.ReadFull(r.Body, data); err != nil {
+		s.jsonError(w, "failed to read message", http.StatusBadRequest)
+		return
+	}
+
+	// SECURITY FIX #10: Use authenticated peer identity as sender, not spoofable header
+	// The peer's mesh IP is the authoritative source of truth
+	from := peerInfo.peer.MeshIP
+
+	// Handle via mesh transport
+	if s.meshTransport != nil {
+		if err := s.meshTransport.HandleIncomingMessage(from, data); err != nil {
+			log.Warn().Err(err).Str("from", from).Str("peer", peerName).Msg("failed to handle replication message")
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // updatePeerRecord creates or updates a peer record in the peer store.
@@ -1689,14 +1953,14 @@ func (s *Server) lookupPeerLocation(peerName, ip string) {
 
 // ListenAndServe starts the coordination server.
 func (s *Server) ListenAndServe() error {
-	log.Info().Str("listen", s.cfg.Listen).Msg("starting coordination server")
-	return http.ListenAndServe(s.cfg.Listen, s)
+	log.Info().Str("listen", s.cfg.Coordinator.Listen).Msg("starting coordination server")
+	return http.ListenAndServe(s.cfg.Coordinator.Listen, s)
 }
 
 // SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
 // This is called after join_mesh completes so other peers can resolve "this" to the coordinator.
 func (s *Server) SetCoordMeshIP(ip string) {
-	s.coordMeshIP = ip
+	s.coordMeshIP.Store(ip)
 	log.Info().Str("ip", ip).Msg("coordinator mesh IP set for 'this.tunnelmesh' resolution")
 }
 
@@ -1720,6 +1984,12 @@ func (s *Server) SetDockerManager(mgr *docker.Manager) {
 // Returns nil if S3 is not enabled.
 func (s *Server) GetSystemStore() *s3.SystemStore {
 	return s.s3SystemStore
+}
+
+// GetReplicator returns the replicator for multi-coordinator deployments.
+// Returns nil if replication is not enabled.
+func (s *Server) GetReplicator() *replication.Replicator {
+	return s.replicator
 }
 
 // StartAdminServer starts the admin interface on the specified address.

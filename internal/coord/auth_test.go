@@ -1,20 +1,24 @@
 package coord
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 )
 
 func TestServer_GenerateAndValidateToken(t *testing.T) {
-	srv, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
-		AuthToken: "test-secret-key-12345",
-	})
+	cfg := newTestConfig(t)
+	cfg.AuthToken = "test-secret-key-12345"
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Listen = ":8080"
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	defer func() { _ = srv.Shutdown() }()
 
 	// Generate token
 	token, err := srv.GenerateToken("peer1", "172.30.0.1")
@@ -30,17 +34,25 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 }
 
 func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
-	srv1, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
-		AuthToken: "secret-key-1",
-	})
-	require.NoError(t, err)
+	cfg1 := newTestConfig(t)
+	cfg1.Name = "test-coord1"
+	cfg1.AuthToken = "secret-key-1"
+	cfg1.Coordinator.Enabled = true
+	cfg1.Coordinator.Listen = ":8080"
 
-	srv2, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
-		AuthToken: "secret-key-2", // Different key
-	})
+	srv1, err := NewServer(context.Background(), cfg1)
 	require.NoError(t, err)
+	defer func() { _ = srv1.Shutdown() }()
+
+	cfg2 := newTestConfig(t)
+	cfg2.Name = "test-coord2"
+	cfg2.AuthToken = "secret-key-2" // Different key
+	cfg2.Coordinator.Enabled = true
+	cfg2.Coordinator.Listen = ":8080"
+
+	srv2, err := NewServer(context.Background(), cfg2)
+	require.NoError(t, err)
+	defer func() { _ = srv2.Shutdown() }()
 
 	// Generate token with one server
 	token, err := srv1.GenerateToken("peer1", "172.30.0.1")
@@ -52,11 +64,15 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 }
 
 func TestServer_ValidateToken_InvalidToken(t *testing.T) {
-	srv, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
-		AuthToken: "test-secret-key",
-	})
+	cfg := newTestConfig(t)
+	cfg.AuthToken = "test-secret-key"
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Listen = ":8080"
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	defer func() { _ = srv.Shutdown() }()
 
 	// Test with invalid token
 	_, err = srv.ValidateToken("invalid-token")

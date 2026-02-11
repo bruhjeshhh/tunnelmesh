@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,18 +16,43 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	s3 "github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/pkg/bytesize"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
-func newTestServer(t *testing.T) *Server {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+// newTestConfig creates a test configuration with proper S3 setup
+func newTestConfig(t *testing.T) *config.PeerConfig {
+	tmpDir := t.TempDir()
+
+	return &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Listen: ":0",
+			S3: config.S3Config{
+				DataDir: tmpDir,
+				MaxSize: bytesize.Size(1 << 30), // 1Gi for tests
+			},
+		},
 	}
-	srv, err := NewServer(cfg)
+}
+
+func newTestServer(t *testing.T) *Server {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+
+	// Automatically shutdown server when test completes to prevent resource leaks
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+	})
+
 	return srv
 }
 
@@ -535,18 +561,20 @@ func TestServer_IPv4OnlyEndpointRegistration(t *testing.T) {
 
 // newTestServerWithWireGuard creates a test server with WireGuard enabled.
 func newTestServerWithWireGuard(t *testing.T) *Server {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
-		AuthToken: "test-token",
-		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
-		WireGuard: config.WireGuardServerConfig{
-			Enabled:  true,
-			Endpoint: "wg.example.com:51820",
-		},
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.WireGuardServer = config.WireGuardServerConfig{
+		Endpoint: "wg.example.com:51820",
 	}
-	srv, err := NewServer(cfg)
+
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+	})
+
 	return srv
 }
 
@@ -972,20 +1000,24 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	// This test verifies that registered users are recovered after coordinator restart
 	tempDir := t.TempDir()
 
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Listen: ":0",
+			S3: config.S3Config{
+				DataDir: tempDir + "/s3",
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			},
 		},
 	}
 
 	// Create first server instance
-	srv1, err := NewServer(cfg)
+	srv1, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Simulate user registration by directly adding to stores
@@ -1022,7 +1054,7 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create second server instance (simulating restart)
-	srv2, err := NewServer(cfg)
+	srv2, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Verify peer credentials were recovered
@@ -1042,21 +1074,31 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 func newTestServerWithS3(t *testing.T) *Server {
 	t.Helper()
 	tempDir := t.TempDir()
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
-		S3: config.S3Config{
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			Listen:  ":0",
+			S3: config.S3Config{
+				DataDir: tempDir + "/s3",
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			},
+			Filter: config.FilterConfig{}, // Initialize Filter field
 		},
 	}
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+	})
+
 	return srv
 }
 
@@ -1252,22 +1294,24 @@ func TestServer_FilterRulesPersistence(t *testing.T) {
 
 func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 	tempDir := t.TempDir()
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
-		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024,
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Listen: ":0",
+			S3: config.S3Config{
+				DataDir: tempDir + "/s3",
+				MaxSize: 1 * 1024 * 1024 * 1024,
+			},
 		},
 	}
 
 	// Create first server
-	srv1, err := NewServer(cfg)
+	srv1, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv1.filter)
 	require.NotNil(t, srv1.s3SystemStore)
@@ -1303,7 +1347,7 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create second server (simulating restart)
-	srv2, err := NewServer(cfg)
+	srv2, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv2.filter)
 

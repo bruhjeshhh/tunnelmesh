@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 )
 
 func TestSSEHub_RegisterUnregister(t *testing.T) {
@@ -104,11 +102,10 @@ func TestSSEHub_BroadcastFullBuffer(t *testing.T) {
 }
 
 func TestHandleSSE(t *testing.T) {
-	cfg := &config.ServerConfig{
-		AuthToken: "test-token",
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -159,11 +156,10 @@ func TestHandleSSE(t *testing.T) {
 }
 
 func TestNotifyHeartbeat_NoClients(t *testing.T) {
-	cfg := &config.ServerConfig{
-		AuthToken: "test-token",
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -181,10 +177,13 @@ func TestSSEEventFormat(t *testing.T) {
 	hub.register(client)
 
 	// Create a server just for notification
-	cfg := &config.ServerConfig{
-		AuthToken: "test-token",
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
 	}
-	srv, _ := NewServer(cfg)
 	srv.sseHub = hub
 
 	// Notify heartbeat
