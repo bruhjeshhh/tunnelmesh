@@ -755,8 +755,10 @@ func discoverAndRegisterWithCoordinator(
 
 //nolint:gocyclo // Join function coordinates multiple complex subsystems (peer, coordinator, TUN, DNS, etc)
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
-	// Always use system hostname as node name
-	cfg.Name, _ = os.Hostname()
+	// Use configured name if provided, otherwise fallback to hostname
+	if cfg.Name == "" {
+		cfg.Name, _ = os.Hostname()
+	}
 
 	// Enable coordinator mode for bootstrap if no server URL
 	ensureCoordinatorConfig(cfg)
@@ -916,6 +918,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			ctx := meshctx.Context{
 				Name:       joinContext,
 				ConfigPath: cfgFile,
+				PeerName:   cfg.Name, // Save peer name so it persists across rejoins
 				Server:     cfg.PrimaryServer(),
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
@@ -1081,7 +1084,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 		// Start Docker manager for coordinator
 		if cfg.Docker.Socket != "" {
-			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, srv.GetSystemStore())
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, srv.GetSystemStore(), metrics.Registry)
 			if err := dockerMgr.Start(ctx); err != nil {
 				log.Warn().Err(err).Msg("failed to start Docker manager")
 			} else {
@@ -1113,7 +1116,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			}
 		}
 		if cfg.Docker.Socket != "" {
-			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil, metrics.Registry)
 			if err := dockerMgr.Start(ctx); err != nil {
 				log.Warn().Err(err).Msg("failed to start Docker manager")
 			} else {
@@ -1762,7 +1765,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Shutdown coordinator server if running
 	if srv != nil {
 		log.Info().Msg("shutting down coordinator server")
-		if err := srv.Shutdown(); err != nil {
+		if err := srv.Shutdown(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("failed to shutdown coordinator server")
 		}
 	}
@@ -2028,6 +2031,7 @@ func loadConfig() (*config.PeerConfig, error) {
 			// Auth token is read from TUNNELMESH_TOKEN environment variable
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
+					Name:       activeCtx.PeerName, // Restore saved peer name
 					Servers:    []string{activeCtx.Server},
 					SSHPort:    2222,
 					PrivateKey: filepath.Join(homeDir, ".tunnelmesh", "id_ed25519"),
