@@ -82,6 +82,47 @@ tunnelmesh init --peer --output /etc/tunnelmesh/coordinator.yaml
 sudo nano /etc/tunnelmesh/coordinator.yaml
 ```
 
+### Configure Admin Peers
+
+> [!IMPORTANT]
+> **Admin access is not automatic**: You must explicitly configure which peers have admin access
+> via the `admin_peers` field in the coordinator config.
+
+Edit the coordinator config to specify which peers should have admin access:
+
+```bash
+sudo nano /etc/tunnelmesh/coordinator.yaml
+```
+
+Add the admin_peers field:
+
+```yaml
+coordinator:
+  enabled: true
+  listen: ":8443"
+  admin_peers:
+    - "coordinator"  # Coordinator peer itself
+    - "alice"        # Add other admin peer names
+```
+
+> [!TIP]
+> **Security Best Practice**: Use Peer IDs (not names) for better security. Peer IDs are immutable
+> and tied to SSH keys, while peer names can be changed by users.
+
+**Steps to use peer IDs**:
+
+1. Start the coordinator once to generate peer keys
+2. View the peer ID: `tunnelmesh status`
+3. Update config with peer IDs instead of names:
+
+```yaml
+coordinator:
+  admin_peers:
+    - "a1b2c3d4e5f6g7h8"  # SHA256 of SSH key (first 8 bytes = 16 hex chars)
+```
+
+Peer IDs are immutable and derived from SSH keys, making them more secure than peer names.
+
 #### Coordinator Config - Windows
 
 ```powershell
