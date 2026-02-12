@@ -986,6 +986,28 @@
         if (!state.currentBucket) {
             // Show buckets as folders
             const buckets = await fetchBuckets();
+
+            // Show "New Bucket" button when viewing bucket list
+            if (browseActions) {
+                // Remove existing New Bucket button if present
+                const existingBtn = browseActions.querySelector('.s3-new-bucket-btn');
+                if (existingBtn) existingBtn.remove();
+
+                // Add New Bucket button
+                const newBucketBtn = document.createElement('button');
+                newBucketBtn.className = 's3-btn s3-new-bucket-btn';
+                newBucketBtn.title = 'Create new bucket';
+                newBucketBtn.onclick = () => window.openBucketModal();
+                newBucketBtn.innerHTML = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                    <span>New Bucket</span>
+                `;
+                browseActions.insertBefore(newBucketBtn, browseActions.firstChild);
+                browseActions.style.display = 'flex';
+            }
+
             state.buckets = buckets;
             items = buckets.map((b) => ({
                 name: b.name,
@@ -993,11 +1015,18 @@
                 isBucket: true,
                 size: b.used_bytes || 0,
                 quota: b.quota_bytes || 0,
+                replication_factor: b.replication_factor || 2,
                 lastModified: b.created_at,
                 expires: null,
                 writable: b.writable,
             }));
         } else {
+            // Remove "New Bucket" button when inside a bucket
+            if (browseActions) {
+                const existingBtn = browseActions.querySelector('.s3-new-bucket-btn');
+                if (existingBtn) existingBtn.remove();
+            }
+
             // Show objects in current path
             const objects = await fetchObjects(state.currentBucket, state.currentPath);
 
@@ -1048,10 +1077,23 @@
             quotaCol.style.display = state.currentBucket ? 'none' : '';
         }
 
+        // Toggle replication column visibility (only show for bucket list, not files)
+        const replicationCol = document.querySelector('.s3-col-replication');
+        if (replicationCol) {
+            replicationCol.style.display = state.currentBucket ? 'none' : '';
+        }
+
         // Toggle owner column visibility (only show for files within bucket, not bucket list)
         const ownerCol = document.querySelector('.s3-col-owner');
         if (ownerCol) {
             ownerCol.style.display = state.currentBucket ? '' : 'none';
+        }
+
+        // Toggle actions column visibility (only show for bucket list if admin)
+        const actionsCol = document.querySelector('.s3-col-actions');
+        const isAdmin = window.TM && window.TM.panel && window.TM.panel.isAdmin();
+        if (actionsCol) {
+            actionsCol.style.display = !state.currentBucket && isAdmin ? '' : 'none';
         }
 
         // Always render breadcrumb for navigation
@@ -1109,17 +1151,29 @@
                     const quotaCell = state.currentBucket
                         ? ''
                         : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
+                    // Only show replication column for bucket list (not when inside a bucket)
+                    const replication_factor = item.replication_factor || 2;
+                    const replicationCell = state.currentBucket ? '' : `<td>${replication_factor}x</td>`;
                     // Only show owner column when inside a bucket (not for bucket list)
                     const ownerCell = state.currentBucket ? `<td>${escapeHtml(item.owner || '-')}</td>` : '';
+                    // Actions column: show properties button for buckets (admin-only)
+                    const actionsCell =
+                        !state.currentBucket && item.isBucket && isAdmin
+                            ? `<td><button class="s3-btn s3-btn-sm" onclick="event.stopPropagation(); window.openBucketPropertiesModal('${escapeJsString(item.name)}')" title="Properties"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg></button></td>`
+                            : !state.currentBucket && isAdmin
+                              ? '<td></td>'
+                              : '';
                     return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     ${quotaCell}
+                    ${replicationCell}
                     ${ownerCell}
                     <td>${formatDate(item.lastModified)}</td>
                     <td>${formatExpiry(item.expires)}</td>
+                    ${actionsCell}
                 </tr>
             `;
                 })
