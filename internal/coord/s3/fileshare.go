@@ -21,7 +21,9 @@ type FileShareManager struct {
 }
 
 // NewFileShareManager creates a new file share manager.
-// It loads existing shares from the system store.
+// It loads existing shares from the system store and ensures their underlying
+// S3 buckets exist on disk. Buckets may be missing if share metadata was
+// replicated from another coordinator but the bucket directories were not.
 func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *auth.Authorizer) *FileShareManager {
 	mgr := &FileShareManager{
 		store:       store,
@@ -33,6 +35,26 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 	if systemStore != nil {
 		shares, _ := systemStore.LoadFileShares(context.Background())
 		mgr.shares = shares
+
+		// Ensure buckets exist for all loaded shares.
+		// Share metadata may have been replicated from another coordinator
+		// (via system store replication) without the corresponding bucket
+		// directories being created locally.
+		for _, share := range shares {
+			bucketName := FileShareBucketPrefix + share.Name
+			if _, err := store.HeadBucket(context.Background(), bucketName); err != nil {
+				// Bucket missing — recreate it with the share's stored replication factor
+				rf := share.ReplicationFactor
+				if rf < 1 || rf > 3 {
+					rf = 2 // Default for shares persisted before RF was stored
+				}
+				if createErr := store.CreateBucket(context.Background(), bucketName, share.Owner, rf, nil); createErr == nil {
+					log.Info().Str("share", share.Name).Str("bucket", bucketName).Int("rf", rf).Msg("recreated missing bucket for share")
+				} else {
+					log.Warn().Err(createErr).Str("share", share.Name).Str("bucket", bucketName).Msg("failed to recreate missing bucket for share")
+				}
+			}
+		}
 	}
 
 	return mgr
@@ -63,6 +85,12 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 
 	bucketName := FileShareBucketPrefix + name
 
+	// Determine effective replication factor
+	replicationFactor := 2
+	if opts != nil && opts.ReplicationFactor > 0 {
+		replicationFactor = opts.ReplicationFactor
+	}
+
 	// Check if bucket already exists (from a previously deleted share)
 	bucketExists := false
 	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
@@ -71,10 +99,6 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 		_ = m.store.UntombstoneBucket(ctx, bucketName)
 	} else {
 		// Create new bucket
-		replicationFactor := 2 // Default replication factor
-		if opts != nil && opts.ReplicationFactor > 0 {
-			replicationFactor = opts.ReplicationFactor
-		}
 		if err := m.store.CreateBucket(ctx, bucketName, ownerID, replicationFactor, nil); err != nil {
 			return nil, fmt.Errorf("create bucket: %w", err)
 		}
@@ -105,12 +129,13 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 	// Create share record
 	now := time.Now().UTC()
 	share := &FileShare{
-		Name:        name,
-		Description: description,
-		Owner:       ownerID,
-		CreatedAt:   now,
-		QuotaBytes:  quotaBytes,
-		GuestRead:   guestRead,
+		Name:              name,
+		Description:       description,
+		Owner:             ownerID,
+		CreatedAt:         now,
+		QuotaBytes:        quotaBytes,
+		GuestRead:         guestRead,
+		ReplicationFactor: replicationFactor,
 	}
 
 	// Set expiry from opts or use default
