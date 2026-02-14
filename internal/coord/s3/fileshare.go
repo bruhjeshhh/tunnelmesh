@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -229,6 +230,69 @@ func (m *FileShareManager) Get(name string) *FileShare {
 
 	for _, s := range m.shares {
 		if s.Name == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// EnsureBucketForShare recreates a missing bucket for an existing share.
+// This handles the case where _meta.json was corrupted (e.g. disk-full truncation)
+// but the share metadata still exists in the system store.
+// Returns nil if the bucket is not a share bucket, no share exists, or the bucket already exists.
+func (m *FileShareManager) EnsureBucketForShare(ctx context.Context, bucketName string) error {
+	if !strings.HasPrefix(bucketName, FileShareBucketPrefix) {
+		return nil
+	}
+
+	shareName := strings.TrimPrefix(bucketName, FileShareBucketPrefix)
+	share := m.Get(shareName)
+	if share == nil {
+		// Share not in memory — it may have been created on another coordinator
+		// and replicated to our system store. Reload from system store.
+		share = m.refreshAndGet(ctx, shareName)
+		if share == nil {
+			return nil
+		}
+	}
+
+	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
+		return nil // bucket exists
+	}
+
+	rf := share.ReplicationFactor
+	if rf < 1 || rf > 3 {
+		rf = 2
+	}
+
+	err := m.store.CreateBucket(ctx, bucketName, share.Owner, rf, nil)
+	if err != nil && errors.Is(err, ErrBucketExists) {
+		return nil // concurrent creation, fine
+	}
+	if err == nil {
+		log.Info().Str("share", shareName).Str("bucket", bucketName).Msg("recreated missing bucket for share on demand")
+	}
+	return err
+}
+
+// refreshAndGet reloads shares from the system store and returns the named share if found.
+// This catches shares that were created on another coordinator and replicated via the system bucket.
+func (m *FileShareManager) refreshAndGet(ctx context.Context, name string) *FileShare {
+	if m.systemStore == nil {
+		return nil
+	}
+	shares, err := m.systemStore.LoadFileShares(ctx)
+	if err != nil || len(shares) == 0 {
+		return nil
+	}
+
+	m.mu.Lock()
+	m.shares = shares
+	m.mu.Unlock()
+
+	for _, s := range shares {
+		if s.Name == name {
+			log.Info().Str("share", name).Msg("discovered replicated share from system store")
 			return s
 		}
 	}

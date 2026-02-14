@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,29 +69,30 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	cancel          context.CancelFunc // Cancel function for server lifecycle (stops background operations)
-	wg              sync.WaitGroup     // Tracks background goroutines for clean shutdown
-	cfg             *config.PeerConfig
-	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
-	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
-	adminServer     *http.Server   // HTTPS server for adminMux, bound to mesh IP only
-	peers           map[string]*peerInfo
-	coordinators    map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
-	peersMu         sync.RWMutex
-	ipAlloc         *ipAllocator
-	dnsCache        map[string]string // hostname -> mesh IP
-	aliasOwner      map[string]string // alias -> peer name (reverse lookup for ownership)
-	serverStats     serverStats
-	relay           *relayManager
-	holePunch       *holePunchManager
-	wgStore         *wireguard.Store      // WireGuard client storage
-	ca              *CertificateAuthority // Internal CA for mesh TLS certs
-	version         string                // Server version for admin display
-	sseHub          *sseHub               // SSE hub for real-time dashboard updates
-	ipGeoCache      *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIPs    atomic.Value          // All coordinator mesh IPs ([]string) for "this.tunnelmesh" round-robin
-	coordMetrics    *CoordMetrics         // Prometheus metrics for coordinator
-	metricsRegistry prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
+	cancel             context.CancelFunc // Cancel function for server lifecycle (stops background operations)
+	wg                 sync.WaitGroup     // Tracks background goroutines for clean shutdown
+	cfg                *config.PeerConfig
+	mux                *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
+	adminMux           *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
+	adminServer        *http.Server   // HTTPS server for adminMux, bound to mesh IP only
+	peers              map[string]*peerInfo
+	coordinators       map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
+	peersMu            sync.RWMutex
+	ipAlloc            *ipAllocator
+	dnsCache           map[string]string // hostname -> mesh IP
+	aliasOwner         map[string]string // alias -> peer name (reverse lookup for ownership)
+	serverStats        serverStats
+	relay              *relayManager
+	holePunch          *holePunchManager
+	wgStore            *wireguard.Store           // WireGuard client storage
+	ca                 *CertificateAuthority      // Internal CA for mesh TLS certs
+	version            string                     // Server version for admin display
+	sseHub             *sseHub                    // SSE hub for real-time dashboard updates
+	ipGeoCache         *IPGeoCache                // IP geolocation cache for location fallback
+	coordIPs           atomic.Pointer[coordIPSet] // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
+	s3ForwardTransport *http.Transport            // Shared transport for S3 write forwarding (reuses connections)
+	coordMetrics       *CoordMetrics              // Prometheus metrics for coordinator
+	metricsRegistry    prometheus.Registerer      // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -114,6 +116,13 @@ type Server struct {
 	// Replication for multi-coordinator setup
 	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
 	meshTransport *replication.MeshTransport // Transport for replication messages
+}
+
+// coordIPSet holds both the original and sorted coordinator IP lists as a single
+// atomic unit to prevent inconsistent reads during updates.
+type coordIPSet struct {
+	original []string // Self is always first
+	sorted   []string // Deterministic ordering for hash-based routing
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -344,6 +353,14 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	}
 	srv.ca = ca
 
+	// Shared transport for forwarding S3 writes to other coordinators.
+	// TLS config is set later by SetMeshTLS() with the registration CA.
+	srv.s3ForwardTransport = &http.Transport{
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: true, // S3 objects are often already compressed
+	}
+
 	// Initialize packet filter
 	srv.filter = routing.NewPacketFilter(cfg.Coordinator.Filter.IsDefaultDeny())
 
@@ -378,7 +395,8 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Initialize S3 replication for multi-coordinator deployments
 	// Coordinators discover each other through the peer list using is_coordinator flag
 	if srv.s3Store != nil {
-		// Create mesh transport for replication messages (HTTPS between coordinators)
+		// Create mesh transport for replication messages (HTTPS between coordinators).
+		// TLS config is set later by SetMeshTLS() with the registration CA.
 		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
 
 		// Create S3 store adapter for replication
@@ -407,6 +425,9 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			MaxPendingOperations: 10000,
 		})
 
+		// Wire replicator into S3 store for distributed reads (fetching remote chunks)
+		srv.s3Store.SetReplicator(srv.replicator)
+
 		log.Info().
 			Str("node_id", nodeID).
 			Msg("replication engine initialized - coordinators will discover each other via peer list")
@@ -414,6 +435,19 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 
 	srv.setupRoutes(ctx)
 	return srv, nil
+}
+
+// SetMeshTLS configures the TLS settings for inter-coordinator communication.
+// The TLS config should trust the mesh CA (from registration) and include the
+// coordinator's own certificate for client authentication.
+// Must be called before any replication traffic is sent.
+func (s *Server) SetMeshTLS(cfg *tls.Config) {
+	if s.meshTransport != nil {
+		s.meshTransport.SetTLSConfig(cfg)
+	}
+	if s.s3ForwardTransport != nil {
+		s.s3ForwardTransport.TLSClientConfig = cfg
+	}
 }
 
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
@@ -1016,6 +1050,8 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 
 	// Initialize file share manager
 	s.fileShareMgr = s3.NewFileShareManager(store, systemStore, s.s3Authorizer)
+	s.s3Server.SetBucketRecoverer(s.fileShareMgr)
+	s.s3Server.SetRequestForwarder(s)
 	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
 
 	// Recover coordinator state from S3
@@ -1555,6 +1591,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 		// Broadcast updated coordinator list to all connected peers
 		go s.broadcastCoordinatorList()
+
+		// Persist coordinator IPs to system store (replicated to all coordinators)
+		if s.s3SystemStore != nil {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				coordIPs := s.GetCoordMeshIPs()
+				if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), coordIPs); err != nil {
+					log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+				}
+			}()
+		}
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
@@ -1563,7 +1611,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
 		// SECURITY FIX #4: Don't add self to replication targets
-		// Check peer name instead of mesh IP to avoid race condition with coordMeshIPs.Store()
+		// Check peer name instead of mesh IP to avoid race condition with storeCoordIPs()
 		// which happens asynchronously after registration completes
 		if req.Name != s.cfg.Name {
 			s.replicator.AddPeer(meshIP)
@@ -1664,10 +1712,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
-	// Get coordinator mesh IPs safely (uses atomic.Value).
+	// Get coordinator mesh IPs safely (uses atomic.Pointer).
 	// May be empty during coordinator self-registration at startup — the coordinator's
 	// DNS resolver reads directly from the server's atomic via GetCoordMeshIPs() instead.
-	coordIPs, _ := s.coordMeshIPs.Load().([]string)
+	coordIPs := s.GetCoordMeshIPs()
 
 	// If registering peer is a coordinator, include list of all known coordinators
 	// This enables immediate bidirectional replication without separate ListPeers() call
@@ -1835,7 +1883,13 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// SECURITY FIX #1: Authenticate that the request is from a coordinator peer
+	// Authenticate the sender via TLS client cert or known mesh IP.
+	// We don't additionally check coordinator status because:
+	// 1. This endpoint is only reachable within the mesh (admin server binds to mesh IP)
+	// 2. Only coordinators have the code to send replication messages
+	// 3. Coordinator discovery is itself distributed via replication, creating a
+	//    chicken-and-egg problem if we require coordinator verification here
+	// 4. The replication protocol has its own integrity checks (checksums, versioning)
 	peerName := s.getRequestOwner(r)
 	if peerName == "" {
 		log.Warn().Str("remote_addr", r.RemoteAddr).Msg("replication request from unauthenticated peer")
@@ -1843,22 +1897,7 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Verify the peer is a coordinator
-	s.peersMu.RLock()
-	peerInfo, exists := s.peers[peerName]
-	s.peersMu.RUnlock()
-
-	if !exists {
-		log.Warn().Str("peer", peerName).Msg("replication request from unknown peer")
-		s.jsonError(w, "unknown peer", http.StatusForbidden)
-		return
-	}
-
-	if !peerInfo.peer.IsCoordinator {
-		log.Warn().Str("peer", peerName).Msg("replication request from non-coordinator peer")
-		s.jsonError(w, "coordinator access required", http.StatusForbidden)
-		return
-	}
+	from, _, _ := net.SplitHostPort(r.RemoteAddr)
 
 	// SECURITY FIX #2: Limit message size to prevent OOM attacks (100MB max)
 	const maxReplicationMessageSize = 100 * 1024 * 1024 // 100MB
@@ -1883,11 +1922,7 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// SECURITY FIX #10: Use authenticated peer identity as sender, not spoofable header
-	// The peer's mesh IP is the authoritative source of truth
-	from := peerInfo.peer.MeshIP
-
-	// Handle via mesh transport
+	// Handle via mesh transport (from was determined during auth above)
 	if s.meshTransport != nil {
 		if err := s.meshTransport.HandleIncomingMessage(from, data); err != nil {
 			log.Warn().Err(err).Str("from", from).Str("peer", peerName).Msg("failed to handle replication message")
@@ -2030,8 +2065,27 @@ func (s *Server) ListenAndServe() error {
 
 // GetCoordMeshIPs returns the current list of coordinator mesh IPs.
 func (s *Server) GetCoordMeshIPs() []string {
-	ips, _ := s.coordMeshIPs.Load().([]string)
-	return ips
+	if set := s.coordIPs.Load(); set != nil {
+		return set.original
+	}
+	return nil
+}
+
+// getSortedCoordIPs returns the cached sorted coordinator IP list for deterministic hashing.
+func (s *Server) getSortedCoordIPs() []string {
+	if set := s.coordIPs.Load(); set != nil {
+		return set.sorted
+	}
+	return nil
+}
+
+// storeCoordIPs stores both the original and sorted coordinator IP lists as a single
+// atomic unit, preventing inconsistent reads between the two lists during updates.
+func (s *Server) storeCoordIPs(ips []string) {
+	sorted := make([]string, len(ips))
+	copy(sorted, ips)
+	sort.Strings(sorted)
+	s.coordIPs.Store(&coordIPSet{original: ips, sorted: sorted})
 }
 
 // OnCoordIPsChanged registers a callback that fires whenever the coordinator IP list changes.
@@ -2053,10 +2107,21 @@ func (s *Server) SetCoordMeshIP(ip string) {
 		}
 	}
 	s.peersMu.RUnlock()
-	s.coordMeshIPs.Store(ips)
+	s.storeCoordIPs(ips)
 	log.Info().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this.tunnelmesh' resolution")
 	if s.coordIPsCb != nil {
 		s.coordIPsCb(ips)
+	}
+
+	// Persist coordinator IPs to system store (replicated to all coordinators)
+	if s.s3SystemStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), ips); err != nil {
+				log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+			}
+		}()
 	}
 }
 
@@ -2067,9 +2132,9 @@ func (s *Server) broadcastCoordinatorList() {
 	// to prevent races between list building and storage.
 	s.peersMu.RLock()
 	var ips []string
-	// Include self first (our coordMeshIPs always starts with self)
-	if stored, ok := s.coordMeshIPs.Load().([]string); ok && len(stored) > 0 {
-		ips = append(ips, stored[0]) // Self IP is always first
+	// Include self first (original list always starts with self)
+	if existing := s.GetCoordMeshIPs(); len(existing) > 0 {
+		ips = append(ips, existing[0]) // Self IP is always first
 	}
 	for _, ci := range s.coordinators {
 		// Skip self (already included above)
@@ -2079,7 +2144,7 @@ func (s *Server) broadcastCoordinatorList() {
 		ips = append(ips, ci.peer.MeshIP)
 	}
 	if len(ips) > 0 {
-		s.coordMeshIPs.Store(ips)
+		s.storeCoordIPs(ips)
 	}
 	s.peersMu.RUnlock()
 

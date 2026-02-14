@@ -270,15 +270,23 @@ func (r *DistributedChunkReader) fetchChunk(idx int) ([]byte, error) {
 		return chunkData, nil
 	}
 
-	// Not local - check if registry is available
-	if r.registry == nil {
-		return nil, fmt.Errorf("chunk %s not found locally and no registry available", chunkHash)
-	}
+	// Not local - try to find who has it
+	var owners []string
 
 	// Query registry for owners
-	owners, err := r.registry.GetOwners(chunkHash)
-	if err != nil || len(owners) == 0 {
-		return nil, fmt.Errorf("chunk %s not found: no owners in registry", chunkHash)
+	if r.registry != nil {
+		owners, _ = r.registry.GetOwners(chunkHash)
+	}
+
+	// Fall back to all known peers when registry has no ownership info
+	// (ownership gossip may not be implemented yet)
+	if len(owners) == 0 && r.replicator != nil {
+		r.logger.Debug().Str("chunk", chunkHash).Msg("no chunk owners found in registry, trying all peers")
+		owners = r.replicator.GetPeers()
+	}
+
+	if len(owners) == 0 {
+		return nil, fmt.Errorf("chunk %s not found locally and no peers available", chunkHash)
 	}
 
 	// Try each owner in order
