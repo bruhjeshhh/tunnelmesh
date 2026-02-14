@@ -2,16 +2,18 @@ package s3
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// s3MetricsOnce ensures metrics are only initialized once.
+// s3MetricsOnce prevents double-registration panics from promauto.
 var s3MetricsOnce sync.Once
 
-// s3MetricsInstance is the singleton instance of S3 metrics.
-var s3MetricsInstance *S3Metrics
+// s3MetricsPtr is the singleton instance of S3 metrics, accessed atomically
+// for safe concurrent reads from background goroutines.
+var s3MetricsPtr atomic.Pointer[S3Metrics]
 
 // S3Metrics holds all Prometheus metrics for the S3 service.
 type S3Metrics struct {
@@ -53,14 +55,15 @@ type S3Metrics struct {
 	VolumeAvailableBytes prometheus.Gauge // tunnelmesh_s3_volume_available_bytes
 }
 
-// InitS3Metrics initializes all S3 metrics.
-// Metrics are only registered once; subsequent calls return the same instance.
+// InitS3Metrics initializes all S3 metrics on the given registry.
+// Must be called exactly once with the correct registry (enforced by sync.Once).
+// The instance is stored atomically for safe concurrent reads via GetS3Metrics().
 func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
+	if registry == nil {
+		registry = prometheus.DefaultRegisterer
+	}
 	s3MetricsOnce.Do(func() {
-		if registry == nil {
-			registry = prometheus.DefaultRegisterer
-		}
-		s3MetricsInstance = &S3Metrics{
+		m := &S3Metrics{
 			RequestsTotal: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
 				Name: "tunnelmesh_s3_requests_total",
 				Help: "Total S3 requests by operation and status",
@@ -181,15 +184,17 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 				Help: "Available filesystem space in bytes (non-root)",
 			}),
 		}
+		s3MetricsPtr.Store(m)
 	})
 
-	return s3MetricsInstance
+	return s3MetricsPtr.Load()
 }
 
 // GetS3Metrics returns the singleton S3 metrics instance.
 // Returns nil if metrics have not been initialized.
+// Safe for concurrent use from multiple goroutines.
 func GetS3Metrics() *S3Metrics {
-	return s3MetricsInstance
+	return s3MetricsPtr.Load()
 }
 
 // RecordRequest records a request metric.

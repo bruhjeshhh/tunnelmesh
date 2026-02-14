@@ -777,6 +777,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 		// Update metrics on startup
 		s.updateCASMetrics()
+		s.updateStorageMetrics()
 		s.collectAndPersistCapacity(ctx)
 
 		// Wait for stagger delay before first GC run.
@@ -829,12 +830,31 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
 				}
 
-				// Update CAS metrics after GC
+				// Update CAS and storage metrics after GC
 				s.updateCASMetrics()
+				s.updateStorageMetrics()
 
 				// Collect and persist local capacity, then load peer snapshots
 				s.collectAndPersistCapacity(ctx)
 				s.loadPeerCapacitySnapshots(ctx)
+			}
+		}
+	}()
+
+	// Refresh storage/CAS gauges every 60s so dashboards stay current
+	// between the hourly GC cycles.
+	metricsTicker := time.NewTicker(60 * time.Second)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer metricsTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-metricsTicker.C:
+				s.updateCASMetrics()
+				s.updateStorageMetrics()
 			}
 		}
 	}()
@@ -885,6 +905,40 @@ func (s *Server) updateCASMetrics() {
 			casStats.LogicalBytes,
 			casStats.VersionCount,
 		)
+	}
+}
+
+// updateStorageMetrics updates storage-related Prometheus gauges (buckets, objects,
+// storage bytes, quota, registered users). Called alongside updateCASMetrics.
+func (s *Server) updateStorageMetrics() {
+	if s.s3Store == nil {
+		return
+	}
+	metrics := s3.GetS3Metrics()
+	if metrics == nil {
+		return
+	}
+
+	buckets, err := s.s3Store.ListBuckets(context.Background())
+	if err != nil {
+		return
+	}
+	var storageBytes int64
+	for _, b := range buckets {
+		storageBytes += b.SizeBytes
+	}
+
+	casStats := s.s3Store.GetCASStats()
+
+	var quotaBytes int64
+	if qs := s.s3Store.QuotaStats(); qs != nil {
+		quotaBytes = qs.MaxBytes
+	}
+
+	metrics.UpdateStorageMetrics(len(buckets), casStats.ObjectCount, storageBytes, quotaBytes)
+
+	if s.s3Credentials != nil {
+		metrics.SetRegisteredUsers(s.s3Credentials.UserCount())
 	}
 }
 
@@ -1113,12 +1167,9 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	// Create RBAC authorizer for S3
 	rbacAuth := s3.NewRBACAuthorizer(s.s3Credentials, s.s3Authorizer)
 
-	// Initialize S3 metrics with the same registry as coordinator metrics
-	// Will use default registry if metricsRegistry is nil (standalone coordinator)
-	s3Metrics := s3.InitS3Metrics(s.metricsRegistry)
-
-	// Create S3 server
-	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
+	// Create S3 server (metrics are initialized later in SetMetricsRegistry
+	// when the correct Prometheus registry is available)
+	s.s3Server = s3.NewServer(store, rbacAuth, nil)
 
 	// Create system store for internal coordinator data
 	// Use a service peer ID for the coordinator
@@ -2312,6 +2363,24 @@ func (s *Server) broadcastCoordinatorList() {
 func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	s.metricsRegistry = registry
 	s.coordMetrics = InitCoordMetrics(registry)
+
+	// Initialize S3 metrics on the correct registry and wire into the S3 server.
+	// This must happen here (not in initS3Storage) because the registry is not
+	// available during server construction.
+	s3Metrics := s3.InitS3Metrics(registry)
+	if s.s3Server != nil {
+		s.s3Server.SetMetrics(s3Metrics)
+	}
+
+	// Refresh storage metrics now that metrics are initialized.
+	// StartPeriodicCleanup may have already run its startup update before
+	// the registry was set, so those updates would have been silently skipped.
+	go func() {
+		s.updateCASMetrics()
+		s.updateStorageMetrics()
+		s.collectAndPersistCapacity(context.Background())
+	}()
+
 	log.Debug().Msg("coordinator metrics initialized")
 }
 
