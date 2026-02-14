@@ -413,6 +413,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		// Initialize chunk registry for chunk-level replication (avoids buffering full objects)
 		chunkRegistry := replication.NewChunkRegistry(nodeID, nil)
 		srv.s3Store.SetChunkRegistry(chunkRegistry)
+		srv.s3Store.SetCoordinatorID(nodeID)
 
 		// Initialize replicator
 		srv.replicator = replication.NewReplicator(replication.Config{
@@ -734,6 +735,20 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 }
 
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
+// gcStaggerDelay computes a deterministic stagger delay based on the coordinator
+// name hash, to avoid all coordinators running GC simultaneously.
+// Returns 0 to 1799 seconds (0–29m59s), keeping the window under 50% of the
+// 1-hour GC interval to ensure predictable cleanup cadence.
+func gcStaggerDelay(coordName string) time.Duration {
+	if coordName == "" {
+		coordName = "coordinator"
+	}
+	h := fnv.New32a()
+	h.Write([]byte(coordName))
+	return time.Duration(h.Sum32()%1800) * time.Second
+}
+
+// StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
 // It periodically:
 //   - Purges tombstoned objects past their retention period
 //   - Tombstones content in expired file shares
@@ -744,6 +759,10 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		return
 	}
 
+	stagger := gcStaggerDelay(s.cfg.Name)
+
+	log.Info().Str("coordinator", s.cfg.Name).Dur("stagger", stagger).Msg("GC stagger delay computed")
+
 	// Run cleanup every hour
 	ticker := time.NewTicker(1 * time.Hour)
 	s.wg.Add(1)
@@ -753,6 +772,16 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 		// Update metrics on startup
 		s.updateCASMetrics()
+
+		// Wait for stagger delay before first GC run.
+		// The first GC fires at startup+stagger, then every hour after that.
+		// This means the gap between first and second run is a full hour,
+		// regardless of the stagger offset.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(stagger):
+		}
 
 		for {
 			select {
@@ -776,12 +805,16 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 				gcStats := s.s3Store.RunGarbageCollection(ctx)
 				gcDuration := time.Since(gcStart).Seconds()
 
-				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
+				// Log when cleanup occurred or chunks were skipped (indicates multi-coordinator or recent-upload activity)
+				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
 					log.Info().
+						Str("coordinator", s.cfg.Name).
 						Int("versions_pruned", gcStats.VersionsPruned).
 						Int("chunks_deleted", gcStats.ChunksDeleted).
 						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
 						Int("objects_scanned", gcStats.ObjectsScanned).
+						Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
+						Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
 						Msg("S3 garbage collection completed")
 				}
 
