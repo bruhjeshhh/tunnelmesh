@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -203,6 +204,14 @@ type Store struct {
 	erasureCodingSemaphore  chan struct{}  // Limits concurrent erasure coding operations (memory safety)
 	bgWg                    sync.WaitGroup // Tracks background goroutines (e.g., shard caching)
 	mu                      sync.RWMutex
+
+	// Incremental CAS stats — atomic for lock-free metrics reads.
+	// Initialized from filesystem walk at startup, updated at each mutation point.
+	statsChunkCount   atomic.Int64
+	statsChunkBytes   atomic.Int64 // on-disk (compressed+encrypted)
+	statsObjectCount  atomic.Int64
+	statsVersionCount atomic.Int64
+	statsLogicalBytes atomic.Int64 // on-disk chunk sizes summed per-object
 }
 
 // NewStore creates a new S3 store with the given data directory.
@@ -302,6 +311,9 @@ func NewStoreWithCAS(dataDir string, quota *QuotaManager, masterKey [32]byte) (*
 		return nil, fmt.Errorf("create CAS: %w", err)
 	}
 	store.cas = cas
+
+	// Initialize incremental stats from filesystem (one-time walk at startup)
+	store.initCASStats()
 
 	return store, nil
 }
@@ -863,11 +875,17 @@ func (s *Store) fetchChunkDistributed(ctx context.Context, chunkHash string) ([]
 		}
 
 		// 6. Cache locally and register ownership (best-effort)
-		if _, werr := s.cas.WriteChunk(ctx, data); werr != nil {
+		if _, onDiskBytes, werr := s.cas.WriteChunk(ctx, data); werr != nil {
 			s.logger.Warn().Err(werr).Str("hash", truncHash(chunkHash)).Msg("failed to cache remote chunk locally")
-		} else if s.chunkRegistry != nil {
-			if rerr := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(data))); rerr != nil {
-				s.logger.Warn().Err(rerr).Str("hash", truncHash(chunkHash)).Msg("failed to register chunk ownership")
+		} else {
+			if onDiskBytes > 0 {
+				s.statsChunkCount.Add(1)
+				s.statsChunkBytes.Add(onDiskBytes)
+			}
+			if s.chunkRegistry != nil {
+				if rerr := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(data))); rerr != nil {
+					s.logger.Warn().Err(rerr).Str("hash", truncHash(chunkHash)).Msg("failed to register chunk ownership")
+				}
 			}
 		}
 
@@ -1108,7 +1126,7 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 				}
 
 				// Write chunk to local CAS (best-effort)
-				if _, err := s.cas.WriteChunk(bgCtx, chunk); err != nil {
+				if _, _, err := s.cas.WriteChunk(bgCtx, chunk); err != nil {
 					if len(chunkHash) >= 8 {
 						s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash[:8]).Msg("failed to cache reconstructed chunk")
 					} else {
@@ -1153,10 +1171,14 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 
 	metaPath := s.objectMetaPath(bucket, key)
 
-	// Check if object already exists (for quota update calculation and versioning)
+	// Check if object already exists (for quota update calculation, versioning, and stats)
 	var oldSize int64
+	var oldLogicalBytes int64
+	isNewObject := true
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
 		oldSize = oldMeta.Size
+		isNewObject = false
+		oldLogicalBytes = oldMeta.Size
 	}
 
 	// Check quota if configured (only if object is growing)
@@ -1230,8 +1252,11 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		if !success && len(chunks) > 0 {
 			// Best-effort cleanup - errors are logged but not propagated
 			for _, hash := range chunks {
-				if err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
+				if freed, err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
 					s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to cleanup chunk during rollback")
+				} else if freed > 0 {
+					s.statsChunkCount.Add(-1)
+					s.statsChunkBytes.Add(-freed)
 				}
 				if s.chunkRegistry != nil {
 					if err := s.chunkRegistry.UnregisterChunk(hash); err != nil {
@@ -1262,8 +1287,21 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			}
 
 			// Write chunk to CAS
-			if _, err := s.cas.WriteChunk(ctx, chunk); err != nil {
+			_, onDiskBytes, err := s.cas.WriteChunk(ctx, chunk)
+			if err != nil {
 				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
+			}
+
+			// Update incremental chunk stats
+			var chunkOnDiskSize int64
+			if onDiskBytes > 0 {
+				s.statsChunkCount.Add(1)
+				s.statsChunkBytes.Add(onDiskBytes)
+				chunkOnDiskSize = onDiskBytes
+			} else {
+				if sz, szErr := s.cas.ChunkSize(ctx, chunkHash); szErr == nil {
+					chunkOnDiskSize = sz
+				}
 			}
 
 			// Register chunk ownership
@@ -1287,16 +1325,17 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			}
 
 			chunkMetadata[chunkHash] = &ChunkMetadata{
-				Hash:          chunkHash,
-				Size:          int64(len(chunk)),
-				VersionVector: versionVector,
-				Owners:        owners,
-				FirstSeen:     now,
-				LastModified:  now,
-				ShardType:     "data",
-				ShardIndex:    i,
-				ChunkSequence: chunkSeq,
-				ParentFileID:  versionID,
+				Hash:           chunkHash,
+				Size:           int64(len(chunk)),
+				CompressedSize: chunkOnDiskSize,
+				VersionVector:  versionVector,
+				Owners:         owners,
+				FirstSeen:      now,
+				LastModified:   now,
+				ShardType:      "data",
+				ShardIndex:     i,
+				ChunkSequence:  chunkSeq,
+				ParentFileID:   versionID,
 			}
 
 			chunks = append(chunks, chunkHash)
@@ -1309,9 +1348,21 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// (parity shards are already optimally sized and don't benefit from dedup)
 	for i, shard := range parityShards {
 		// Write parity shard directly to CAS (it will compute SHA-256 hash)
-		parityHash, err := s.cas.WriteChunk(ctx, shard)
+		parityHash, parityOnDiskBytes, err := s.cas.WriteChunk(ctx, shard)
 		if err != nil {
 			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
+		}
+
+		// Update incremental chunk stats
+		var parityOnDiskSize int64
+		if parityOnDiskBytes > 0 {
+			s.statsChunkCount.Add(1)
+			s.statsChunkBytes.Add(parityOnDiskBytes)
+			parityOnDiskSize = parityOnDiskBytes
+		} else {
+			if sz, szErr := s.cas.ChunkSize(ctx, parityHash); szErr == nil {
+				parityOnDiskSize = sz
+			}
 		}
 
 		// Register parity shard ownership
@@ -1334,15 +1385,16 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		}
 
 		chunkMetadata[parityHash] = &ChunkMetadata{
-			Hash:          parityHash,
-			Size:          int64(len(shard)),
-			VersionVector: versionVector,
-			Owners:        owners,
-			FirstSeen:     now,
-			LastModified:  now,
-			ShardType:     "parity",
-			ShardIndex:    i,
-			ParentFileID:  versionID,
+			Hash:           parityHash,
+			Size:           int64(len(shard)),
+			CompressedSize: parityOnDiskSize,
+			VersionVector:  versionVector,
+			Owners:         owners,
+			FirstSeen:      now,
+			LastModified:   now,
+			ShardType:      "parity",
+			ShardIndex:     i,
+			ParentFileID:   versionID,
 		}
 
 		chunks = append(chunks, parityHash)
@@ -1418,6 +1470,12 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
+	// Update incremental object/logical stats
+	if isNewObject {
+		s.statsObjectCount.Add(1)
+	}
+	s.statsLogicalBytes.Add(size - oldLogicalBytes)
+
 	// Prune expired versions (lazy cleanup).
 	// Chunk GC for pruned versions is deferred to the periodic GC pass.
 	s.pruneExpiredVersions(ctx, bucket, key)
@@ -1491,8 +1549,12 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 	// Check if object already exists (for quota update calculation and versioning)
 	var oldSize int64
+	var oldLogicalBytes int64
+	isNewObject := true
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
 		oldSize = oldMeta.Size
+		isNewObject = false
+		oldLogicalBytes = oldMeta.Size
 	}
 
 	// Check quota if configured (only if object is growing)
@@ -1544,8 +1606,23 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		}
 
 		// Write chunk to CAS immediately (don't accumulate in memory)
-		if _, err := s.cas.WriteChunk(ctx, chunk); err != nil {
+		hash, onDiskBytes, err := s.cas.WriteChunk(ctx, chunk)
+		if err != nil {
 			return nil, fmt.Errorf("write chunk %s: %w", chunkHash, err)
+		}
+
+		// Update incremental chunk stats
+		var chunkOnDiskSize int64
+		if onDiskBytes > 0 {
+			// New chunk written
+			s.statsChunkCount.Add(1)
+			s.statsChunkBytes.Add(onDiskBytes)
+			chunkOnDiskSize = onDiskBytes
+		} else {
+			// Dedup hit — look up existing on-disk size for CompressedSize metadata
+			if sz, szErr := s.cas.ChunkSize(ctx, hash); szErr == nil {
+				chunkOnDiskSize = sz
+			}
 		}
 
 		// Register chunk ownership in distributed registry with bucket's replication factor
@@ -1575,12 +1652,13 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		}
 
 		chunkMetadata[chunkHash] = &ChunkMetadata{
-			Hash:          chunkHash,
-			Size:          int64(len(chunk)),
-			VersionVector: versionVector,
-			Owners:        owners,
-			FirstSeen:     now,
-			LastModified:  now,
+			Hash:           chunkHash,
+			Size:           int64(len(chunk)),
+			CompressedSize: chunkOnDiskSize,
+			VersionVector:  versionVector,
+			Owners:         owners,
+			FirstSeen:      now,
+			LastModified:   now,
 		}
 
 		chunks = append(chunks, chunkHash)
@@ -1652,6 +1730,12 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		}
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
+
+	// Update incremental object/logical stats
+	if isNewObject {
+		s.statsObjectCount.Add(1)
+	}
+	s.statsLogicalBytes.Add(written - oldLogicalBytes)
 
 	// Prune expired versions (lazy cleanup).
 	// Chunk GC for pruned versions is deferred to the periodic GC pass.
@@ -1862,9 +1946,12 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	// Phase 1: Hold lock briefly to collect chunk info and remove metadata
 	s.mu.Lock()
 
-	// Check bucket exists
+	// Check bucket exists — if bucket is missing, the object can't exist either
 	if _, err := s.getBucketMeta(bucket); err != nil {
 		s.mu.Unlock()
+		if errors.Is(err, ErrBucketNotFound) {
+			return nil // Idempotent: bucket doesn't exist, nothing to purge
+		}
 		return err
 	}
 
@@ -1872,6 +1959,9 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	meta, err := s.getObjectMeta(bucket, key)
 	if err != nil {
 		s.mu.Unlock()
+		if errors.Is(err, ErrObjectNotFound) {
+			return nil // Idempotent: object doesn't exist, nothing to purge
+		}
 		return err
 	}
 
@@ -1913,23 +2003,18 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 		_ = s.updateBucketSize(bucket, -meta.Size)
 	}
 
+	// Decrement object count and logical bytes
+	s.statsObjectCount.Add(-1)
+	if meta.Size > 0 {
+		s.statsLogicalBytes.Add(-meta.Size)
+	}
+
 	s.mu.Unlock()
 
 	// Phase 2: Delete unreferenced chunks WITHOUT holding the lock.
 	// This is best-effort: the object is already purged (metadata removed in Phase 1).
 	// If context is cancelled, orphaned chunks will be cleaned by the next GC cycle.
-	if s.cas != nil {
-		for _, hash := range chunksToCheck {
-			select {
-			case <-ctx.Done():
-				return nil // Object already purged; chunk cleanup deferred to GC
-			default:
-			}
-			if !s.isChunkReferencedGlobally(ctx, hash) {
-				_ = s.cas.DeleteChunk(ctx, hash)
-			}
-		}
-	}
+	s.DeleteUnreferencedChunks(ctx, chunksToCheck)
 
 	return nil
 }
@@ -2114,9 +2199,15 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 	}
 
 	// CAS WriteChunk is idempotent - if chunk exists, it returns immediately
-	_, err := s.cas.WriteChunk(ctx, data)
+	_, onDiskBytes, err := s.cas.WriteChunk(ctx, data)
 	if err != nil {
 		return fmt.Errorf("write chunk to CAS: %w", err)
+	}
+
+	// Update incremental chunk stats for new chunks
+	if onDiskBytes > 0 {
+		s.statsChunkCount.Add(1)
+		s.statsChunkBytes.Add(onDiskBytes)
 	}
 
 	return nil
@@ -2126,19 +2217,19 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 // This is used by the replication receiver to create the metadata file so the
 // remote coordinator can serve reads for objects whose chunks arrive separately.
 // bucketOwner is used when auto-creating the bucket (empty string defaults to "system").
-func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
+func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error) {
 	// Validate names
 	if err := validateName(bucket); err != nil {
-		return fmt.Errorf("invalid bucket name: %w", err)
+		return nil, fmt.Errorf("invalid bucket name: %w", err)
 	}
 	if err := validateName(key); err != nil {
-		return fmt.Errorf("invalid key: %w", err)
+		return nil, fmt.Errorf("invalid key: %w", err)
 	}
 
 	// Validate that metaJSON is valid ObjectMeta
 	var meta ObjectMeta
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return fmt.Errorf("invalid object meta JSON: %w", err)
+		return nil, fmt.Errorf("invalid object meta JSON: %w", err)
 	}
 
 	s.mu.Lock()
@@ -2159,21 +2250,21 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		}
 		bucketDir := s.bucketPath(bucket)
 		if mkErr := os.MkdirAll(filepath.Join(bucketDir, "meta"), 0755); mkErr != nil {
-			return fmt.Errorf("create bucket directories: %w", mkErr)
+			return nil, fmt.Errorf("create bucket directories: %w", mkErr)
 		}
 		bmData, marshalErr := json.Marshal(bucketMeta)
 		if marshalErr != nil {
-			return fmt.Errorf("marshal bucket meta: %w", marshalErr)
+			return nil, fmt.Errorf("marshal bucket meta: %w", marshalErr)
 		}
 		if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
-			return fmt.Errorf("write bucket meta: %w", writeErr)
+			return nil, fmt.Errorf("write bucket meta: %w", writeErr)
 		}
 	}
 
 	// Ensure meta directory exists
 	metaDir := filepath.Join(s.bucketPath(bucket), "meta")
 	if mkErr := os.MkdirAll(metaDir, 0755); mkErr != nil {
-		return fmt.Errorf("create meta directory: %w", mkErr)
+		return nil, fmt.Errorf("create meta directory: %w", mkErr)
 	}
 
 	// Write the object metadata file
@@ -2181,30 +2272,84 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 
 	// Ensure parent directory exists (for nested keys like "dir/file.txt")
 	if mkErr := os.MkdirAll(filepath.Dir(metaPath), 0755); mkErr != nil {
-		return fmt.Errorf("create meta parent directory: %w", mkErr)
+		return nil, fmt.Errorf("create meta parent directory: %w", mkErr)
 	}
 
 	// Check if object already exists (for idempotent retries)
 	// Subtract old size before adding new to prevent double-counting
+	var oldLogicalBytes int64
+	isNewObject := true
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
 		bucketMeta.SizeBytes -= oldMeta.Size
+		isNewObject = false
+		oldLogicalBytes = oldMeta.Size
+	}
+
+	// Archive current version before overwriting — same as PutObject does.
+	// This enables GC to prune old versions on replica coordinators.
+	if err := s.archiveCurrentVersion(bucket, key); err != nil {
+		// Non-fatal: log warning but don't fail replication import
+		s.logger.Warn().Err(err).
+			Str("bucket", bucket).Str("key", key).
+			Msg("Failed to archive version during replication import")
 	}
 
 	if writeErr := syncedWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
-		return fmt.Errorf("write object meta: %w", writeErr)
+		return nil, fmt.Errorf("write object meta: %w", writeErr)
 	}
+
+	// Compute LogicalBytes from imported object's metadata size
+	newLogicalBytes := meta.Size
+
+	// Update incremental stats
+	if isNewObject {
+		s.statsObjectCount.Add(1)
+	}
+	s.statsLogicalBytes.Add(newLogicalBytes - oldLogicalBytes)
+
+	// Prune expired versions inline (lazy cleanup), same as PutObject does.
+	// Return chunk hashes from pruned versions so the caller can clean up
+	// unreferenced chunks immediately (critical for replica coordinators).
+	_, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size tracking (idempotent: old size subtracted above)
 	bucketMeta.SizeBytes += meta.Size
 	bmData, marshalErr := json.Marshal(bucketMeta)
 	if marshalErr != nil {
-		return fmt.Errorf("marshal bucket meta: %w", marshalErr)
+		return nil, fmt.Errorf("marshal bucket meta: %w", marshalErr)
 	}
 	if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
-		return fmt.Errorf("update bucket meta: %w", writeErr)
+		return nil, fmt.Errorf("update bucket meta: %w", writeErr)
 	}
 
-	return nil
+	return chunksToCheck, nil
+}
+
+// DeleteUnreferencedChunks checks each chunk hash against all objects and versions,
+// deleting any that are no longer referenced. Returns total bytes freed.
+// This is used after version pruning to immediately clean up orphaned chunks
+// rather than waiting for the next GC cycle.
+func (s *Store) DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64 {
+	if s.cas == nil || len(chunkHashes) == 0 {
+		return 0
+	}
+
+	var totalFreed int64
+	for _, hash := range chunkHashes {
+		select {
+		case <-ctx.Done():
+			return totalFreed
+		default:
+		}
+		if !s.isChunkReferencedGlobally(ctx, hash) {
+			if freed, err := s.cas.DeleteChunk(ctx, hash); err == nil && freed > 0 {
+				s.statsChunkCount.Add(-1)
+				s.statsChunkBytes.Add(-freed)
+				totalFreed += freed
+			}
+		}
+	}
+	return totalFreed
 }
 
 // DeleteChunk removes a chunk from CAS by its hash.
@@ -2214,7 +2359,15 @@ func (s *Store) DeleteChunk(ctx context.Context, hash string) error {
 		return fmt.Errorf("CAS not initialized")
 	}
 
-	return s.cas.DeleteChunk(ctx, hash)
+	freed, err := s.cas.DeleteChunk(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if freed > 0 {
+		s.statsChunkCount.Add(-1)
+		s.statsChunkBytes.Add(-freed)
+	}
+	return nil
 }
 
 // ListObjects lists objects in a bucket with optional prefix filter and pagination.
@@ -2343,6 +2496,10 @@ func (s *Store) InitCAS(ctx context.Context, masterKey [32]byte) error {
 		return fmt.Errorf("init CAS: %w", err)
 	}
 	s.cas = cas
+
+	// Initialize incremental stats from filesystem (one-time walk at startup)
+	s.initCASStats()
+
 	return nil
 }
 
@@ -2428,6 +2585,8 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 	if err := syncedWriteFile(versionPath, data, 0644); err != nil {
 		return fmt.Errorf("write version meta: %w", err)
 	}
+
+	s.statsVersionCount.Add(1)
 
 	return nil
 }
@@ -2552,6 +2711,20 @@ func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) (i
 				keep[i] = true
 			}
 		}
+
+		// Enforce maxVersionsPerObject as hard cap even within recent windows.
+		// Without this, rapid overwrites within RecentDays accumulate unbounded.
+		if maxVersions > 0 {
+			kept := 0
+			for i := range versions {
+				if keep[i] {
+					kept++
+					if kept > maxVersions {
+						delete(keep, i)
+					}
+				}
+			}
+		}
 	} else {
 		// No smart pruning - use simple retention days only
 		if s.versionRetentionDays > 0 {
@@ -2585,6 +2758,7 @@ func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) (i
 		// Delete version metadata
 		_ = os.Remove(v.path)
 		prunedCount++
+		s.statsVersionCount.Add(-1)
 
 		// Collect chunks for deferred GC (done outside the lock by caller)
 		for _, hash := range v.meta.Chunks {
@@ -2686,37 +2860,43 @@ type CASStats struct {
 	ObjectCount  int   // Total number of current objects
 }
 
-// GetCASStats returns statistics about content-addressed storage.
-// This scans the chunks directory and all object metadata.
-func (s *Store) GetCASStats() CASStats {
-	stats := CASStats{}
-
+// initCASStats populates the atomic stat counters from a one-time filesystem walk.
+// Called once at startup in NewStoreWithCAS. After this, stats are maintained
+// incrementally at each mutation point (PutObject, DeleteChunk, etc.).
+func (s *Store) initCASStats() {
 	if s.cas == nil {
-		return stats
+		return
 	}
 
-	// No lock needed: s.dataDir is immutable after construction, all writes
-	// use atomic temp+rename (syncedWriteFile), and these are approximate
-	// gauge metrics refreshed every 60s where brief races are acceptable.
-	// This avoids RLock contention that starves concurrent PutObject writers.
-
-	// Count chunks and their sizes
+	// Count chunks and their on-disk sizes (compressed+encrypted).
 	chunksDir := filepath.Join(s.dataDir, "chunks")
+	var chunkCount int64
+	var chunkBytes int64
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		stats.ChunkCount++
-		stats.ChunkBytes += info.Size()
+		// Skip orphaned temp files from interrupted CAS writes
+		if strings.HasSuffix(info.Name(), ".tmp") {
+			return nil
+		}
+		chunkCount++
+		chunkBytes += info.Size()
 		return nil
 	})
+	s.statsChunkCount.Store(chunkCount)
+	s.statsChunkBytes.Store(chunkBytes)
 
 	// Scan all buckets for objects and versions
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
 	if err != nil {
-		return stats
+		return
 	}
+
+	var objectCount int64
+	var versionCount int64
+	var logicalBytes int64
 
 	for _, bucketEntry := range bucketEntries {
 		if !bucketEntry.IsDir() {
@@ -2724,44 +2904,54 @@ func (s *Store) GetCASStats() CASStats {
 		}
 		bucket := bucketEntry.Name()
 
-		// Count current objects and their logical sizes
+		// Count current objects and their logical sizes.
 		metaDir := filepath.Join(bucketsDir, bucket, "meta")
 		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
-			stats.ObjectCount++
+			objectCount++
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil
 			}
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
-				if len(meta.ChunkMetadata) > 0 {
-					for _, chunkHash := range meta.Chunks {
-						if cm, ok := meta.ChunkMetadata[chunkHash]; ok {
-							stats.LogicalBytes += cm.Size
-						}
-					}
-				} else {
-					stats.LogicalBytes += meta.Size
-				}
+				logicalBytes += meta.Size
 			}
 			return nil
 		})
 
-		// Count versions
+		// Count version files
 		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
 		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
-			stats.VersionCount++
+			versionCount++
 			return nil
 		})
 	}
 
-	return stats
+	s.statsObjectCount.Store(objectCount)
+	s.statsVersionCount.Store(versionCount)
+	s.statsLogicalBytes.Store(logicalBytes)
+}
+
+// GetCASStats returns statistics about content-addressed storage.
+// Reads from atomic counters maintained incrementally at each mutation point.
+func (s *Store) GetCASStats() CASStats {
+	if s.cas == nil {
+		return CASStats{}
+	}
+
+	return CASStats{
+		ChunkCount:   int(s.statsChunkCount.Load()),
+		ChunkBytes:   s.statsChunkBytes.Load(),
+		ObjectCount:  int(s.statsObjectCount.Load()),
+		VersionCount: int(s.statsVersionCount.Load()),
+		LogicalBytes: s.statsLogicalBytes.Load(),
+	}
 }
 
 // GCStats holds statistics from a garbage collection run.
@@ -2811,7 +3001,10 @@ func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 		default:
 		}
 		if _, ok := referencedChunks[hash]; !ok {
-			_ = s.cas.DeleteChunk(ctx, hash)
+			if freed, err := s.cas.DeleteChunk(ctx, hash); err == nil && freed > 0 {
+				s.statsChunkCount.Add(-1)
+				s.statsChunkBytes.Add(-freed)
+			}
 		}
 	}
 
@@ -3062,8 +3255,12 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 			stats.BytesReclaimed += info.Size()
 
 			// CAS.DeleteChunk has its own locking
-			if s.cas.DeleteChunk(ctx, hash) == nil {
+			if freed, delErr := s.cas.DeleteChunk(ctx, hash); delErr == nil {
 				stats.ChunksDeleted++
+				if freed > 0 {
+					s.statsChunkCount.Add(-1)
+					s.statsChunkBytes.Add(-freed)
+				}
 
 				// Unregister from chunk registry
 				if registry != nil {
@@ -3271,13 +3468,15 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 	if s.replicator != nil && s.chunkRegistry != nil {
 		// Distributed reads: can fetch chunks from remote peers
 		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
-			Chunks:     meta.Chunks,
-			LocalCAS:   s.cas,
-			Registry:   s.chunkRegistry,
-			Replicator: s.replicator,
-			Logger:     s.logger,
-			TotalSize:  meta.Size,
-			Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
+			Chunks:          meta.Chunks,
+			LocalCAS:        s.cas,
+			Registry:        s.chunkRegistry,
+			Replicator:      s.replicator,
+			Logger:          s.logger,
+			TotalSize:       meta.Size,
+			Prefetch:        PrefetchConfig{WindowSize: 8, Parallelism: 4},
+			StatsChunkCount: &s.statsChunkCount,
+			StatsChunkBytes: &s.statsChunkBytes,
 		})
 		return reader, meta, nil
 	}
@@ -3375,6 +3574,7 @@ func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 
 	// Collect all chunk hashes from versions
 	var chunks []string
+	var versionCount int64
 	seen := make(map[string]struct{})
 	entries, err := os.ReadDir(versionDir)
 	if err == nil {
@@ -3394,6 +3594,7 @@ func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 				continue
 			}
 
+			versionCount++
 			for _, h := range meta.Chunks {
 				if _, ok := seen[h]; !ok {
 					seen[h] = struct{}{}
@@ -3405,6 +3606,11 @@ func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 
 	// Remove version directory
 	_ = os.RemoveAll(versionDir)
+
+	// Decrement version count
+	if versionCount > 0 {
+		s.statsVersionCount.Add(-versionCount)
+	}
 
 	return chunks
 }

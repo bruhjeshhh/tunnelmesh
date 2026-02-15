@@ -1112,7 +1112,7 @@ func TestCAS_WriteAndReadChunk(t *testing.T) {
 	require.NoError(t, err)
 
 	data := []byte("hello content-addressable world")
-	hash, err := cas.WriteChunk(context.Background(), data)
+	hash, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 	assert.NotEmpty(t, hash)
 
@@ -1132,10 +1132,10 @@ func TestCAS_Deduplication(t *testing.T) {
 	data := []byte("duplicate me")
 
 	// Write same data twice
-	hash1, err := cas.WriteChunk(context.Background(), data)
+	hash1, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(context.Background(), data)
+	hash2, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	// Should return same hash (dedup)
@@ -1146,7 +1146,7 @@ func TestCAS_Deduplication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write once more to verify it doesn't increase
-	_, err = cas.WriteChunk(context.Background(), data)
+	_, _, err = cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	totalSize2, err := cas.TotalSize(context.Background())
@@ -1164,7 +1164,7 @@ func TestCAS_ConvergentEncryption(t *testing.T) {
 	data := []byte("same plaintext should produce same ciphertext")
 
 	// Write the data
-	hash1, err := cas.WriteChunk(context.Background(), data)
+	hash1, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	// Get the encrypted size
@@ -1172,10 +1172,10 @@ func TestCAS_ConvergentEncryption(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete and rewrite
-	err = cas.DeleteChunk(context.Background(), hash1)
+	_, err = cas.DeleteChunk(context.Background(), hash1)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(context.Background(), data)
+	hash2, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	size2, err := cas.ChunkSize(context.Background(), hash2)
@@ -1205,12 +1205,12 @@ func TestCAS_DeleteChunk(t *testing.T) {
 	require.NoError(t, err)
 
 	data := []byte("delete me")
-	hash, err := cas.WriteChunk(context.Background(), data)
+	hash, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	assert.True(t, cas.ChunkExists(hash))
 
-	err = cas.DeleteChunk(context.Background(), hash)
+	_, err = cas.DeleteChunk(context.Background(), hash)
 	require.NoError(t, err)
 
 	assert.False(t, cas.ChunkExists(hash))
@@ -2073,7 +2073,7 @@ func TestImportObjectMeta_NewBucket(t *testing.T) {
 	metaJSON, err := json.Marshal(meta)
 	require.NoError(t, err)
 
-	err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
+	_, err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
 	require.NoError(t, err)
 
 	// Verify the metadata is readable
@@ -2107,7 +2107,7 @@ func TestImportObjectMeta_ExistingBucket(t *testing.T) {
 	metaJSON, err := json.Marshal(meta)
 	require.NoError(t, err)
 
-	err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
 	require.NoError(t, err)
 
 	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
@@ -2119,7 +2119,7 @@ func TestImportObjectMeta_InvalidJSON(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
-	err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
+	_, err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid object meta JSON")
 }
@@ -2131,8 +2131,50 @@ func TestImportObjectMeta_InvalidBucketName(t *testing.T) {
 	meta := ObjectMeta{Key: "test"}
 	metaJSON, _ := json.Marshal(meta)
 
-	err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
+	_, err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
 	assert.Error(t, err)
+}
+
+func TestImportObjectMeta_ArchivesVersion(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	// Import first version
+	meta1 := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        100,
+		ContentType: "text/plain",
+		Chunks:      []string{"hash1"},
+	}
+	metaJSON1, err := json.Marshal(meta1)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON1, "")
+	require.NoError(t, err)
+
+	// Import second version (overwrites first)
+	meta2 := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        200,
+		ContentType: "text/plain",
+		Chunks:      []string{"hash2"},
+	}
+	metaJSON2, err := json.Marshal(meta2)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON2, "")
+	require.NoError(t, err)
+
+	// Verify current version is meta2
+	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
+	require.NoError(t, err)
+	assert.Equal(t, int64(200), got.Size)
+
+	// Verify a version was archived (versions directory has a file)
+	versionsDir := filepath.Join(store.DataDir(), "buckets", "mybucket", "versions", "doc.txt")
+	entries, err := os.ReadDir(versionsDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "should have 1 archived version")
 }
 
 // ==== DeleteChunk Tests ====
@@ -2170,6 +2212,88 @@ func TestDeleteChunk_NonExistent(t *testing.T) {
 	// garbage collected or deleted by another process.
 	err := store.DeleteChunk(ctx, "nonexistent-hash")
 	assert.NoError(t, err)
+}
+
+func TestDeleteUnreferencedChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a bucket and object referencing chunk1
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	chunk1 := []byte("referenced chunk data")
+	hash1 := ContentHash(chunk1)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash1, chunk1))
+
+	chunk2 := []byte("orphaned chunk data!!")
+	hash2 := ContentHash(chunk2)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash2, chunk2))
+
+	// Create an object that references only chunk1
+	meta := ObjectMeta{
+		Key:    "doc.txt",
+		Size:   int64(len(chunk1)),
+		Chunks: []string{hash1},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	// Record stats before cleanup
+	statsBefore := store.GetCASStats()
+
+	// Delete unreferenced chunks — chunk2 is orphaned, chunk1 is referenced
+	freed := store.DeleteUnreferencedChunks(ctx, []string{hash1, hash2})
+
+	// chunk2 should have been freed
+	assert.Greater(t, freed, int64(0), "should have freed bytes for orphaned chunk")
+
+	// Verify stats were decremented
+	statsAfter := store.GetCASStats()
+	assert.Equal(t, statsBefore.ChunkCount-1, statsAfter.ChunkCount, "chunk count should decrease by 1")
+	assert.Equal(t, statsBefore.ChunkBytes-freed, statsAfter.ChunkBytes, "chunk bytes should decrease by freed amount")
+
+	// chunk1 should still be readable (it's referenced)
+	_, err = store.ReadChunk(ctx, hash1)
+	assert.NoError(t, err)
+
+	// chunk2 should be gone
+	_, err = store.ReadChunk(ctx, hash2)
+	assert.Error(t, err)
+}
+
+func TestDeleteUnreferencedChunks_AllReferenced(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Write a chunk and reference it from an object
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	chunk := []byte("kept chunk data")
+	hash := ContentHash(chunk)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash, chunk))
+
+	meta := ObjectMeta{
+		Key:    "doc.txt",
+		Size:   int64(len(chunk)),
+		Chunks: []string{hash},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	statsBefore := store.GetCASStats()
+
+	// All chunks are referenced — nothing should be freed
+	freed := store.DeleteUnreferencedChunks(ctx, []string{hash})
+	assert.Equal(t, int64(0), freed)
+
+	// Stats unchanged
+	statsAfter := store.GetCASStats()
+	assert.Equal(t, statsBefore.ChunkCount, statsAfter.ChunkCount)
+	assert.Equal(t, statsBefore.ChunkBytes, statsAfter.ChunkBytes)
 }
 
 func TestSyncedWriteFileAtomic(t *testing.T) {
@@ -2279,42 +2403,48 @@ func TestStore_VolumeStats(t *testing.T) {
 	assert.Greater(t, available, int64(0), "available should be positive")
 }
 
-func TestGetCASStats_LogicalBytesUsesChunkMetadata(t *testing.T) {
+func TestGetCASStats_LogicalBytesUsesMetaSize(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
 	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
 
-	// Put two identical objects (same content = dedup opportunity)
-	content := []byte("deduplicated content for stats test")
+	// Put a single unique object — LogicalBytes should equal meta.Size (uncompressed)
+	content := []byte("unique content for stats test")
 	_, err := store.PutObject(ctx, "test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
-	require.NoError(t, err)
-	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	stats := store.GetCASStats()
 
-	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
+	assert.Equal(t, 1, stats.ObjectCount, "should have 1 object")
 	assert.Greater(t, stats.ChunkBytes, int64(0), "should have chunk bytes on disk")
-	assert.Greater(t, stats.LogicalBytes, int64(0), "should have logical bytes")
-	// LogicalBytes should be >= ChunkBytes (dedup means physical <= logical)
-	assert.GreaterOrEqual(t, stats.LogicalBytes, stats.ChunkBytes,
-		"logical bytes (%d) should be >= chunk bytes (%d) — dedup should reduce physical storage",
-		stats.LogicalBytes, stats.ChunkBytes)
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"LogicalBytes should equal meta.Size (uncompressed content size)")
+
+	// Put a second identical object (dedup) — LogicalBytes should be 2x content size
+	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	stats = store.GetCASStats()
+
+	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
+	assert.Equal(t, int64(2*len(content)), stats.LogicalBytes,
+		"deduplicated: logical bytes should be 2x content size (both objects reference same data)")
 }
 
-func TestGetCASStats_LogicalBytesFallbackForLegacyObjects(t *testing.T) {
+func TestGetCASStats_LegacyObjectsUseMetaSize(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
 	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
 
-	// Put an object normally to get its metadata file path
+	// Put an object normally
 	content := []byte("legacy test content")
 	_, err := store.PutObject(ctx, "test-bucket", "legacy.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	// Simulate a legacy object by stripping ChunkMetadata from the stored meta
+	// LogicalBytes should still work because it uses meta.Size, not chunk lookups
 	metaDir := filepath.Join(store.DataDir(), "buckets", "test-bucket", "meta")
 	err = filepath.Walk(metaDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() || filepath.Ext(path) != ".json" {
@@ -2337,10 +2467,41 @@ func TestGetCASStats_LogicalBytesFallbackForLegacyObjects(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Re-init stats from disk to pick up the modified metadata
+	store.initCASStats()
+
 	stats := store.GetCASStats()
 
 	assert.Equal(t, 1, stats.ObjectCount)
-	// Should fall back to meta.Size for legacy objects
+	// LogicalBytes uses meta.Size which is always available regardless of ChunkMetadata
 	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
-		"legacy objects without ChunkMetadata should use meta.Size as fallback")
+		"legacy objects should use meta.Size for LogicalBytes")
+}
+
+func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write v1 of a file
+	v1 := []byte("version one content for logical bytes test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	statsAfterV1 := store.GetCASStats()
+	assert.Equal(t, int64(len(v1)), statsAfterV1.LogicalBytes,
+		"after v1: logical bytes should equal content size")
+
+	// Overwrite with v2 — v1 is archived, its chunks remain on disk
+	v2 := []byte("version two with different content for test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	statsAfterV2 := store.GetCASStats()
+	assert.Equal(t, 1, statsAfterV2.VersionCount, "should have 1 archived version")
+	// LogicalBytes only counts current objects (not version files).
+	// After overwrite, LogicalBytes should equal the new content size.
+	assert.Equal(t, int64(len(v2)), statsAfterV2.LogicalBytes,
+		"after v2: logical bytes should equal v2 content size (only current objects)")
 }
