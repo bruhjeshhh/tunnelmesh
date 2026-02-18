@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// dnsCompliantNameRegex matches S3-style bucket/share names: lowercase, digits, hyphens only,
+// no leading/trailing/consecutive hyphens. Used by validateBucketOrShareName.
+var dnsCompliantNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9]*-?)*[a-z0-9]$`)
+
 // validateBucketOrShareName checks that a bucket or share name is valid for S3.
 // Names must be DNS-compliant: lowercase letters, numbers, hyphens only,
 // 3-63 characters, no consecutive or leading/trailing hyphens.
@@ -21,11 +25,8 @@ func validateBucketOrShareName(name string) error {
 	if len(name) > maxLen {
 		return fmt.Errorf("name %q is too long - must be between 3 and 63 characters (DNS-compliant, lowercase)", name)
 	}
-	// DNS-compliant: only lowercase letters, digits, hyphens; no leading/trailing or consecutive hyphens
-	valid := regexp.MustCompile(`^[a-z0-9]([a-z0-9]*-?)*[a-z0-9]$`)
-	if !valid.MatchString(name) {
-		bad := []rune(name)
-		for _, r := range bad {
+	if !dnsCompliantNameRegex.MatchString(name) {
+		for _, r := range name {
 			if r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 				return fmt.Errorf("invalid character %q in name %q - bucket/share names must be DNS-compliant: only lowercase letters, numbers, and hyphens (e.g. my-bucket, docs)", r, name)
 			}
